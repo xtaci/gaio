@@ -3,103 +3,112 @@ package ev
 import (
 	"log"
 	"net"
-	"sync"
+	"net/http"
+	_ "net/http/pprof"
 	"testing"
 )
 
-func TestPush(t *testing.T) {
-	ln, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		t.Fatal(err)
-	}
+func init() {
 
-	w := NewWatcher(4, 4096)
-	data := make([]byte, 128)
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			completed := func(c net.Conn, numWritten int, err error) {
-				t.Log("push to", c, "with", numWritten, "bytes", "error:", err)
-			}
-
-			go func(conn net.Conn) {
-				w.Watch(conn, Events{})
-				w.Write(conn, WriteRequest{Out: data, WriteCompleted: completed})
-			}(conn)
-		}
-	}()
-
-	// discard client
-	conn, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmp := make([]byte, 128)
-	_, err = conn.Read(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
+	go http.ListenAndServe(":6060", nil)
 }
 
-func BenchmarkPush(b *testing.B) {
+func echoServer(t testing.TB) net.Listener {
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
-		b.Fatal(err)
+		t.Fatal(err)
 	}
 
-	w := NewWatcher(4, 4096)
-	data := make([]byte, 128)
-	var x int32
-
-	completed := func(c net.Conn, numWritten int, err error) {
-		_ = x
-		//log.Println(atomic.AddInt32(&x, 1))
+	w, err := CreateWatcher()
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	sig := make(chan struct{})
+	rx := make([]byte, 128)
+	tx := make([]byte, 128)
+
 	go func() {
 		for {
 			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-
-			go func(conn net.Conn) {
-				w.Watch(conn, Events{})
-				<-sig
-				w.Write(conn, WriteRequest{Out: data, WriteCompleted: completed})
-			}(conn)
-		}
-	}()
-
-	tmp := make([]byte, 128)
-	var wg sync.WaitGroup
-	wg.Add(b.N)
-	log.Println("creating", b.N, "clients")
-
-	addr, _ := net.ResolveTCPAddr("tcp", ln.Addr().String())
-	for i := 0; i < b.N; i++ {
-		conn, err := net.DialTCP("tcp", nil, addr)
-		if err != nil {
-			b.Fatal(err)
-			return
-		}
-		go func(conn net.Conn) {
-			defer wg.Done()
-			defer conn.Close()
-			_, err = conn.Read(tmp)
 			if err != nil {
 				log.Println(err)
 				return
 			}
-		}(conn)
+
+			fd, err := w.Watch(conn)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+
+			log.Println("watching", conn.RemoteAddr(), "fd:", fd)
+
+			onReadComplete := func(req *Request) {
+				if req.NBytes > 0 {
+					//log.Println("oncomplete:", req.Fd, req.NBytes, string(req.Buffer[:req.NBytes]))
+					writeRequest := Request{
+						Fd:         fd,
+						Buffer:     tx,
+						NBytes:     req.NBytes,
+						OnComplete: func(req *Request) {},
+					}
+					w.Write(&writeRequest)
+				}
+			}
+
+			readRequest := Request{
+				Fd:          fd,
+				Buffer:      rx,
+				ReadPersist: true,
+				OnComplete:  onReadComplete,
+			}
+
+			err = w.Read(&readRequest)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+		}
+	}()
+	return ln
+}
+
+func TestEcho(t *testing.T) {
+	ln := echoServer(t)
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
 	}
-	log.Println(b.N, "clients created")
+	tx := []byte("hello world")
+	rx := make([]byte, len(tx))
+
+	conn.Write(tx)
+	t.Log("tx:", string(tx))
+	_, err = conn.Read(rx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Log("rx:", string(tx))
+}
+
+func BenchmarkEcho(b *testing.B) {
+	ln := echoServer(b)
+
+	addr, _ := net.ResolveTCPAddr("tcp", ln.Addr().String())
+	tx := []byte("hello world")
+	rx := make([]byte, len(tx))
+
+	conn, err := net.DialTCP("tcp", nil, addr)
+	if err != nil {
+		b.Fatal(err)
+		return
+	}
+
 	b.ResetTimer()
-	close(sig)
-	wg.Wait()
-	ln.Close()
+	b.SetBytes(int64(len(tx)))
+	for i := 0; i < b.N; i++ {
+		conn.Write(tx)
+		conn.Read(rx)
+	}
 }

@@ -35,10 +35,10 @@ type handler struct {
 	sync.Mutex
 }
 
-// Watcher will monitor all events specified in Events struct for each connection
+// Watcher will monitor & process Request(s)
 type Watcher struct {
-	rfd          int // epoll read fd
-	wfd          int // epoll read fd
+	rfd          int // epollin & epollout
+	wfd          int
 	handlers     map[int]*handler
 	handlersLock sync.Mutex
 }

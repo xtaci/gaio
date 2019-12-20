@@ -79,8 +79,10 @@ func BenchmarkPush(b *testing.B) {
 	var wg sync.WaitGroup
 	wg.Add(b.N)
 	log.Println("creating", b.N, "clients")
+
+	addr, _ := net.ResolveTCPAddr("tcp", ln.Addr().String())
 	for i := 0; i < b.N; i++ {
-		conn, err := net.Dial("tcp", ln.Addr().String())
+		conn, err := net.DialTCP("tcp", nil, addr)
 		if err != nil {
 			b.Fatal(err)
 			return

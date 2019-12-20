@@ -1,2 +1,2 @@
 # ev
-Nonblocking &amp; Parallel network library
+Async-IO Library for golang

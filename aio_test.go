@@ -4,7 +4,9 @@ import (
 	"log"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestPush(t *testing.T) {
@@ -56,7 +58,7 @@ func BenchmarkPush(b *testing.B) {
 
 	completed := func(c net.Conn, numWritten int, err error) {
 		_ = x
-		//log.Println(atomic.AddInt32(&x, 1))
+		log.Println(atomic.AddInt32(&x, 1))
 	}
 	go func() {
 		for {
@@ -77,18 +79,20 @@ func BenchmarkPush(b *testing.B) {
 	wg.Add(1024)
 	for i := 0; i < 1024; i++ {
 		go func() {
+			defer wg.Done()
 			conn, err := net.Dial("tcp", ln.Addr().String())
 			if err != nil {
 				log.Println(err)
-				b.Fatal(err)
+				return
 			}
+			defer conn.Close()
 			_, err = conn.Read(tmp)
 			if err != nil {
-				b.Fatal(err)
+				log.Println(err)
+				return
 			}
-			conn.Close()
-			wg.Done()
 		}()
+		<-time.After(time.Millisecond)
 	}
 	wg.Wait()
 }

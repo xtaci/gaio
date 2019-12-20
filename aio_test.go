@@ -5,7 +5,6 @@ import (
 	"net"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestPush(t *testing.T) {
@@ -81,23 +80,24 @@ func BenchmarkPush(b *testing.B) {
 	wg.Add(b.N)
 	log.Println("creating", b.N, "clients")
 	for i := 0; i < b.N; i++ {
-		go func() {
+		conn, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			b.Fatal(err)
+			return
+		}
+		go func(conn net.Conn) {
 			defer wg.Done()
-			conn, err := net.Dial("tcp", ln.Addr().String())
-			if err != nil {
-				log.Println(err)
-				return
-			}
 			defer conn.Close()
 			_, err = conn.Read(tmp)
 			if err != nil {
 				log.Println(err)
 				return
 			}
-		}()
-		<-time.After(time.Millisecond)
+		}(conn)
 	}
+	log.Println(b.N, "clients created")
 	b.ResetTimer()
 	close(sig)
 	wg.Wait()
+	ln.Close()
 }

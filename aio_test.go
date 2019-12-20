@@ -4,7 +4,6 @@ import (
 	"log"
 	"net"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -58,8 +57,10 @@ func BenchmarkPush(b *testing.B) {
 
 	completed := func(c net.Conn, numWritten int, err error) {
 		_ = x
-		log.Println(atomic.AddInt32(&x, 1))
+		//log.Println(atomic.AddInt32(&x, 1))
 	}
+
+	sig := make(chan struct{})
 	go func() {
 		for {
 			conn, err := ln.Accept()
@@ -69,6 +70,7 @@ func BenchmarkPush(b *testing.B) {
 
 			go func(conn net.Conn) {
 				w.Watch(conn, Events{})
+				<-sig
 				w.Write(conn, WriteRequest{Out: data, WriteCompleted: completed})
 			}(conn)
 		}
@@ -76,8 +78,9 @@ func BenchmarkPush(b *testing.B) {
 
 	tmp := make([]byte, 128)
 	var wg sync.WaitGroup
-	wg.Add(1024)
-	for i := 0; i < 1024; i++ {
+	wg.Add(b.N)
+	log.Println("creating", b.N, "clients")
+	for i := 0; i < b.N; i++ {
 		go func() {
 			defer wg.Done()
 			conn, err := net.Dial("tcp", ln.Addr().String())
@@ -94,5 +97,7 @@ func BenchmarkPush(b *testing.B) {
 		}()
 		<-time.After(time.Millisecond)
 	}
+	b.ResetTimer()
+	close(sig)
 	wg.Wait()
 }

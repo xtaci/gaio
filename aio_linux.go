@@ -29,23 +29,21 @@ const (
 // Handle represents one unique number for a watched connection
 type Handle int
 
-// ReadRequest defines a single request for reading data
-type Request struct {
-	Fd         Handle
-	Buffer     []byte
-	OnComplete func(req Result) Action
-}
+// Callback function prototype
+type Callback func(fd Handle, size int, err error) Action
 
-type Result struct {
-	Fd   Handle
-	Size int
+// controlBlock defines a AIO request context
+type controlBlock struct {
+	fd       Handle
+	buffer   []byte
+	callback Callback
 }
 
 type handler struct {
 	conn     net.Conn
 	rawConn  syscall.RawConn
-	reqRead  Request
-	reqWrite Request
+	reqRead  controlBlock
+	reqWrite controlBlock
 	sync.Mutex
 }
 
@@ -130,42 +128,34 @@ func (w *Watcher) StopWatch(Fd Handle) (err error) {
 	return nil
 }
 
-// Read submits a read requests to `conn`
-func (w *Watcher) Read(req Request) error {
+// Read submits a read requests to Handle
+func (w *Watcher) Read(fd Handle, buf []byte, callback Callback) error {
+	cb := controlBlock{fd, buf, callback}
 	w.handlersLock.Lock()
-	h := w.handlers[req.Fd]
+	h := w.handlers[fd]
 	w.handlersLock.Unlock()
-
-	// request check
-	if req.OnComplete == nil {
-		return errOnCompleteIsNil
-	}
 
 	if h != nil {
 		h.Lock()
-		h.reqRead = req
-		syscall.EpollCtl(w.rfd, syscall.EPOLL_CTL_ADD, int(req.Fd), &syscall.EpollEvent{Fd: int32(req.Fd), Events: syscall.EPOLLIN})
+		h.reqRead = cb
+		syscall.EpollCtl(w.rfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN})
 		h.Unlock()
 		return nil
 	}
 	return errNotWatched
 }
 
-// Write submits a write requests to `conn`
-func (w *Watcher) Write(wreq Request) error {
+// Write submits a write requests to Handle
+func (w *Watcher) Write(fd Handle, buf []byte, callback Callback) error {
+	cb := controlBlock{fd, buf, callback}
 	w.handlersLock.Lock()
-	h := w.handlers[wreq.Fd]
+	h := w.handlers[fd]
 	w.handlersLock.Unlock()
-
-	// request check
-	if wreq.OnComplete == nil {
-		return errOnCompleteIsNil
-	}
 
 	if h != nil {
 		h.Lock()
-		h.reqWrite = wreq
-		syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_ADD, int(wreq.Fd), &syscall.EpollEvent{Fd: int32(wreq.Fd), Events: syscall.EPOLLOUT})
+		h.reqWrite = cb
+		syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLOUT})
 		h.Unlock()
 		return nil
 	}
@@ -187,16 +177,19 @@ func (w *Watcher) loopRx() {
 			w.handlersLock.Unlock()
 
 			h.Lock()
-			req := h.reqRead
+			cb := h.reqRead
 			h.Unlock()
 
-			nr, er := syscall.Read(int(events[i].Fd), req.Buffer)
+			nr, er := syscall.Read(int(events[i].Fd), cb.buffer)
 			if er == syscall.EAGAIN {
 				continue
 			}
 
 			// callback
-			action := req.OnComplete(Result{req.Fd, nr})
+			var action Action
+			if cb.callback != nil {
+				action = cb.callback(cb.fd, nr, er)
+			}
 
 			switch action {
 			case Remove:
@@ -222,17 +215,19 @@ func (w *Watcher) loopTx() {
 			w.handlersLock.Unlock()
 
 			h.Lock()
-			req := h.reqWrite
+			cb := h.reqWrite
 			h.Unlock()
 
-			nw, er := syscall.Write(int(events[i].Fd), req.Buffer)
-			if er == syscall.EAGAIN {
-				h.Unlock()
+			nw, ew := syscall.Write(int(events[i].Fd), cb.buffer)
+			if ew == syscall.EAGAIN {
 				continue
 			}
 
 			// callback
-			action := req.OnComplete(Result{req.Fd, nw})
+			var action Action
+			if cb.callback != nil {
+				action = cb.callback(cb.fd, nw, ew)
+			}
 
 			switch action {
 			case Remove:

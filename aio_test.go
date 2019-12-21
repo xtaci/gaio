@@ -43,27 +43,16 @@ func echoServer(t testing.TB) net.Listener {
 
 			log.Println("watching", conn.RemoteAddr(), "fd:", fd)
 
-			onReadComplete := func(r Result) Action {
-				if r.Size > 0 {
-					copy(tx, rx[:r.Size])
-					writeRequest := Request{
-						Fd:         fd,
-						Buffer:     tx[:r.Size],
-						OnComplete: func(res Result) Action { return Remove },
-					}
-					w.Write(writeRequest)
+			onReadComplete := func(fd Handle, size int, err error) Action {
+				if size > 0 {
+					copy(tx, rx[:size])
+					w.Write(fd, tx[:size], nil)
 				}
 
 				return Keep
 			}
 
-			readRequest := Request{
-				Fd:         fd,
-				Buffer:     rx,
-				OnComplete: onReadComplete,
-			}
-
-			err = w.Read(readRequest)
+			err = w.Read(fd, rx, onReadComplete)
 			if err != nil {
 				log.Println(err)
 				return
@@ -106,7 +95,6 @@ func BenchmarkEcho(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	b.SetBytes(int64(len(tx)))
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		conn.Write(tx)

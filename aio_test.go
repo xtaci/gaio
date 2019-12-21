@@ -43,13 +43,13 @@ func echoServer(t testing.TB) net.Listener {
 
 			log.Println("watching", conn.RemoteAddr(), "fd:", fd)
 
-			onReadComplete := func(req ReadRequest) Action {
-				if req.NumRead > 0 {
-					copy(tx, rx[:req.NumRead])
-					writeRequest := WriteRequest{
+			onReadComplete := func(r Result) Action {
+				if r.Size > 0 {
+					copy(tx, rx[:r.Size])
+					writeRequest := Request{
 						Fd:         fd,
-						Buffer:     tx[:req.NumRead],
-						OnComplete: func(req WriteRequest) Action { return Remove },
+						Buffer:     tx[:r.Size],
+						OnComplete: func(res Result) Action { return Remove },
 					}
 					w.Write(writeRequest)
 				}
@@ -57,7 +57,7 @@ func echoServer(t testing.TB) net.Listener {
 				return Keep
 			}
 
-			readRequest := ReadRequest{
+			readRequest := Request{
 				Fd:         fd,
 				Buffer:     rx,
 				OnComplete: onReadComplete,

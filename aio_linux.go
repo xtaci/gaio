@@ -30,26 +30,22 @@ const (
 type Handle int
 
 // ReadRequest defines a single request for reading data
-type ReadRequest struct {
+type Request struct {
 	Fd         Handle
 	Buffer     []byte
-	NumRead    int
-	OnComplete func(req ReadRequest) Action
+	OnComplete func(req Result) Action
 }
 
-// WriteRequest defines a single request for writing data
-type WriteRequest struct {
-	Fd         Handle
-	Buffer     []byte
-	NumWritten int
-	OnComplete func(req WriteRequest) Action
+type Result struct {
+	Fd   Handle
+	Size int
 }
 
 type handler struct {
 	conn     net.Conn
 	rawConn  syscall.RawConn
-	reqRead  ReadRequest
-	reqWrite WriteRequest
+	reqRead  Request
+	reqWrite Request
 	sync.Mutex
 }
 
@@ -135,7 +131,7 @@ func (w *Watcher) StopWatch(Fd Handle) (err error) {
 }
 
 // Read submits a read requests to `conn`
-func (w *Watcher) Read(req ReadRequest) error {
+func (w *Watcher) Read(req Request) error {
 	w.handlersLock.Lock()
 	h := w.handlers[req.Fd]
 	w.handlersLock.Unlock()
@@ -156,7 +152,7 @@ func (w *Watcher) Read(req ReadRequest) error {
 }
 
 // Write submits a write requests to `conn`
-func (w *Watcher) Write(wreq WriteRequest) error {
+func (w *Watcher) Write(wreq Request) error {
 	w.handlersLock.Lock()
 	h := w.handlers[wreq.Fd]
 	w.handlersLock.Unlock()
@@ -200,8 +196,7 @@ func (w *Watcher) loopRx() {
 			}
 
 			// callback
-			req.NumRead = nr
-			action := req.OnComplete(req)
+			action := req.OnComplete(Result{req.Fd, nr})
 
 			switch action {
 			case Remove:
@@ -237,8 +232,7 @@ func (w *Watcher) loopTx() {
 			}
 
 			// callback
-			req.NumWritten = nw
-			action := req.OnComplete(req)
+			action := req.OnComplete(Result{req.Fd, nw})
 
 			switch action {
 			case Remove:

@@ -16,34 +16,24 @@ var (
 	errOnCompleteIsNil = errors.New("Request.OnComplete is nil")
 )
 
-type Action int
-
-// Action is an action that occurs after the completion of an request.
-const (
-	// Remove indicates that the request will be removed from queue
-	Remove Action = iota
-	// Keep this Request in the queue, useful for reading continuously
-	Keep
-)
-
 // Handle represents one unique number for a watched connection
 type Handle int
 
-// Callback function prototype
-type Callback func(fd Handle, size int, err error) Action
-
-// controlBlock defines a AIO request context
-type controlBlock struct {
-	fd       Handle
-	buffer   []byte
-	callback Callback
+// Block contains all info for a request
+type Block struct {
+	in     bool
+	fd     Handle
+	buffer []byte
+	size   int
+	err    error
+	notify chan Block
 }
 
 type handler struct {
 	conn     net.Conn
 	rawConn  syscall.RawConn
-	reqRead  controlBlock
-	reqWrite controlBlock
+	reqRead  Block
+	reqWrite Block
 	sync.Mutex
 }
 
@@ -129,8 +119,8 @@ func (w *Watcher) StopWatch(Fd Handle) (err error) {
 }
 
 // Read submits a read requests to Handle
-func (w *Watcher) Read(fd Handle, buf []byte, callback Callback) error {
-	cb := controlBlock{fd, buf, callback}
+func (w *Watcher) Read(fd Handle, buf []byte, chNotify chan Block) error {
+	cb := Block{in: true, fd: fd, buffer: buf, notify: chNotify}
 	w.handlersLock.Lock()
 	h := w.handlers[fd]
 	w.handlersLock.Unlock()
@@ -146,8 +136,8 @@ func (w *Watcher) Read(fd Handle, buf []byte, callback Callback) error {
 }
 
 // Write submits a write requests to Handle
-func (w *Watcher) Write(fd Handle, buf []byte, callback Callback) error {
-	cb := controlBlock{fd, buf, callback}
+func (w *Watcher) Write(fd Handle, buf []byte, chNotify chan Block) error {
+	cb := Block{fd: fd, buffer: buf, notify: chNotify}
 	w.handlersLock.Lock()
 	h := w.handlers[fd]
 	w.handlersLock.Unlock()
@@ -185,16 +175,11 @@ func (w *Watcher) loopRx() {
 				continue
 			}
 
-			// callback
-			var action Action
-			if cb.callback != nil {
-				action = cb.callback(cb.fd, nr, er)
-			}
-
-			switch action {
-			case Remove:
+			cb.size = nr
+			cb.err = err
+			if cb.notify != nil {
 				syscall.EpollCtl(w.rfd, syscall.EPOLL_CTL_DEL, int(events[i].Fd), &syscall.EpollEvent{Fd: events[i].Fd, Events: syscall.EPOLLIN})
-			case Keep:
+				cb.notify <- cb
 			}
 		}
 	}
@@ -223,16 +208,11 @@ func (w *Watcher) loopTx() {
 				continue
 			}
 
-			// callback
-			var action Action
-			if cb.callback != nil {
-				action = cb.callback(cb.fd, nw, ew)
-			}
-
-			switch action {
-			case Remove:
+			cb.size = nw
+			cb.err = err
+			if cb.notify != nil {
 				syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_DEL, int(events[i].Fd), &syscall.EpollEvent{Fd: events[i].Fd, Events: syscall.EPOLLOUT})
-			case Keep:
+				cb.notify <- cb
 			}
 		}
 	}

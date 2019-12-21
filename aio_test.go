@@ -25,7 +25,22 @@ func echoServer(t testing.TB) net.Listener {
 	}
 
 	rx := make([]byte, 128)
-	tx := make([]byte, 128)
+
+	ch := make(chan Block)
+
+	go func() {
+		for {
+			select {
+			case cb := <-ch:
+				if cb.in {
+					tx := make([]byte, cb.size)
+					copy(tx, rx[:cb.size])
+					w.Write(cb.fd, tx[:cb.size], ch)
+					w.Read(cb.fd, rx, ch)
+				}
+			}
+		}
+	}()
 
 	go func() {
 		for {
@@ -43,16 +58,7 @@ func echoServer(t testing.TB) net.Listener {
 
 			log.Println("watching", conn.RemoteAddr(), "fd:", fd)
 
-			onReadComplete := func(fd Handle, size int, err error) Action {
-				if size > 0 {
-					copy(tx, rx[:size])
-					w.Write(fd, tx[:size], nil)
-				}
-
-				return Keep
-			}
-
-			err = w.Read(fd, rx, onReadComplete)
+			err = w.Read(fd, rx, ch)
 			if err != nil {
 				log.Println(err)
 				return
@@ -99,5 +105,6 @@ func BenchmarkEcho(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		conn.Write(tx)
 		conn.Read(rx)
+		//		log.Println(i, b.N)
 	}
 }

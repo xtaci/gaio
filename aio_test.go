@@ -107,6 +107,7 @@ func BenchmarkEcho(b *testing.B) {
 
 	b.ResetTimer()
 	b.SetBytes(int64(len(tx)))
+	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		conn.Write(tx)
 		conn.Read(rx)

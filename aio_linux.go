@@ -16,22 +16,40 @@ var (
 	errOnCompleteIsNil = errors.New("Request.OnComplete is nil")
 )
 
-// Asynchronous request
-type Request struct {
-	Fd          int
-	Buffer      []byte
-	NBytes      int
-	Offset      int
-	ReadPersist bool
-	Error       error
-	OnComplete  func(req *Request)
+type Action int
+
+// Action is an action that occurs after the completion of an request.
+const (
+	// Remove indicates that the request will be removed from queue
+	Remove Action = iota
+	// Keep this Request in the queue, useful for reading continuously
+	Keep
+)
+
+// Handle represents one unique number for a watched connection
+type Handle int
+
+// ReadRequest defines a single request for reading data
+type ReadRequest struct {
+	Fd         Handle
+	Buffer     []byte
+	NumRead    int
+	OnComplete func(req ReadRequest) Action
+}
+
+// WriteRequest defines a single request for writing data
+type WriteRequest struct {
+	Fd         Handle
+	Buffer     []byte
+	NumWritten int
+	OnComplete func(req WriteRequest) Action
 }
 
 type handler struct {
-	conn          net.Conn
-	rawConn       syscall.RawConn
-	readRequests  []*Request
-	writeRequests []*Request
+	conn     net.Conn
+	rawConn  syscall.RawConn
+	reqRead  ReadRequest
+	reqWrite WriteRequest
 	sync.Mutex
 }
 
@@ -39,7 +57,7 @@ type handler struct {
 type Watcher struct {
 	rfd          int // epollin & epollout
 	wfd          int
-	handlers     map[int]*handler
+	handlers     map[Handle]*handler
 	handlersLock sync.Mutex
 }
 
@@ -58,7 +76,7 @@ func CreateWatcher() (*Watcher, error) {
 	}
 	w.wfd = wfd
 
-	w.handlers = make(map[int]*handler)
+	w.handlers = make(map[Handle]*handler)
 
 	go w.loopRx()
 	go w.loopTx()
@@ -78,8 +96,8 @@ func (w *Watcher) Close() error {
 	return nil
 }
 
-// Watch events `ev` for connection `conn`
-func (w *Watcher) Watch(conn net.Conn) (fd int, err error) {
+// Watch starts watching events on connection `conn`
+func (w *Watcher) Watch(conn net.Conn) (fd Handle, err error) {
 	c, ok := conn.(interface {
 		SyscallConn() (syscall.RawConn, error)
 	})
@@ -95,7 +113,7 @@ func (w *Watcher) Watch(conn net.Conn) (fd int, err error) {
 
 	var operr error
 	if err := rawconn.Control(func(s uintptr) {
-		fd = int(s)
+		fd = Handle(s)
 	}); err != nil {
 		return 0, err
 	}
@@ -111,8 +129,13 @@ func (w *Watcher) Watch(conn net.Conn) (fd int, err error) {
 	return fd, nil
 }
 
+// StopWatch events on connection `conn`
+func (w *Watcher) StopWatch(Fd Handle) (err error) {
+	return nil
+}
+
 // Read submits a read requests to `conn`
-func (w *Watcher) Read(req *Request) error {
+func (w *Watcher) Read(req ReadRequest) error {
 	w.handlersLock.Lock()
 	h := w.handlers[req.Fd]
 	w.handlersLock.Unlock()
@@ -124,8 +147,8 @@ func (w *Watcher) Read(req *Request) error {
 
 	if h != nil {
 		h.Lock()
+		h.reqRead = req
 		syscall.EpollCtl(w.rfd, syscall.EPOLL_CTL_ADD, int(req.Fd), &syscall.EpollEvent{Fd: int32(req.Fd), Events: syscall.EPOLLIN})
-		h.readRequests = append(h.readRequests, req)
 		h.Unlock()
 		return nil
 	}
@@ -133,20 +156,20 @@ func (w *Watcher) Read(req *Request) error {
 }
 
 // Write submits a write requests to `conn`
-func (w *Watcher) Write(req *Request) error {
+func (w *Watcher) Write(wreq WriteRequest) error {
 	w.handlersLock.Lock()
-	h := w.handlers[req.Fd]
+	h := w.handlers[wreq.Fd]
 	w.handlersLock.Unlock()
 
 	// request check
-	if req.OnComplete == nil {
+	if wreq.OnComplete == nil {
 		return errOnCompleteIsNil
 	}
 
 	if h != nil {
 		h.Lock()
-		syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_ADD, int(req.Fd), &syscall.EpollEvent{Fd: int32(req.Fd), Events: syscall.EPOLLOUT})
-		h.writeRequests = append(h.writeRequests, req)
+		h.reqWrite = wreq
+		syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_ADD, int(wreq.Fd), &syscall.EpollEvent{Fd: int32(wreq.Fd), Events: syscall.EPOLLOUT})
 		h.Unlock()
 		return nil
 	}
@@ -164,30 +187,26 @@ func (w *Watcher) loopRx() {
 
 		for i := 0; i < n; i++ {
 			w.handlersLock.Lock()
-			h := w.handlers[int(events[i].Fd)]
+			h := w.handlers[Handle(events[i].Fd)]
 			w.handlersLock.Unlock()
 
 			h.Lock()
-			if len(h.readRequests) > 0 {
-				req := h.readRequests[0]
-				nr, er := syscall.Read(int(events[i].Fd), req.Buffer)
-				if er == syscall.EAGAIN {
-					h.Unlock()
-					continue
-				}
+			req := h.reqRead
+			h.Unlock()
 
-				if !req.ReadPersist {
-					h.readRequests = h.readRequests[1:]
-					if len(h.readRequests) == 0 {
-						syscall.EpollCtl(w.rfd, syscall.EPOLL_CTL_DEL, int(events[i].Fd), &syscall.EpollEvent{Fd: events[i].Fd, Events: syscall.EPOLLIN})
-					}
-				}
-				h.Unlock()
+			nr, er := syscall.Read(int(events[i].Fd), req.Buffer)
+			if er == syscall.EAGAIN {
+				continue
+			}
 
-				req.NBytes = nr
-				req.OnComplete(req)
-			} else {
-				h.Unlock()
+			// callback
+			req.NumRead = nr
+			action := req.OnComplete(req)
+
+			switch action {
+			case Remove:
+				syscall.EpollCtl(w.rfd, syscall.EPOLL_CTL_DEL, int(events[i].Fd), &syscall.EpollEvent{Fd: events[i].Fd, Events: syscall.EPOLLIN})
+			case Keep:
 			}
 		}
 	}
@@ -204,28 +223,27 @@ func (w *Watcher) loopTx() {
 
 		for i := 0; i < n; i++ {
 			w.handlersLock.Lock()
-			h := w.handlers[int(events[i].Fd)]
+			h := w.handlers[Handle(events[i].Fd)]
 			w.handlersLock.Unlock()
 
 			h.Lock()
-			if len(h.writeRequests) > 0 {
-				req := h.writeRequests[0]
-				nw, er := syscall.Write(int(events[i].Fd), req.Buffer)
-				if er == syscall.EAGAIN {
-					h.Unlock()
-					continue
-				}
+			req := h.reqWrite
+			h.Unlock()
 
-				h.writeRequests = h.writeRequests[1:]
-				if len(h.writeRequests) == 0 {
-					syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_DEL, int(events[i].Fd), &syscall.EpollEvent{Fd: events[i].Fd, Events: syscall.EPOLLOUT})
-				}
+			nw, er := syscall.Write(int(events[i].Fd), req.Buffer)
+			if er == syscall.EAGAIN {
 				h.Unlock()
+				continue
+			}
 
-				req.NBytes = nw
-				req.OnComplete(req)
-			} else {
-				h.Unlock()
+			// callback
+			req.NumWritten = nw
+			action := req.OnComplete(req)
+
+			switch action {
+			case Remove:
+				syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_DEL, int(events[i].Fd), &syscall.EpollEvent{Fd: events[i].Fd, Events: syscall.EPOLLOUT})
+			case Keep:
 			}
 		}
 	}

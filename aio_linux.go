@@ -11,9 +11,7 @@ import (
 )
 
 var (
-	errRawConn         = errors.New("net.Conn does implement net.RawConn")
-	errNotWatched      = errors.New("connection is not being watched")
-	errOnCompleteIsNil = errors.New("Request.OnComplete is nil")
+	errRawConn = errors.New("net.Conn does implement net.RawConn")
 )
 
 // aiocb contains all info for a request

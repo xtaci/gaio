@@ -185,7 +185,6 @@ func (w *Watcher) loopTx() {
 				w.writersLock.Unlock()
 
 				syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_DEL, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLOUT})
-				cb.done <- OpResult{Fd: cb.fd, Size: cb.size, Err: err}
 				if cb.done != nil {
 					cb.done <- OpResult{Fd: cb.fd, Size: cb.size, Err: ew}
 				}

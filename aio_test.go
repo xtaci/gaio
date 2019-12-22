@@ -1,6 +1,7 @@
 package gaio
 
 import (
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -24,24 +25,29 @@ func echoServer(t testing.TB) net.Listener {
 		t.Fatal(err)
 	}
 
-	// ping-pong scheme echo server
-	rx := make([]byte, 128)
-	tx := make([]byte, 128)
-
+	rx := make([]byte, 1024)
 	chRx := make(chan OpResult)
-	chTx := make(chan OpResult)
-
 	go func() {
+		//var n int32
+		//var m int32
+		// ping-pong scheme echo server
+		tx := make([]byte, 1024)
+		chTx := make(chan OpResult)
 		for {
 			select {
 			case res := <-chRx:
 				if res.Size > 0 {
+					//log.Println("read:", atomic.AddInt32(&n, int32(res.Size)))
 					copy(tx, rx[:res.Size])
 					w.Write(res.Fd, tx[:res.Size], chTx)
 				} else if res.Size == 0 && res.Err == nil {
 					log.Println("client closed")
 				}
+
 			case res := <-chTx:
+				if res.Size > 0 {
+					//log.Println("write:", atomic.AddInt32(&m, int32(res.Size)))
+				}
 				w.Read(res.Fd, rx, chRx)
 			}
 		}
@@ -95,6 +101,31 @@ func TestEcho(t *testing.T) {
 	}
 
 	t.Log("rx:", string(tx))
+	conn.Close()
+}
+
+func TestEchoHuge(t *testing.T) {
+	ln := echoServer(t)
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := make([]byte, 1024*1024)
+	rx := make([]byte, len(tx))
+
+	go func() {
+		n, err := conn.Write(tx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Log("ping size", n)
+	}()
+
+	n, err := io.ReadFull(conn, rx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Log("pong size:", n)
 	conn.Close()
 }
 

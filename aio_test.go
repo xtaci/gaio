@@ -24,7 +24,9 @@ func echoServer(t testing.TB) net.Listener {
 		t.Fatal(err)
 	}
 
+	// ping-pong scheme echo server
 	rx := make([]byte, 128)
+	tx := make([]byte, 128)
 
 	chRx := make(chan OpResult)
 	chTx := make(chan OpResult)
@@ -34,7 +36,6 @@ func echoServer(t testing.TB) net.Listener {
 			select {
 			case res := <-chRx:
 				if res.Size > 0 {
-					tx := make([]byte, res.Size)
 					copy(tx, rx[:res.Size])
 					w.Write(res.Fd, tx[:res.Size], chTx)
 				}
@@ -60,6 +61,7 @@ func echoServer(t testing.TB) net.Listener {
 
 			log.Println("watching", conn.RemoteAddr(), "fd:", fd)
 
+			// kick off
 			err = w.Read(fd, rx, chRx)
 			if err != nil {
 				log.Println(err)

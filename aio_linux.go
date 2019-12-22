@@ -19,21 +19,28 @@ var (
 // Handle represents one unique number for a watched connection
 type Handle int
 
-// Block contains all info for a request
-type Block struct {
+// aiocb contains all info for a request
+type aiocb struct {
+	fd     Handle
+	buffer []byte
+	size   int
+	notify chan Result
+}
+
+// Result of operation
+type Result struct {
 	in     bool
 	fd     Handle
 	buffer []byte
 	size   int
 	err    error
-	notify chan Block
 }
 
 type handler struct {
 	conn     net.Conn
 	rawConn  syscall.RawConn
-	reqRead  Block
-	reqWrite Block
+	reqRead  aiocb
+	reqWrite aiocb
 	sync.Mutex
 }
 
@@ -119,8 +126,8 @@ func (w *Watcher) StopWatch(Fd Handle) (err error) {
 }
 
 // Read submits a read requests to Handle
-func (w *Watcher) Read(fd Handle, buf []byte, chNotify chan Block) error {
-	cb := Block{in: true, fd: fd, buffer: buf, notify: chNotify}
+func (w *Watcher) Read(fd Handle, buf []byte, chNotify chan Result) error {
+	cb := aiocb{fd: fd, buffer: buf, notify: chNotify}
 	w.handlersLock.Lock()
 	h := w.handlers[fd]
 	w.handlersLock.Unlock()
@@ -136,8 +143,8 @@ func (w *Watcher) Read(fd Handle, buf []byte, chNotify chan Block) error {
 }
 
 // Write submits a write requests to Handle
-func (w *Watcher) Write(fd Handle, buf []byte, chNotify chan Block) error {
-	cb := Block{fd: fd, buffer: buf, notify: chNotify}
+func (w *Watcher) Write(fd Handle, buf []byte, chNotify chan Result) error {
+	cb := aiocb{fd: fd, buffer: buf, notify: chNotify}
 	w.handlersLock.Lock()
 	h := w.handlers[fd]
 	w.handlersLock.Unlock()
@@ -176,10 +183,9 @@ func (w *Watcher) loopRx() {
 			}
 
 			cb.size = nr
-			cb.err = err
 			if cb.notify != nil {
 				syscall.EpollCtl(w.rfd, syscall.EPOLL_CTL_DEL, int(events[i].Fd), &syscall.EpollEvent{Fd: events[i].Fd, Events: syscall.EPOLLIN})
-				cb.notify <- cb
+				cb.notify <- Result{in: true, fd: cb.fd, buffer: cb.buffer, size: cb.size, err: err}
 			}
 		}
 	}
@@ -209,10 +215,9 @@ func (w *Watcher) loopTx() {
 			}
 
 			cb.size = nw
-			cb.err = err
 			if cb.notify != nil {
 				syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_DEL, int(events[i].Fd), &syscall.EpollEvent{Fd: events[i].Fd, Events: syscall.EPOLLOUT})
-				cb.notify <- cb
+				cb.notify <- Result{in: true, fd: cb.fd, buffer: cb.buffer, size: cb.size, err: err}
 			}
 		}
 	}

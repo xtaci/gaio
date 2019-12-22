@@ -16,12 +16,9 @@ var (
 	errOnCompleteIsNil = errors.New("Request.OnComplete is nil")
 )
 
-// Handle represents one unique number for a watched connection
-type Handle int
-
 // aiocb contains all info for a request
 type aiocb struct {
-	fd     Handle
+	fd     int
 	buffer []byte
 	size   int
 	done   chan OpResult
@@ -30,7 +27,7 @@ type aiocb struct {
 
 // OpResult of operation
 type OpResult struct {
-	Fd   Handle
+	Fd   int
 	Size int
 	Err  error
 }
@@ -47,9 +44,12 @@ type Watcher struct {
 	rfd int // epollin & epollout
 	wfd int
 
-	// event handlers
-	evHandlers     map[Handle]*eventHandle
-	evHandlersLock sync.Mutex
+	// handlers for a fd(s)
+	readers map[int]aiocb
+	writers map[int]aiocb
+
+	readersLock sync.Mutex
+	writersLock sync.Mutex
 }
 
 // CreateWatcher creates a management object for monitoring events of net.Conn
@@ -67,7 +67,8 @@ func CreateWatcher() (*Watcher, error) {
 	}
 	w.wfd = wfd
 
-	w.evHandlers = make(map[Handle]*eventHandle)
+	w.readers = make(map[int]aiocb)
+	w.writers = make(map[int]aiocb)
 
 	go w.loopRx()
 	go w.loopTx()
@@ -88,7 +89,7 @@ func (w *Watcher) Close() error {
 }
 
 // Watch starts watching events on connection `conn`
-func (w *Watcher) Watch(conn net.Conn) (fd Handle, err error) {
+func (w *Watcher) Watch(conn net.Conn) (fd int, err error) {
 	c, ok := conn.(interface {
 		SyscallConn() (syscall.RawConn, error)
 	})
@@ -104,7 +105,7 @@ func (w *Watcher) Watch(conn net.Conn) (fd Handle, err error) {
 
 	var operr error
 	if err := rawconn.Control(func(s uintptr) {
-		fd = Handle(s)
+		fd = int(s)
 	}); err != nil {
 		return 0, err
 	}
@@ -112,51 +113,30 @@ func (w *Watcher) Watch(conn net.Conn) (fd Handle, err error) {
 		return 0, operr
 	}
 
-	h := eventHandle{}
-	w.evHandlersLock.Lock()
-	w.evHandlers[fd] = &h
-	w.evHandlersLock.Unlock()
-
 	return fd, nil
 }
 
 // StopWatch events on connection `conn`
-func (w *Watcher) StopWatch(Fd Handle) (err error) {
+func (w *Watcher) StopWatch(Fd int) (err error) {
 	return nil
 }
 
 // Read submits a read requests to Handle
-func (w *Watcher) Read(fd Handle, buf []byte, done chan OpResult) error {
+func (w *Watcher) Read(fd int, buf []byte, done chan OpResult) error {
 	cb := aiocb{fd: fd, buffer: buf, done: done}
-	w.evHandlersLock.Lock()
-	h := w.evHandlers[fd]
-	w.evHandlersLock.Unlock()
-
-	if h != nil {
-		h.Lock()
-		h.rcb = cb
-		syscall.EpollCtl(w.rfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN})
-		h.Unlock()
-		return nil
-	}
-	return errNotWatched
+	w.readersLock.Lock()
+	w.readers[fd] = cb
+	w.readersLock.Unlock()
+	return syscall.EpollCtl(w.rfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN})
 }
 
 // Write submits a write requests to Handle
-func (w *Watcher) Write(fd Handle, buf []byte, done chan OpResult) error {
+func (w *Watcher) Write(fd int, buf []byte, done chan OpResult) error {
 	cb := aiocb{fd: fd, buffer: buf, done: done}
-	w.evHandlersLock.Lock()
-	h := w.evHandlers[fd]
-	w.evHandlersLock.Unlock()
-
-	if h != nil {
-		h.Lock()
-		h.wcb = cb
-		syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLOUT})
-		h.Unlock()
-		return nil
-	}
-	return errNotWatched
+	w.writersLock.Lock()
+	w.writers[fd] = cb
+	w.writersLock.Unlock()
+	return syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLOUT})
 }
 
 func (w *Watcher) loopRx() {
@@ -169,23 +149,24 @@ func (w *Watcher) loopRx() {
 		}
 
 		for i := 0; i < n; i++ {
-			w.evHandlersLock.Lock()
-			h := w.evHandlers[Handle(events[i].Fd)]
-			w.evHandlersLock.Unlock()
+			fd := int(events[i].Fd)
 
-			h.Lock()
-			cb := h.rcb
-			nr, er := syscall.Read(int(events[i].Fd), cb.buffer[:])
+			w.readersLock.Lock()
+			cb := w.readers[fd]
+			nr, er := syscall.Read(int(fd), cb.buffer[:])
 			if er == syscall.EAGAIN {
-				h.Unlock()
+				w.readersLock.Unlock()
 				continue
 			}
+			result := OpResult{Fd: cb.fd, Size: nr, Err: er}
+			w.readersLock.Unlock()
 
-			syscall.EpollCtl(w.rfd, syscall.EPOLL_CTL_DEL, int(events[i].Fd), &syscall.EpollEvent{Fd: events[i].Fd, Events: syscall.EPOLLIN})
+			// read complete or error
+			syscall.EpollCtl(w.rfd, syscall.EPOLL_CTL_DEL, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN})
+
 			if cb.done != nil {
-				cb.done <- OpResult{Fd: cb.fd, Size: nr, Err: er}
+				cb.done <- result
 			}
-			h.Unlock()
 		}
 	}
 }
@@ -200,28 +181,33 @@ func (w *Watcher) loopTx() {
 		}
 
 		for i := 0; i < n; i++ {
-			w.evHandlersLock.Lock()
-			h := w.evHandlers[Handle(events[i].Fd)]
-			w.evHandlersLock.Unlock()
+			fd := int(events[i].Fd)
 
-			h.Lock()
-			nw, ew := syscall.Write(int(events[i].Fd), h.wcb.buffer)
+			w.writersLock.Lock()
+			cb := w.writers[fd]
+			nw, ew := syscall.Write(int(fd), cb.buffer)
 			if ew == syscall.EAGAIN {
-				h.Unlock()
+				w.writersLock.Unlock()
 				continue
 			}
+
 			if ew == nil {
-				h.wcb.size += nw
-				h.wcb.buffer = h.wcb.buffer[nw:]
+				cb.size += nw
+				cb.buffer = cb.buffer[nw:]
 			}
 
-			if len(h.wcb.buffer) == 0 || ew != nil {
-				syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_DEL, int(events[i].Fd), &syscall.EpollEvent{Fd: events[i].Fd, Events: syscall.EPOLLOUT})
-				if h.wcb.done != nil {
-					h.wcb.done <- OpResult{Fd: h.wcb.fd, Size: h.wcb.size, Err: err}
+			if len(cb.buffer) == 0 || ew != nil { // done
+				w.writersLock.Unlock()
+
+				syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_DEL, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLOUT})
+				cb.done <- OpResult{Fd: cb.fd, Size: cb.size, Err: err}
+				if cb.done != nil {
+					cb.done <- OpResult{Fd: cb.fd, Size: cb.size, Err: ew}
 				}
+			} else {
+				w.writers[fd] = cb
+				w.writersLock.Unlock()
 			}
-			h.Unlock()
 		}
 	}
 }

@@ -144,10 +144,8 @@ func (w *Watcher) loopRx() {
 				continue
 			}
 			result := OpResult{Fd: cb.fd, Size: nr, Err: er}
-			w.readersLock.Unlock()
-
-			// read complete or error
 			syscall.EpollCtl(w.rfd, syscall.EPOLL_CTL_DEL, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN})
+			w.readersLock.Unlock()
 
 			if cb.done != nil {
 				cb.done <- result
@@ -182,9 +180,9 @@ func (w *Watcher) loopTx() {
 			}
 
 			if len(cb.buffer) == 0 || ew != nil { // done
+				syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_DEL, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLOUT})
 				w.writersLock.Unlock()
 
-				syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_DEL, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLOUT})
 				if cb.done != nil {
 					cb.done <- OpResult{Fd: cb.fd, Size: cb.size, Err: ew}
 				}

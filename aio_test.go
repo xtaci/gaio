@@ -38,6 +38,8 @@ func echoServer(t testing.TB) net.Listener {
 				if res.Size > 0 {
 					copy(tx, rx[:res.Size])
 					w.Write(res.Fd, tx[:res.Size], chTx)
+				} else if res.Size == 0 && res.Err == nil {
+					log.Println("client closed")
 				}
 			case res := <-chTx:
 				w.Read(res.Fd, rx, chRx)
@@ -81,7 +83,11 @@ func TestEcho(t *testing.T) {
 	tx := []byte("hello world")
 	rx := make([]byte, len(tx))
 
-	conn.Write(tx)
+	_, err = conn.Write(tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	t.Log("tx:", string(tx))
 	_, err = conn.Read(rx)
 	if err != nil {
@@ -89,6 +95,7 @@ func TestEcho(t *testing.T) {
 	}
 
 	t.Log("rx:", string(tx))
+	conn.Close()
 }
 
 func BenchmarkEcho(b *testing.B) {
@@ -111,4 +118,5 @@ func BenchmarkEcho(b *testing.B) {
 		conn.Read(rx)
 		//		log.Println(i, b.N)
 	}
+	conn.Close()
 }

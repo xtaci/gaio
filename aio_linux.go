@@ -20,7 +20,6 @@ type aiocb struct {
 	buffer []byte
 	size   int
 	done   chan OpResult
-	sync.Mutex
 }
 
 // OpResult of operation
@@ -28,13 +27,6 @@ type OpResult struct {
 	Fd   int
 	Size int
 	Err  error
-}
-
-// eventHandle holds control blocks for read & write
-type eventHandle struct {
-	rcb aiocb
-	wcb aiocb
-	sync.Mutex
 }
 
 // Watcher will monitor & process Request(s)

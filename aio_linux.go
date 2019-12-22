@@ -1,6 +1,6 @@
 // +build linux
 
-package ev
+package gaio
 
 import (
 	"errors"
@@ -24,23 +24,22 @@ type aiocb struct {
 	fd     Handle
 	buffer []byte
 	size   int
-	notify chan Result
+	done   chan Result
 }
 
 // Result of operation
 type Result struct {
-	in     bool
-	fd     Handle
-	buffer []byte
-	size   int
-	err    error
+	fd   Handle
+	size int
+	err  error
 }
 
 type handler struct {
-	conn     net.Conn
-	rawConn  syscall.RawConn
-	reqRead  aiocb
-	reqWrite aiocb
+	conn    net.Conn
+	rawConn syscall.RawConn
+
+	rcb aiocb
+	wcb aiocb
 	sync.Mutex
 }
 
@@ -126,15 +125,15 @@ func (w *Watcher) StopWatch(Fd Handle) (err error) {
 }
 
 // Read submits a read requests to Handle
-func (w *Watcher) Read(fd Handle, buf []byte, chNotify chan Result) error {
-	cb := aiocb{fd: fd, buffer: buf, notify: chNotify}
+func (w *Watcher) Read(fd Handle, buf []byte, done chan Result) error {
+	cb := aiocb{fd: fd, buffer: buf, done: done}
 	w.handlersLock.Lock()
 	h := w.handlers[fd]
 	w.handlersLock.Unlock()
 
 	if h != nil {
 		h.Lock()
-		h.reqRead = cb
+		h.rcb = cb
 		syscall.EpollCtl(w.rfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN})
 		h.Unlock()
 		return nil
@@ -143,15 +142,15 @@ func (w *Watcher) Read(fd Handle, buf []byte, chNotify chan Result) error {
 }
 
 // Write submits a write requests to Handle
-func (w *Watcher) Write(fd Handle, buf []byte, chNotify chan Result) error {
-	cb := aiocb{fd: fd, buffer: buf, notify: chNotify}
+func (w *Watcher) Write(fd Handle, buf []byte, done chan Result) error {
+	cb := aiocb{fd: fd, buffer: buf, done: done}
 	w.handlersLock.Lock()
 	h := w.handlers[fd]
 	w.handlersLock.Unlock()
 
 	if h != nil {
 		h.Lock()
-		h.reqWrite = cb
+		h.wcb = cb
 		syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLOUT})
 		h.Unlock()
 		return nil
@@ -174,19 +173,18 @@ func (w *Watcher) loopRx() {
 			w.handlersLock.Unlock()
 
 			h.Lock()
-			cb := h.reqRead
-			h.Unlock()
-
-			nr, er := syscall.Read(int(events[i].Fd), cb.buffer)
+			cb := h.rcb
+			nr, er := syscall.Read(int(events[i].Fd), cb.buffer[:])
 			if er == syscall.EAGAIN {
+				h.Unlock()
 				continue
 			}
 
-			cb.size = nr
-			if cb.notify != nil {
-				syscall.EpollCtl(w.rfd, syscall.EPOLL_CTL_DEL, int(events[i].Fd), &syscall.EpollEvent{Fd: events[i].Fd, Events: syscall.EPOLLIN})
-				cb.notify <- Result{in: true, fd: cb.fd, buffer: cb.buffer, size: cb.size, err: err}
+			syscall.EpollCtl(w.rfd, syscall.EPOLL_CTL_DEL, int(events[i].Fd), &syscall.EpollEvent{Fd: events[i].Fd, Events: syscall.EPOLLIN})
+			if cb.done != nil {
+				cb.done <- Result{fd: cb.fd, size: nr, err: er}
 			}
+			h.Unlock()
 		}
 	}
 }
@@ -206,19 +204,23 @@ func (w *Watcher) loopTx() {
 			w.handlersLock.Unlock()
 
 			h.Lock()
-			cb := h.reqWrite
-			h.Unlock()
-
-			nw, ew := syscall.Write(int(events[i].Fd), cb.buffer)
+			nw, ew := syscall.Write(int(events[i].Fd), h.wcb.buffer)
 			if ew == syscall.EAGAIN {
+				h.Unlock()
 				continue
 			}
-
-			cb.size = nw
-			if cb.notify != nil {
-				syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_DEL, int(events[i].Fd), &syscall.EpollEvent{Fd: events[i].Fd, Events: syscall.EPOLLOUT})
-				cb.notify <- Result{in: true, fd: cb.fd, buffer: cb.buffer, size: cb.size, err: err}
+			if ew == nil {
+				h.wcb.size += nw
+				h.wcb.buffer = h.wcb.buffer[nw:]
 			}
+
+			if len(h.wcb.buffer) == 0 || ew != nil {
+				syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_DEL, int(events[i].Fd), &syscall.EpollEvent{Fd: events[i].Fd, Events: syscall.EPOLLOUT})
+				if h.wcb.done != nil {
+					h.wcb.done <- Result{fd: h.wcb.fd, size: h.wcb.size, err: err}
+				}
+			}
+			h.Unlock()
 		}
 	}
 }

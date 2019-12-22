@@ -1,4 +1,4 @@
-package ev
+package gaio
 
 import (
 	"log"
@@ -26,18 +26,20 @@ func echoServer(t testing.TB) net.Listener {
 
 	rx := make([]byte, 128)
 
-	ch := make(chan Result)
+	chRx := make(chan Result)
+	chTx := make(chan Result)
 
 	go func() {
 		for {
 			select {
-			case res := <-ch:
-				if res.in && res.size > 0 {
+			case res := <-chRx:
+				if res.size > 0 {
 					tx := make([]byte, res.size)
 					copy(tx, rx[:res.size])
-					w.Write(res.fd, tx[:res.size], ch)
-					w.Read(res.fd, rx, ch)
+					w.Write(res.fd, tx[:res.size], chTx)
 				}
+			case res := <-chTx:
+				w.Read(res.fd, rx, chRx)
 			}
 		}
 	}()
@@ -58,7 +60,7 @@ func echoServer(t testing.TB) net.Listener {
 
 			log.Println("watching", conn.RemoteAddr(), "fd:", fd)
 
-			err = w.Read(fd, rx, ch)
+			err = w.Read(fd, rx, chRx)
 			if err != nil {
 				log.Println(err)
 				return

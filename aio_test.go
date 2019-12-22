@@ -26,20 +26,20 @@ func echoServer(t testing.TB) net.Listener {
 
 	rx := make([]byte, 128)
 
-	chRx := make(chan Result)
-	chTx := make(chan Result)
+	chRx := make(chan OpResult)
+	chTx := make(chan OpResult)
 
 	go func() {
 		for {
 			select {
 			case res := <-chRx:
-				if res.size > 0 {
-					tx := make([]byte, res.size)
-					copy(tx, rx[:res.size])
-					w.Write(res.fd, tx[:res.size], chTx)
+				if res.Size > 0 {
+					tx := make([]byte, res.Size)
+					copy(tx, rx[:res.Size])
+					w.Write(res.Fd, tx[:res.Size], chTx)
 				}
 			case res := <-chTx:
-				w.Read(res.fd, rx, chRx)
+				w.Read(res.Fd, rx, chRx)
 			}
 		}
 	}()

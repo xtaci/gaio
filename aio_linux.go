@@ -24,20 +24,19 @@ type aiocb struct {
 	fd     Handle
 	buffer []byte
 	size   int
-	done   chan Result
+	done   chan OpResult
+	sync.Mutex
 }
 
-// Result of operation
-type Result struct {
-	fd   Handle
-	size int
-	err  error
+// OpResult of operation
+type OpResult struct {
+	Fd   Handle
+	Size int
+	Err  error
 }
 
-type handler struct {
-	conn    net.Conn
-	rawConn syscall.RawConn
-
+// eventHandle holds control blocks for read & write
+type eventHandle struct {
 	rcb aiocb
 	wcb aiocb
 	sync.Mutex
@@ -45,10 +44,12 @@ type handler struct {
 
 // Watcher will monitor & process Request(s)
 type Watcher struct {
-	rfd          int // epollin & epollout
-	wfd          int
-	handlers     map[Handle]*handler
-	handlersLock sync.Mutex
+	rfd int // epollin & epollout
+	wfd int
+
+	// event handlers
+	evHandlers     map[Handle]*eventHandle
+	evHandlersLock sync.Mutex
 }
 
 // CreateWatcher creates a management object for monitoring events of net.Conn
@@ -66,7 +67,7 @@ func CreateWatcher() (*Watcher, error) {
 	}
 	w.wfd = wfd
 
-	w.handlers = make(map[Handle]*handler)
+	w.evHandlers = make(map[Handle]*eventHandle)
 
 	go w.loopRx()
 	go w.loopTx()
@@ -111,10 +112,10 @@ func (w *Watcher) Watch(conn net.Conn) (fd Handle, err error) {
 		return 0, operr
 	}
 
-	h := handler{conn: conn, rawConn: rawconn}
-	w.handlersLock.Lock()
-	w.handlers[fd] = &h
-	w.handlersLock.Unlock()
+	h := eventHandle{}
+	w.evHandlersLock.Lock()
+	w.evHandlers[fd] = &h
+	w.evHandlersLock.Unlock()
 
 	return fd, nil
 }
@@ -125,11 +126,11 @@ func (w *Watcher) StopWatch(Fd Handle) (err error) {
 }
 
 // Read submits a read requests to Handle
-func (w *Watcher) Read(fd Handle, buf []byte, done chan Result) error {
+func (w *Watcher) Read(fd Handle, buf []byte, done chan OpResult) error {
 	cb := aiocb{fd: fd, buffer: buf, done: done}
-	w.handlersLock.Lock()
-	h := w.handlers[fd]
-	w.handlersLock.Unlock()
+	w.evHandlersLock.Lock()
+	h := w.evHandlers[fd]
+	w.evHandlersLock.Unlock()
 
 	if h != nil {
 		h.Lock()
@@ -142,11 +143,11 @@ func (w *Watcher) Read(fd Handle, buf []byte, done chan Result) error {
 }
 
 // Write submits a write requests to Handle
-func (w *Watcher) Write(fd Handle, buf []byte, done chan Result) error {
+func (w *Watcher) Write(fd Handle, buf []byte, done chan OpResult) error {
 	cb := aiocb{fd: fd, buffer: buf, done: done}
-	w.handlersLock.Lock()
-	h := w.handlers[fd]
-	w.handlersLock.Unlock()
+	w.evHandlersLock.Lock()
+	h := w.evHandlers[fd]
+	w.evHandlersLock.Unlock()
 
 	if h != nil {
 		h.Lock()
@@ -168,9 +169,9 @@ func (w *Watcher) loopRx() {
 		}
 
 		for i := 0; i < n; i++ {
-			w.handlersLock.Lock()
-			h := w.handlers[Handle(events[i].Fd)]
-			w.handlersLock.Unlock()
+			w.evHandlersLock.Lock()
+			h := w.evHandlers[Handle(events[i].Fd)]
+			w.evHandlersLock.Unlock()
 
 			h.Lock()
 			cb := h.rcb
@@ -182,7 +183,7 @@ func (w *Watcher) loopRx() {
 
 			syscall.EpollCtl(w.rfd, syscall.EPOLL_CTL_DEL, int(events[i].Fd), &syscall.EpollEvent{Fd: events[i].Fd, Events: syscall.EPOLLIN})
 			if cb.done != nil {
-				cb.done <- Result{fd: cb.fd, size: nr, err: er}
+				cb.done <- OpResult{Fd: cb.fd, Size: nr, Err: er}
 			}
 			h.Unlock()
 		}
@@ -199,9 +200,9 @@ func (w *Watcher) loopTx() {
 		}
 
 		for i := 0; i < n; i++ {
-			w.handlersLock.Lock()
-			h := w.handlers[Handle(events[i].Fd)]
-			w.handlersLock.Unlock()
+			w.evHandlersLock.Lock()
+			h := w.evHandlers[Handle(events[i].Fd)]
+			w.evHandlersLock.Unlock()
 
 			h.Lock()
 			nw, ew := syscall.Write(int(events[i].Fd), h.wcb.buffer)
@@ -217,7 +218,7 @@ func (w *Watcher) loopTx() {
 			if len(h.wcb.buffer) == 0 || ew != nil {
 				syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_DEL, int(events[i].Fd), &syscall.EpollEvent{Fd: events[i].Fd, Events: syscall.EPOLLOUT})
 				if h.wcb.done != nil {
-					h.wcb.done <- Result{fd: h.wcb.fd, size: h.wcb.size, err: err}
+					h.wcb.done <- OpResult{Fd: h.wcb.fd, Size: h.wcb.size, Err: err}
 				}
 			}
 			h.Unlock()

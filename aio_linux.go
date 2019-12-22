@@ -114,11 +114,6 @@ func (w *Watcher) Watch(conn net.Conn) (fd int, err error) {
 	return fd, nil
 }
 
-// StopWatch events on connection `conn`
-func (w *Watcher) StopWatch(Fd int) (err error) {
-	return nil
-}
-
 // Read submits a read requests to Handle
 func (w *Watcher) Read(fd int, buf []byte, done chan OpResult) error {
 	cb := aiocb{fd: fd, buffer: buf, done: done}

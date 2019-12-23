@@ -24,9 +24,10 @@ type aiocb struct {
 
 // OpResult of operation
 type OpResult struct {
-	Fd   int
-	Size int
-	Err  error
+	Fd     int
+	Buffer []byte // the original committed buffer
+	Size   int
+	Err    error
 }
 
 // Watcher will monitor & process Request(s)
@@ -158,7 +159,7 @@ func (w *Watcher) loopRx() {
 				w.readersLock.Unlock()
 				continue
 			}
-			result := OpResult{Fd: cb.fd, Size: nr, Err: er}
+			result := OpResult{Fd: cb.fd, Buffer: cb.buffer, Size: nr, Err: er}
 			syscall.EpollCtl(w.rfd, syscall.EPOLL_CTL_DEL, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN})
 			w.readersLock.Unlock()
 
@@ -191,15 +192,14 @@ func (w *Watcher) loopTx() {
 
 			if ew == nil {
 				cb.size += nw
-				cb.buffer = cb.buffer[nw:]
 			}
 
-			if len(cb.buffer) == 0 || ew != nil { // done
+			if len(cb.buffer) == cb.size || ew != nil { // done
 				syscall.EpollCtl(w.wfd, syscall.EPOLL_CTL_DEL, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLOUT})
 				w.writersLock.Unlock()
 
 				if cb.done != nil {
-					cb.done <- OpResult{Fd: cb.fd, Size: cb.size, Err: ew}
+					cb.done <- OpResult{Fd: cb.fd, Buffer: cb.buffer, Size: cb.size, Err: ew}
 				}
 			} else {
 				w.writers[fd] = cb

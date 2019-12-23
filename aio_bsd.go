@@ -6,13 +6,12 @@ import (
 	"syscall"
 )
 
-type poller *pollerS
-type pollerS struct {
+type poller struct {
 	fd      int
 	changes []syscall.Kevent_t
 }
 
-func createpoll() (poller, error) {
+func OpenPoll() (*poller, error) {
 	fd, err := syscall.Kqueue()
 	if err != nil {
 		return nil, err
@@ -28,16 +27,14 @@ func createpoll() (poller, error) {
 		return nil, err
 	}
 
-	p := new(pollerS)
+	p := new(poller)
 	p.fd = fd
 	return p, nil
 }
 
-func closepoll(p poller) error {
-	return syscall.Close(p.fd)
-}
+func (p *poller) Close() error { return syscall.Close(p.fd) }
 
-func trigger(p poller) error {
+func (p *poller) trigger() error {
 	_, err := syscall.Kevent(p.fd, []syscall.Kevent_t{{
 		Ident:  0,
 		Filter: syscall.EVFILT_USER,
@@ -46,37 +43,23 @@ func trigger(p poller) error {
 	return err
 }
 
-func poll_in(p poller, fd int) error {
+func (p *poller) Watch(fd int) error {
 	p.changes = append(p.changes,
-		syscall.Kevent_t{
-			Ident: uint64(fd), Flags: syscall.EV_ADD, Filter: syscall.EVFILT_READ,
-		},
+		syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_READ},
+		syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_WRITE},
 	)
-	return trigger(p)
+	return p.trigger()
 }
 
-func poll_out(p poller, fd int) error {
+func (p *poller) Unwatch(fd int) error {
 	p.changes = append(p.changes,
-		syscall.Kevent_t{
-			Ident: uint64(fd), Flags: syscall.EV_ADD, Filter: syscall.EVFILT_WRITE,
-		},
+		syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_READ},
+		syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_WRITE},
 	)
-	return trigger(p)
+	return p.trigger()
 }
 
-func poll_delete_in(p poller, fd int) error {
-	p.changes = append(p.changes,
-		syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_READ})
-	return trigger(p)
-}
-
-func poll_delete_out(p poller, fd int) error {
-	p.changes = append(p.changes,
-		syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_WRITE})
-	return trigger(p)
-}
-
-func poll_wait(p poller, callback func(fd int)) error {
+func (p *poller) Wait(chReadableNotify chan int, chWriteableNotify chan int) error {
 	events := make([]syscall.Kevent_t, 128)
 	for {
 		n, err := syscall.Kevent(p.fd, p.changes, events, nil)
@@ -86,7 +69,13 @@ func poll_wait(p poller, callback func(fd int)) error {
 
 		for i := 0; i < n; i++ {
 			if events[i].Ident != 0 {
-				callback(int(events[i].Ident))
+				if events[i].Filter == syscall.EVFILT_READ {
+					chReadableNotify <- int(events[i].Ident)
+
+				}
+				if events[i].Filter == syscall.EVFILT_WRITE {
+					chWriteableNotify <- int(events[i].Ident)
+				}
 			}
 		}
 	}

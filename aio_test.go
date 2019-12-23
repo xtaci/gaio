@@ -26,19 +26,12 @@ func echoServer(t testing.TB) net.Listener {
 	}
 
 	chRx := make(chan OpResult)
+	chTx := make(chan OpResult)
+	// ping-pong scheme echo server
 	go func() {
-		//var n int32
-		//var m int32
-		// ping-pong scheme echo server
-		chTx := make(chan OpResult)
-
-		// per connetion read buffers
-		readBuffers := make(map[int][]byte)
-
 		for {
 			select {
 			case res := <-chRx:
-				readBuffers[res.Fd] = res.Buffer
 				if res.Err != nil {
 					log.Println("read error")
 					w.StopWatch(res.Fd)
@@ -51,23 +44,15 @@ func echoServer(t testing.TB) net.Listener {
 					continue
 				}
 
-				// per connection write buffer
-				tx := make([]byte, res.Size)
-				//log.Println("read:", atomic.AddInt32(&n, int32(res.Size)))
-				copy(tx, res.Buffer)
-				w.Write(res.Fd, tx, chTx)
+				// write the data, we won't start to read again until write completes.
+				w.Write(res.Fd, res.Buffer[:res.Size:cap(res.Buffer)], chTx)
 			case res := <-chTx:
 				if res.Err != nil {
 					log.Println("write error:", res.Err)
 					w.StopWatch(res.Fd)
 				}
-				/*
-					if res.Size > 0 {
-						log.Println("write:", atomic.AddInt32(&m, int32(res.Size)))
-					}
-				*/
-				// start read again
-				w.Read(res.Fd, readBuffers[res.Fd], chRx)
+				// write complete, start read again
+				w.Read(res.Fd, res.Buffer[:cap(res.Buffer)], chRx)
 			}
 		}
 	}()
@@ -89,8 +74,7 @@ func echoServer(t testing.TB) net.Listener {
 			log.Println("watching", conn.RemoteAddr(), "fd:", fd)
 
 			// kick off
-			rxBuf := make([]byte, 1024)
-			err = w.Read(fd, rxBuf, chRx)
+			err = w.Read(fd, make([]byte, 1024), chRx)
 			if err != nil {
 				log.Println(err)
 				return

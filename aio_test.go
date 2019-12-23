@@ -33,7 +33,7 @@ func echoServer(t testing.TB) net.Listener {
 			select {
 			case res := <-chRx:
 				if res.Err != nil {
-					log.Println("read error")
+					log.Println("read error:", res.Err, res.Size)
 					w.StopWatch(res.Fd)
 					continue
 				}
@@ -48,7 +48,7 @@ func echoServer(t testing.TB) net.Listener {
 				w.Write(res.Fd, res.Buffer[:res.Size:cap(res.Buffer)], chTx)
 			case res := <-chTx:
 				if res.Err != nil {
-					log.Println("write error:", res.Err)
+					log.Println("write error:", res.Err, res.Size)
 					w.StopWatch(res.Fd)
 				}
 				// write complete, start read again
@@ -149,8 +149,14 @@ func BenchmarkEcho(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		conn.Write(tx)
-		conn.Read(rx)
+		_, err := conn.Write(tx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		_, err = conn.Read(rx)
+		if err != nil {
+			b.Fatal(err)
+		}
 		//		log.Println(i, b.N)
 	}
 	conn.Close()

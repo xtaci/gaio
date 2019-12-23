@@ -24,8 +24,12 @@ func poll_in(p poller, fd int) error {
 func poll_out(p poller, fd int) error {
 	return syscall.EpollCtl(int(p), syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLOUT})
 }
-func poll_del(p poller, fd int) error {
-	return syscall.EpollCtl(int(p), syscall.EPOLL_CTL_DEL, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN | syscall.EPOLLOUT})
+func poll_delete_in(p poller, fd int) error {
+	return syscall.EpollCtl(int(p), syscall.EPOLL_CTL_DEL, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN})
+}
+
+func poll_delete_out(p poller, fd int) error {
+	return syscall.EpollCtl(int(p), syscall.EPOLL_CTL_DEL, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLOUT})
 }
 
 func poll_wait(p poller, callback func(fd int)) error {

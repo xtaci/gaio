@@ -64,15 +64,15 @@ func poll_out(p poller, fd int) error {
 	return trigger(p)
 }
 
-func poll_del(p poller, fd int) error {
+func poll_delete_in(p poller, fd int) error {
 	p.changes = append(p.changes,
-		syscall.Kevent_t{
-			Ident: uint64(fd), Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_READ,
-		},
-		syscall.Kevent_t{
-			Ident: uint64(fd), Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_WRITE,
-		},
-	)
+		syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_READ})
+	return trigger(p)
+}
+
+func poll_delete_out(p poller, fd int) error {
+	p.changes = append(p.changes,
+		syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_WRITE})
 	return trigger(p)
 }
 

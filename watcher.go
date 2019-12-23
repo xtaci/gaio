@@ -147,7 +147,7 @@ func (w *Watcher) loopRead() {
 			return
 		}
 		result := OpResult{Fd: cb.fd, Buffer: cb.buffer, Size: nr, Err: er}
-		poll_del(w.rfd, fd)
+		poll_delete_in(w.rfd, fd)
 		w.readersLock.Unlock()
 
 		if cb.done != nil {
@@ -173,7 +173,7 @@ func (w *Watcher) loopWrite() {
 		}
 
 		if len(cb.buffer) == cb.size || ew != nil { // done
-			poll_del(w.wfd, fd)
+			poll_delete_out(w.wfd, fd)
 			w.writersLock.Unlock()
 
 			if cb.done != nil {

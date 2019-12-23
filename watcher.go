@@ -99,7 +99,7 @@ func (w *Watcher) StopWatch(fd int) {
 	delete(w.conns, fd)
 }
 
-// Read submits a read requests to Handle
+// Read submits a read requests and notify with done
 func (w *Watcher) Read(fd int, buf []byte, done chan OpResult) error {
 	nr, er := syscall.Read(fd, buf)
 	if er == syscall.EAGAIN {
@@ -116,7 +116,7 @@ func (w *Watcher) Read(fd int, buf []byte, done chan OpResult) error {
 	return nil
 }
 
-// Write submits a write requests to Handle
+// Write submits a write requests and notify with done
 func (w *Watcher) Write(fd int, buf []byte, done chan OpResult) error {
 	nw, ew := syscall.Write(fd, buf)
 	if ew == syscall.EAGAIN {

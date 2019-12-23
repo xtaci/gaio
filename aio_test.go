@@ -1,6 +1,8 @@
 package gaio
 
 import (
+	"bytes"
+	"crypto/rand"
 	"io"
 	"log"
 	"net"
@@ -84,7 +86,7 @@ func echoServer(t testing.TB) net.Listener {
 	return ln
 }
 
-func TestEcho(t *testing.T) {
+func TestEchoTiny(t *testing.T) {
 	ln := echoServer(t)
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -114,8 +116,11 @@ func TestEchoHuge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tx := make([]byte, 1024*1024)
-	rx := make([]byte, len(tx))
+	tx := make([]byte, 100*1024*1024)
+	n, err := io.ReadFull(rand.Reader, tx)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	go func() {
 		n, err := conn.Write(tx)
@@ -125,11 +130,16 @@ func TestEchoHuge(t *testing.T) {
 		t.Log("ping size", n)
 	}()
 
-	n, err := io.ReadFull(conn, rx)
+	rx := make([]byte, len(tx))
+	n, err = io.ReadFull(conn, rx)
 	if err != nil {
 		t.Fatal(err, n)
 	}
 	t.Log("pong size:", n)
+
+	if bytes.Compare(tx, rx) != 0 {
+		t.Fatal("incorrect receiving")
+	}
 	conn.Close()
 }
 

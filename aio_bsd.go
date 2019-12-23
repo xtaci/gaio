@@ -2,21 +2,35 @@
 
 package gaio
 
-import "syscall"
+import (
+	"syscall"
+)
 
-type poller struct {
+type poller *pollerS
+type pollerS struct {
 	fd      int
 	changes []syscall.Kevent_t
 }
 
 func createpoll() (poller, error) {
 	fd, err := syscall.Kqueue()
-	var p poller
 	if err != nil {
-		p.fd = fd
-		return p, nil
+		return nil, err
 	}
-	return p, err
+
+	_, err = syscall.Kevent(fd, []syscall.Kevent_t{{
+		Ident:  0,
+		Filter: syscall.EVFILT_USER,
+		Flags:  syscall.EV_ADD | syscall.EV_CLEAR,
+	}}, nil, nil)
+
+	if err != nil {
+		return nil, err
+	}
+
+	p := new(pollerS)
+	p.fd = fd
+	return p, nil
 }
 
 func closepoll(p poller) error {
@@ -71,7 +85,9 @@ func poll_wait(p poller, callback func(fd int)) error {
 		}
 
 		for i := 0; i < n; i++ {
-			callback(int(events[i].Ident))
+			if events[i].Ident != 0 {
+				callback(int(events[i].Ident))
+			}
 		}
 	}
 }

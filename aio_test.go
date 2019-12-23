@@ -32,30 +32,33 @@ func echoServer(t testing.TB) net.Listener {
 	// ping-pong scheme echo server
 	go func() {
 		for {
-			select {
-			case res := <-chRx:
-				if res.Err != nil {
-					log.Println("read error:", res.Err, res.Size)
-					w.StopWatch(res.Fd)
-					continue
-				}
-
-				if res.Size == 0 {
-					log.Println("client closed")
-					w.StopWatch(res.Fd)
-					continue
-				}
-
-				// write the data, we won't start to read again until write completes.
-				w.Write(res.Fd, res.Buffer[:res.Size:cap(res.Buffer)], chTx)
-			case res := <-chTx:
-				if res.Err != nil {
-					log.Println("write error:", res.Err, res.Size)
-					w.StopWatch(res.Fd)
-				}
-				// write complete, start read again
-				w.Read(res.Fd, res.Buffer[:cap(res.Buffer)], chRx)
+			res := <-chRx
+			if res.Err != nil {
+				log.Println("read error:", res.Err, res.Size)
+				w.StopWatch(res.Fd)
+				continue
 			}
+
+			if res.Size == 0 {
+				log.Println("client closed")
+				w.StopWatch(res.Fd)
+				continue
+			}
+
+			// write the data, we won't start to read again until write completes.
+			w.Write(res.Fd, res.Buffer[:res.Size:cap(res.Buffer)], chTx)
+		}
+	}()
+
+	go func() {
+		for {
+			res := <-chTx
+			if res.Err != nil {
+				log.Println("write error:", res.Err, res.Size)
+				w.StopWatch(res.Fd)
+			}
+			// write complete, start read again
+			w.Read(res.Fd, res.Buffer[:cap(res.Buffer)], chRx)
 		}
 	}()
 

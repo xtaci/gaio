@@ -35,110 +35,44 @@ type nioResult struct {
 
 // Watcher will monitor & process Request(s)
 type Watcher struct {
-	rfd poller // epollin & epollout
-	wfd poller
+	pfd *poller // poll fd
 
-	// handlers for a fd(s)
-	readers map[int]aiocb
-	writers map[int]aiocb
+	chReadableNotify chan int
+	chWritableNotify chan int
+	chReaders        chan aiocb
+	chWriters        chan aiocb
 
-	readersLock sync.Mutex
-	writersLock sync.Mutex
-
+	die chan struct{}
 	// hold net.Conn to prevent from GC
 	conns     map[int]net.Conn
 	connsLock sync.Mutex
-
-	// immediate response
-	nioResults chan nioResult
 }
 
 // CreateWatcher creates a management object for monitoring events of net.Conn
 func CreateWatcher() (*Watcher, error) {
 	w := new(Watcher)
-	rfd, err := createpoll()
+	pfd, err := OpenPoll()
 	if err != nil {
 		return nil, err
 	}
-	w.rfd = rfd
+	w.pfd = pfd
 
-	wfd, err := createpoll()
-	if err != nil {
-		return nil, err
-	}
-	w.wfd = wfd
-
-	w.readers = make(map[int]aiocb)
-	w.writers = make(map[int]aiocb)
+	w.chReadableNotify = make(chan int)
+	w.chWritableNotify = make(chan int)
+	w.chReaders = make(chan aiocb)
+	w.chWriters = make(chan aiocb)
 	w.conns = make(map[int]net.Conn)
-	w.nioResults = make(chan nioResult)
+	w.die = make(chan struct{})
 
-	go w.loopRead()
-	go w.loopWrite()
-	go w.loopResult()
+	go w.pfd.Wait(w.chReadableNotify, w.chWritableNotify)
+	go w.loop()
 	return w, nil
 }
 
 // Close stops monitoring on events for all connections
 func (w *Watcher) Close() error {
-	er := closepoll(w.rfd)
-	ew := closepoll(w.wfd)
-	if er != nil {
-		return er
-	}
-	if ew != nil {
-		return ew
-	}
-	return nil
-}
-
-// StopWatch dereferences net.Conn related to this fd
-func (w *Watcher) StopWatch(fd int) {
-	w.connsLock.Lock()
-	defer w.connsLock.Unlock()
-	delete(w.conns, fd)
-}
-
-// Read submits a read requests and notify with done
-func (w *Watcher) Read(fd int, buf []byte, done chan OpResult) error {
-	nr, er := syscall.Read(fd, buf)
-	if er == syscall.EAGAIN {
-		cb := aiocb{fd: fd, buffer: buf, done: done}
-		w.readersLock.Lock()
-		w.readers[fd] = cb
-		w.readersLock.Unlock()
-		return poll_in(w.rfd, fd)
-	}
-
-	if done != nil {
-		w.nioResults <- nioResult{res: OpResult{Fd: fd, Buffer: buf, Size: nr, Err: er}, done: done}
-	}
-	return nil
-}
-
-// Write submits a write requests and notify with done
-func (w *Watcher) Write(fd int, buf []byte, done chan OpResult) error {
-	nw, ew := syscall.Write(fd, buf)
-	if ew == syscall.EAGAIN {
-		cb := aiocb{fd: fd, buffer: buf, done: done}
-		w.writersLock.Lock()
-		w.writers[fd] = cb
-		w.writersLock.Unlock()
-		return poll_out(w.wfd, fd)
-	}
-
-	// complete or error
-	if nw == len(buf) || ew != nil {
-		w.nioResults <- nioResult{res: OpResult{Fd: fd, Buffer: buf, Size: nw, Err: ew}, done: done}
-		return nil
-	}
-
-	// poll the rest
-	cb := aiocb{fd: fd, buffer: buf, size: nw, done: done}
-	w.writersLock.Lock()
-	w.writers[fd] = cb
-	w.writersLock.Unlock()
-	return poll_out(w.wfd, fd)
+	close(w.die)
+	return w.pfd.Close()
 }
 
 // Watch starts watching events on connection `conn`
@@ -165,69 +99,93 @@ func (w *Watcher) Watch(conn net.Conn) (fd int, err error) {
 	if operr != nil {
 		return 0, operr
 	}
-
+	w.pfd.Watch(fd)
 	w.connsLock.Lock()
 	w.conns[fd] = conn
 	w.connsLock.Unlock()
 	return fd, nil
 }
 
-func (w *Watcher) loopRead() {
-	callback := func(fd int) {
-		w.readersLock.Lock()
-		cb := w.readers[fd]
-		nr, er := syscall.Read(int(fd), cb.buffer[:])
-		if er == syscall.EAGAIN {
-			w.readersLock.Unlock()
-			return
-		}
-		result := OpResult{Fd: cb.fd, Buffer: cb.buffer, Size: nr, Err: er}
-		poll_delete_in(w.rfd, fd)
-		w.readersLock.Unlock()
-
-		if cb.done != nil {
-			cb.done <- result
-		}
-	}
-
-	poll_wait(w.rfd, callback)
+// StopWatch dereferences net.Conn related to this fd
+func (w *Watcher) StopWatch(fd int) {
+	w.pfd.Unwatch(fd)
+	w.connsLock.Lock()
+	defer w.connsLock.Unlock()
+	delete(w.conns, fd)
 }
 
-func (w *Watcher) loopWrite() {
-	callback := func(fd int) {
-		w.writersLock.Lock()
-		cb := w.writers[fd]
-		nw, ew := syscall.Write(fd, cb.buffer[cb.size:])
-		if ew == syscall.EAGAIN {
-			w.writersLock.Unlock()
-			return
-		}
-
-		if ew == nil {
-			cb.size += nw
-		}
-
-		if len(cb.buffer) == cb.size || ew != nil { // done
-			poll_delete_out(w.wfd, fd)
-			w.writersLock.Unlock()
-
-			if cb.done != nil {
-				cb.done <- OpResult{Fd: cb.fd, Buffer: cb.buffer, Size: cb.size, Err: ew}
-			}
-		} else {
-			w.writers[fd] = cb
-			w.writersLock.Unlock()
-		}
-	}
-
-	poll_wait(w.wfd, callback)
+// Read submits a read requests and notify with done
+func (w *Watcher) Read(fd int, buf []byte, done chan OpResult) error {
+	w.chReaders <- aiocb{fd: fd, buffer: buf, done: done}
+	return nil
 }
 
-func (w *Watcher) loopResult() {
+// Write submits a write requests and notify with done
+func (w *Watcher) Write(fd int, buf []byte, done chan OpResult) error {
+	w.chWriters <- aiocb{fd: fd, buffer: buf, done: done}
+	return nil
+}
+
+func (w *Watcher) loop() {
+	pendingReaders := make(map[int]aiocb)
+	pendingWriters := make(map[int]aiocb)
+
 	for {
 		select {
-		case nio := <-w.nioResults:
-			nio.done <- nio.res
+		case cb := <-w.chReaders:
+			nr, er := syscall.Read(cb.fd, cb.buffer)
+			if er == syscall.EAGAIN {
+				pendingReaders[cb.fd] = cb
+				continue
+			}
+			cb.done <- OpResult{Fd: cb.fd, Buffer: cb.buffer, Size: nr, Err: er}
+		case cb := <-w.chWriters:
+			nw, ew := syscall.Write(cb.fd, cb.buffer)
+			if ew == syscall.EAGAIN {
+				pendingWriters[cb.fd] = cb
+				continue
+			}
+
+			if nw == len(cb.buffer) || ew != nil {
+				cb.done <- OpResult{Fd: cb.fd, Buffer: cb.buffer, Size: nw, Err: ew}
+				continue
+			}
+
+			// unsent buffer
+			cb.size = nw
+			pendingWriters[cb.fd] = cb
+		case fd := <-w.chReadableNotify:
+			//log.Println(fd, "readn")
+			cb, ok := pendingReaders[fd]
+			if ok {
+				nr, er := syscall.Read(cb.fd, cb.buffer)
+				if er == syscall.EAGAIN {
+					continue
+				}
+				delete(pendingReaders, fd)
+				cb.done <- OpResult{Fd: fd, Buffer: cb.buffer, Size: nr, Err: er}
+			}
+		case fd := <-w.chWritableNotify:
+			//log.Println(fd, "writen")
+			cb, ok := pendingWriters[fd]
+			if ok {
+				nw, ew := syscall.Write(cb.fd, cb.buffer[cb.size:])
+				if ew == syscall.EAGAIN {
+					continue
+				}
+
+				if ew == nil {
+					cb.size += nw
+				}
+
+				// return if write complete or error
+				if cb.size == len(cb.buffer) || ew != nil {
+					delete(pendingWriters, cb.fd)
+					cb.done <- OpResult{Fd: fd, Buffer: cb.buffer, Size: cb.size, Err: ew}
+					continue
+				}
+				pendingWriters[fd] = cb
+			}
 		}
 	}
 }

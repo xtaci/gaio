@@ -2,65 +2,61 @@
 
 package gaio
 
-import (
-	"syscall"
-)
+import "golang.org/x/sys/unix"
 
-type poller *pollerS
-type pollerS struct {
+type poller struct {
 	pfd    int // epoll fd
 	wakefd int
 }
 
-func createpoll() (poller, error) {
-	fd, err := syscall.EpollCreate1(0)
+func OpenPoll() (*poller, error) {
+	fd, err := unix.EpollCreate1(0)
 	if err != nil {
 		return nil, err
 	}
-	r0, _, e0 := syscall.Syscall(syscall.SYS_EVENTFD2, 0, 0, 0)
+	r0, _, e0 := unix.Syscall(unix.SYS_EVENTFD2, 0, 0, 0)
 	if e0 != 0 {
-		syscall.Close(fd)
+		unix.Close(fd)
 		return nil, e0
 	}
-	p := new(pollerS)
+	p := new(poller)
 	p.pfd = fd
 	p.wakefd = int(r0)
 
 	return p, err
 }
 
-func closepoll(p poller) error {
-	if err := syscall.Close(p.wakefd); err != nil {
+func (p *poller) Close() error {
+	if err := unix.Close(p.wakefd); err != nil {
 		return err
 	}
-	return syscall.Close(p.pfd)
+	return unix.Close(p.pfd)
 }
 
-func poll_in(p poller, fd int) error {
-	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, fd, &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN})
+func (p *poller) Watch(fd int) error {
+	return unix.EpollCtl(p.pfd, unix.EPOLL_CTL_ADD, fd, &unix.EpollEvent{Fd: int32(fd), Events: unix.EPOLLIN | unix.EPOLLOUT | unix.EPOLLET})
 }
 
-func poll_out(p poller, fd int) error {
-	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, fd, &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLOUT})
-}
-func poll_delete_in(p poller, fd int) error {
-	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_DEL, fd, &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN})
+func (p *poller) Unwatch(fd int) error {
+	return unix.EpollCtl(p.pfd, unix.EPOLL_CTL_DEL, fd, &unix.EpollEvent{Fd: int32(fd), Events: unix.EPOLLIN | unix.EPOLLOUT})
 }
 
-func poll_delete_out(p poller, fd int) error {
-	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_DEL, fd, &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLOUT})
-}
-
-func poll_wait(p poller, callback func(fd int)) error {
-	events := make([]syscall.EpollEvent, 64)
+func (p *poller) Wait(chReadableNotify chan int, chWriteableNotify chan int) error {
+	events := make([]unix.EpollEvent, 64)
 	for {
-		n, err := syscall.EpollWait(p.pfd, events, -1)
-		if err != nil && err != syscall.EINTR {
+		n, err := unix.EpollWait(p.pfd, events, -1)
+		if err != nil && err != unix.EINTR {
 			return err
 		}
 
 		for i := 0; i < n; i++ {
-			callback(int(events[i].Fd))
+			if events[i].Events&unix.EPOLLIN > 0 {
+				chReadableNotify <- int(events[i].Fd)
+
+			}
+			if events[i].Events&unix.EPOLLOUT > 0 {
+				chWriteableNotify <- int(events[i].Fd)
+			}
 		}
 	}
 }

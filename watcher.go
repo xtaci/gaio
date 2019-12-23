@@ -27,6 +27,12 @@ type OpResult struct {
 	Err    error
 }
 
+//  nioResult
+type nioResult struct {
+	done chan OpResult
+	res  OpResult
+}
+
 // Watcher will monitor & process Request(s)
 type Watcher struct {
 	rfd poller // epollin & epollout
@@ -42,6 +48,9 @@ type Watcher struct {
 	// hold net.Conn to prevent from GC
 	conns     map[int]net.Conn
 	connsLock sync.Mutex
+
+	// immediate response
+	nioResults chan nioResult
 }
 
 // CreateWatcher creates a management object for monitoring events of net.Conn
@@ -62,9 +71,11 @@ func CreateWatcher() (*Watcher, error) {
 	w.readers = make(map[int]aiocb)
 	w.writers = make(map[int]aiocb)
 	w.conns = make(map[int]net.Conn)
+	w.nioResults = make(chan nioResult)
 
 	go w.loopRead()
 	go w.loopWrite()
+	go w.loopResult()
 	return w, nil
 }
 
@@ -90,16 +101,40 @@ func (w *Watcher) StopWatch(fd int) {
 
 // Read submits a read requests to Handle
 func (w *Watcher) Read(fd int, buf []byte, done chan OpResult) error {
-	cb := aiocb{fd: fd, buffer: buf, done: done}
-	w.readersLock.Lock()
-	w.readers[fd] = cb
-	w.readersLock.Unlock()
-	return poll_in(w.rfd, fd)
+	nr, er := syscall.Read(fd, buf)
+	if er == syscall.EAGAIN {
+		cb := aiocb{fd: fd, buffer: buf, done: done}
+		w.readersLock.Lock()
+		w.readers[fd] = cb
+		w.readersLock.Unlock()
+		return poll_in(w.rfd, fd)
+	}
+
+	if done != nil {
+		w.nioResults <- nioResult{res: OpResult{Fd: fd, Buffer: buf, Size: nr, Err: er}, done: done}
+	}
+	return nil
 }
 
 // Write submits a write requests to Handle
 func (w *Watcher) Write(fd int, buf []byte, done chan OpResult) error {
-	cb := aiocb{fd: fd, buffer: buf, done: done}
+	nw, ew := syscall.Write(fd, buf)
+	if ew == syscall.EAGAIN {
+		cb := aiocb{fd: fd, buffer: buf, done: done}
+		w.writersLock.Lock()
+		w.writers[fd] = cb
+		w.writersLock.Unlock()
+		return poll_out(w.wfd, fd)
+	}
+
+	// complete or error
+	if nw == len(buf) || ew != nil {
+		w.nioResults <- nioResult{res: OpResult{Fd: fd, Buffer: buf, Size: nw, Err: ew}, done: done}
+		return nil
+	}
+
+	// poll the rest
+	cb := aiocb{fd: fd, buffer: buf, size: nw, done: done}
 	w.writersLock.Lock()
 	w.writers[fd] = cb
 	w.writersLock.Unlock()
@@ -162,7 +197,7 @@ func (w *Watcher) loopWrite() {
 	callback := func(fd int) {
 		w.writersLock.Lock()
 		cb := w.writers[fd]
-		nw, ew := syscall.Write(fd, cb.buffer)
+		nw, ew := syscall.Write(fd, cb.buffer[cb.size:])
 		if ew == syscall.EAGAIN {
 			w.writersLock.Unlock()
 			return
@@ -186,4 +221,13 @@ func (w *Watcher) loopWrite() {
 	}
 
 	poll_wait(w.wfd, callback)
+}
+
+func (w *Watcher) loopResult() {
+	for {
+		select {
+		case nio := <-w.nioResults:
+			nio.done <- nio.res
+		}
+	}
 }

@@ -114,6 +114,7 @@ func (w *Watcher) Watch(conn net.Conn) (fd int, err error) {
 	return fd, nil
 }
 
+// StopWatch dereferences net.Conn related to this fd
 func (w *Watcher) StopWatch(fd int) {
 	w.connsLock.Lock()
 	defer w.connsLock.Unlock()

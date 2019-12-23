@@ -35,23 +35,35 @@ func echoServer(t testing.TB) net.Listener {
 		for {
 			select {
 			case res := <-chRx:
-				if res.Size > 0 {
-					// per connection write buffer
-					tx := make([]byte, res.Size)
-					//log.Println("read:", atomic.AddInt32(&n, int32(res.Size)))
-					copy(tx, rx[:res.Size])
-					if res.Err == nil {
-						w.Write(res.Fd, tx[:res.Size], chTx)
-					} else {
-						log.Println(res.Err)
-					}
-				} else if res.Size == 0 && res.Err == nil {
+				if res.Err != nil {
+					log.Println("read error")
+					w.StopWatch(res.Fd)
+					continue
+				}
+
+				if res.Size == 0 {
 					log.Println("client closed")
+					w.StopWatch(res.Fd)
+					continue
 				}
+
+				// per connection write buffer
+				tx := make([]byte, res.Size)
+				//log.Println("read:", atomic.AddInt32(&n, int32(res.Size)))
+				copy(tx, rx[:res.Size])
+				w.Write(res.Fd, tx[:res.Size], chTx)
+
 			case res := <-chTx:
-				if res.Size > 0 {
-					//log.Println("write:", atomic.AddInt32(&m, int32(res.Size)))
+				if res.Err != nil {
+					log.Println("write error:", res.Err)
+					w.StopWatch(res.Fd)
 				}
+				/*
+					if res.Size > 0 {
+						log.Println("write:", atomic.AddInt32(&m, int32(res.Size)))
+					}
+				*/
+				// start read again
 				w.Read(res.Fd, rx, chRx)
 			}
 		}

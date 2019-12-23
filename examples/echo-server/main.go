@@ -20,9 +20,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// because read event happens in sequence,
-	// only 1 global read buffer is required for a watcher.
-	rx := make([]byte, 1024)
+	// since read event happens in sequence, so we only
+	// need to make ONE read buffer for a watcher.
+	rxBuf := make([]byte, 1024)
 	chRx := make(chan gaio.OpResult)
 	go func() {
 		chTx := make(chan gaio.OpResult)
@@ -43,12 +43,13 @@ func main() {
 					continue
 				}
 
-				// make a per connection write buffer and echo
-				tx := make([]byte, res.Size)
-				copy(tx, rx)
-				// echo the data, we won't start read again
-				// until write completes.
-				w.Write(res.Fd, tx, chTx)
+				// write events in a watcher also happens in sequence,
+				// make a write buffer for this connection and echo,
+				// only one txBuf exists at one time for a connection
+				txBuf := make([]byte, res.Size)
+				copy(txBuf, rxBuf)
+				// write the data, we won't start to read again until write completes.
+				w.Write(res.Fd, txBuf, chTx)
 			case res := <-chTx:
 				// handle unexpected write error
 				if res.Err != nil {
@@ -57,7 +58,7 @@ func main() {
 					continue
 				}
 				// write complete, start read again
-				w.Read(res.Fd, rx, chRx)
+				w.Read(res.Fd, rxBuf, chRx)
 			}
 		}
 	}()
@@ -78,7 +79,7 @@ func main() {
 		log.Println("new client", conn.RemoteAddr())
 
 		// kick off the first read action on this conn
-		err = w.Read(fd, rx, chRx)
+		err = w.Read(fd, rxBuf, chRx)
 		if err != nil {
 			log.Println(err)
 			return

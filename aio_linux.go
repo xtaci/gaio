@@ -5,8 +5,7 @@ package gaio
 import "golang.org/x/sys/unix"
 
 type poller struct {
-	pfd    int // epoll fd
-	wakefd int
+	pfd int // epoll fd
 }
 
 func OpenPoll() (*poller, error) {
@@ -14,24 +13,13 @@ func OpenPoll() (*poller, error) {
 	if err != nil {
 		return nil, err
 	}
-	r0, _, e0 := unix.Syscall(unix.SYS_EVENTFD2, 0, 0, 0)
-	if e0 != 0 {
-		unix.Close(fd)
-		return nil, e0
-	}
 	p := new(poller)
 	p.pfd = fd
-	p.wakefd = int(r0)
 
 	return p, err
 }
 
-func (p *poller) Close() error {
-	if err := unix.Close(p.wakefd); err != nil {
-		return err
-	}
-	return unix.Close(p.pfd)
-}
+func (p *poller) Close() error { return unix.Close(p.pfd) }
 
 func (p *poller) Watch(fd int) error {
 	return unix.EpollCtl(p.pfd, unix.EPOLL_CTL_ADD, fd, &unix.EpollEvent{Fd: int32(fd), Events: unix.EPOLLIN | unix.EPOLLOUT | unix.EPOLLET})

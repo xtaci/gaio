@@ -50,8 +50,8 @@ func echoServer(t testing.TB) net.Listener {
 				// per connection write buffer
 				tx := make([]byte, res.Size)
 				//log.Println("read:", atomic.AddInt32(&n, int32(res.Size)))
-				copy(tx, rx[:res.Size])
-				w.Write(res.Fd, tx[:res.Size], chTx)
+				copy(tx, rx)
+				w.Write(res.Fd, tx, chTx)
 
 			case res := <-chTx:
 				if res.Err != nil {

@@ -29,18 +29,33 @@ func main() {
 		for {
 			select {
 			case res := <-chRx:
-				if res.Size > 0 {
-					// make a write buffer and echo
-					tx := make([]byte, res.Size)
-					copy(tx, rx)
-					// echo the data, we won't start read again
-					// until write completes.
-					w.Write(res.Fd, tx, chTx)
-				} else if res.Size == 0 && res.Err == nil {
-					log.Println("client closed")
+				// handle unexpected read error
+				if res.Err != nil {
+					log.Println("read error")
+					w.StopWatch(res.Fd)
+					continue
 				}
 
+				// handle connection close
+				if res.Size == 0 {
+					log.Println("client closed")
+					w.StopWatch(res.Fd)
+					continue
+				}
+
+				// make a per connection write buffer and echo
+				tx := make([]byte, res.Size)
+				copy(tx, rx)
+				// echo the data, we won't start read again
+				// until write completes.
+				w.Write(res.Fd, tx, chTx)
 			case res := <-chTx:
+				// handle unexpected write error
+				if res.Err != nil {
+					log.Println("write error")
+					w.StopWatch(res.Fd)
+					continue
+				}
 				// write complete, start read again
 				w.Read(res.Fd, rx, chRx)
 			}

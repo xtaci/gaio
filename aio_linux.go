@@ -40,6 +40,10 @@ type Watcher struct {
 
 	readersLock sync.Mutex
 	writersLock sync.Mutex
+
+	// hold net.Conn to prevent from GC
+	conns     map[int]net.Conn
+	connsLock sync.Mutex
 }
 
 // CreateWatcher creates a management object for monitoring events of net.Conn
@@ -59,6 +63,7 @@ func CreateWatcher() (*Watcher, error) {
 
 	w.readers = make(map[int]aiocb)
 	w.writers = make(map[int]aiocb)
+	w.conns = make(map[int]net.Conn)
 
 	go w.loopRx()
 	go w.loopTx()
@@ -103,7 +108,16 @@ func (w *Watcher) Watch(conn net.Conn) (fd int, err error) {
 		return 0, operr
 	}
 
+	w.connsLock.Lock()
+	w.conns[fd] = conn
+	w.connsLock.Unlock()
 	return fd, nil
+}
+
+func (w *Watcher) StopWatch(fd int) {
+	w.connsLock.Lock()
+	defer w.connsLock.Unlock()
+	delete(w.conns, fd)
 }
 
 // Read submits a read requests to Handle

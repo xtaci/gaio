@@ -31,19 +31,23 @@ func echoServer(t testing.TB) net.Listener {
 		//var n int32
 		//var m int32
 		// ping-pong scheme echo server
-		tx := make([]byte, 1024)
 		chTx := make(chan OpResult)
 		for {
 			select {
 			case res := <-chRx:
 				if res.Size > 0 {
+					// per connection write buffer
+					tx := make([]byte, res.Size)
 					//log.Println("read:", atomic.AddInt32(&n, int32(res.Size)))
 					copy(tx, rx[:res.Size])
-					w.Write(res.Fd, tx[:res.Size], chTx)
+					if res.Err == nil {
+						w.Write(res.Fd, tx[:res.Size], chTx)
+					} else {
+						log.Println(res.Err)
+					}
 				} else if res.Size == 0 && res.Err == nil {
 					log.Println("client closed")
 				}
-
 			case res := <-chTx:
 				if res.Size > 0 {
 					//log.Println("write:", atomic.AddInt32(&m, int32(res.Size)))
@@ -123,7 +127,7 @@ func TestEchoHuge(t *testing.T) {
 
 	n, err := io.ReadFull(conn, rx)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal(err, n)
 	}
 	t.Log("pong size:", n)
 	conn.Close()

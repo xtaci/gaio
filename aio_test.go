@@ -31,28 +31,37 @@ func echoServer(t testing.TB) net.Listener {
 	chTx := make(chan OpResult)
 	// ping-pong scheme echo server
 	go func() {
+		wbuffers := make(map[int][]byte)
 		for {
 			select {
 			case res := <-chRx:
 				if res.Err != nil {
 					log.Println("read error:", res.Err, res.Size)
+					delete(wbuffers, res.Fd)
 					w.StopWatch(res.Fd)
 					continue
 				}
 
 				if res.Size == 0 {
 					log.Println("client closed")
+					delete(wbuffers, res.Fd)
 					w.StopWatch(res.Fd)
 					continue
 				}
 
 				// write the data, we won't start to read again until write completes.
-				buf := make([]byte, res.Size)
+				// so we only need at most 1 write buffer for a connection
+				buf, ok := wbuffers[res.Fd]
+				if !ok {
+					buf = make([]byte, 4096)
+					wbuffers[res.Fd] = buf
+				}
 				copy(buf, res.Buffer[:res.Size])
-				w.Write(res.Fd, buf, chTx)
+				w.Write(res.Fd, buf[:res.Size], chTx)
 			case res := <-chTx:
 				if res.Err != nil {
 					log.Println("write error:", res.Err, res.Size)
+					delete(wbuffers, res.Fd)
 					w.StopWatch(res.Fd)
 				}
 				// write complete, start read again

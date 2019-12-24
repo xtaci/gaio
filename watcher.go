@@ -10,6 +10,7 @@ import (
 var (
 	ErrNoRawConn     = errors.New("net.Conn does implement net.RawConn")
 	ErrWatcherClosed = errors.New("watcher closed")
+	ErrBufferedChan  = errors.New("cannot use bufferd chan to notify")
 )
 
 // aiocb contains all info for a request
@@ -134,8 +135,11 @@ func (w *Watcher) StopWatch(fd int) {
 	}
 }
 
-// Read submits a read requests and notify with done
+// Read submits a read requests and notify with done, cap(done) must 0
 func (w *Watcher) Read(fd int, done chan OpResult) error {
+	if cap(done) != 0 {
+		return ErrBufferedChan
+	}
 	select {
 	case w.chReaders <- aiocb{fd: fd, done: done}:
 		return nil
@@ -146,6 +150,15 @@ func (w *Watcher) Read(fd int, done chan OpResult) error {
 
 // Write submits a write requests and notify with done
 func (w *Watcher) Write(fd int, buf []byte, done chan OpResult) error {
+	// do nothing
+	if len(buf) == 0 {
+		return nil
+	}
+
+	if cap(done) != 0 {
+		return ErrBufferedChan
+	}
+
 	select {
 	case w.chWriters <- aiocb{fd: fd, buffer: buf, done: done}:
 		return nil

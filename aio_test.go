@@ -88,7 +88,7 @@ func echoServer(t testing.TB) net.Listener {
 				return
 			}
 
-			log.Println("watching", conn.RemoteAddr(), "fd:", fd)
+			//log.Println("watching", conn.RemoteAddr(), "fd:", fd)
 
 			// kick off
 			err = w.Read(fd, chRx)

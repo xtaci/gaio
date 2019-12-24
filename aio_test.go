@@ -47,7 +47,7 @@ func echoServer(t testing.TB) net.Listener {
 				}
 
 				// write the data, we won't start to read again until write completes.
-				buf := make([]byte, len(res.Buffer))
+				buf := make([]byte, res.Size)
 				copy(buf, res.Buffer[:res.Size])
 				w.Write(res.Fd, buf, chTx)
 			case res := <-chTx:

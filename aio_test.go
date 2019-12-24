@@ -149,8 +149,13 @@ func BenchmarkEcho(b *testing.B) {
 	ln := echoServer(b)
 
 	addr, _ := net.ResolveTCPAddr("tcp", ln.Addr().String())
-	tx := []byte("hello world")
-	rx := make([]byte, len(tx))
+	tx := make([]byte, 1024*1024)
+	_, err := io.ReadFull(rand.Reader, tx)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	rx := make([]byte, 65536)
 
 	conn, err := net.DialTCP("tcp", nil, addr)
 	if err != nil {
@@ -158,18 +163,30 @@ func BenchmarkEcho(b *testing.B) {
 		return
 	}
 
-	b.ResetTimer()
+	b.Log("sending", len(tx), "bytes for", b.N, "times")
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		_, err := conn.Write(tx)
+	b.SetBytes(int64(len(tx)))
+	b.ResetTimer()
+	go func() {
+		for i := 0; i < b.N; i++ {
+			_, err := conn.Write(tx)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	}()
+
+	count := 0
+	for {
+		n, err := conn.Read(rx)
 		if err != nil {
 			b.Fatal(err)
 		}
-		_, err = conn.Read(rx)
-		if err != nil {
-			b.Fatal(err)
+		count += n
+		if count == len(tx)*b.N {
+			break
 		}
-		//		log.Println(i, b.N)
 	}
+	//		log.Println(i, b.N)
 	conn.Close()
 }

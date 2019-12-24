@@ -8,7 +8,7 @@ type poller struct {
 	pfd int // epoll fd
 }
 
-func OpenPoll() (*poller, error) {
+func openPoll() (*poller, error) {
 	fd, err := unix.EpollCreate1(0)
 	if err != nil {
 		return nil, err

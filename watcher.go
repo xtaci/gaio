@@ -48,7 +48,7 @@ type Watcher struct {
 // CreateWatcher creates a management object for monitoring events of net.Conn
 func CreateWatcher() (*Watcher, error) {
 	w := new(Watcher)
-	pfd, err := OpenPoll()
+	pfd, err := openPoll()
 	if err != nil {
 		return nil, err
 	}

@@ -11,7 +11,7 @@ type poller struct {
 	changes []syscall.Kevent_t
 }
 
-func OpenPoll() (*poller, error) {
+func openPoll() (*poller, error) {
 	fd, err := syscall.Kqueue()
 	if err != nil {
 		return nil, err

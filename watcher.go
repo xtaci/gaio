@@ -8,7 +8,8 @@ import (
 )
 
 var (
-	errRawConn = errors.New("net.Conn does implement net.RawConn")
+	ErrNoRawConn     = errors.New("net.Conn does implement net.RawConn")
+	ErrWatcherClosed = errors.New("watcher closed")
 )
 
 // aiocb contains all info for a request
@@ -27,13 +28,7 @@ type OpResult struct {
 	Err    error
 }
 
-//  nioResult
-type nioResult struct {
-	done chan OpResult
-	res  OpResult
-}
-
-// Watcher will monitor & process Request(s)
+// Watcher will monitor events and process Request(s)
 type Watcher struct {
 	pfd *poller // poll fd
 
@@ -42,7 +37,9 @@ type Watcher struct {
 	chReaders        chan aiocb
 	chWriters        chan aiocb
 
-	die chan struct{}
+	die     chan struct{}
+	dieOnce sync.Once
+
 	// hold net.Conn to prevent from GC
 	conns     map[int]net.Conn
 	connsLock sync.Mutex
@@ -71,7 +68,9 @@ func CreateWatcher() (*Watcher, error) {
 
 // Close stops monitoring on events for all connections
 func (w *Watcher) Close() error {
-	close(w.die)
+	w.dieOnce.Do(func() {
+		close(w.die)
+	})
 	return w.pfd.Close()
 }
 
@@ -82,7 +81,7 @@ func (w *Watcher) Watch(conn net.Conn) (fd int, err error) {
 	})
 
 	if !ok {
-		return 0, errRawConn
+		return 0, ErrNoRawConn
 	}
 
 	rawconn, err := c.SyscallConn()
@@ -99,14 +98,18 @@ func (w *Watcher) Watch(conn net.Conn) (fd int, err error) {
 	if operr != nil {
 		return 0, operr
 	}
+
+	// poll this fd
 	w.pfd.Watch(fd)
+
+	// prevent GC net.Conn
 	w.connsLock.Lock()
 	w.conns[fd] = conn
 	w.connsLock.Unlock()
 	return fd, nil
 }
 
-// StopWatch dereferences net.Conn related to this fd
+// StopWatch events related to this fd
 func (w *Watcher) StopWatch(fd int) {
 	w.pfd.Unwatch(fd)
 	w.connsLock.Lock()
@@ -116,14 +119,22 @@ func (w *Watcher) StopWatch(fd int) {
 
 // Read submits a read requests and notify with done
 func (w *Watcher) Read(fd int, buf []byte, done chan OpResult) error {
-	w.chReaders <- aiocb{fd: fd, buffer: buf, done: done}
-	return nil
+	select {
+	case w.chReaders <- aiocb{fd: fd, buffer: buf, done: done}:
+		return nil
+	case <-w.die:
+		return ErrWatcherClosed
+	}
 }
 
 // Write submits a write requests and notify with done
 func (w *Watcher) Write(fd int, buf []byte, done chan OpResult) error {
-	w.chWriters <- aiocb{fd: fd, buffer: buf, done: done}
-	return nil
+	select {
+	case w.chWriters <- aiocb{fd: fd, buffer: buf, done: done}:
+		return nil
+	case <-w.die:
+		return ErrWatcherClosed
+	}
 }
 
 func (w *Watcher) loop() {

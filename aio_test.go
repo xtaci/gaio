@@ -158,6 +158,82 @@ func TestEchoHuge(t *testing.T) {
 	conn.Close()
 }
 
+func TestBufferedDone(t *testing.T) {
+	ln := echoServer(t)
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w, err := CreateWatcher(bufSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fd, err := w.Watch(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = w.Read(fd, make(chan OpResult, 1))
+	if err != ErrBufferedChan {
+		t.Fatal("misbehavior")
+	}
+	conn.Close()
+}
+
+func TestBidirectionWatcher(t *testing.T) {
+	ln := echoServer(t)
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w, err := CreateWatcher(bufSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fd, err := w.Watch(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx := []byte("hello world")
+	doneR := make(chan OpResult)
+	doneW := make(chan OpResult)
+	die := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case res := <-doneW:
+				// recv
+				if res.Err != nil {
+					t.Fatal(res.Err)
+				}
+
+				t.Log("written:", res.Err, res.Size)
+				err = w.Read(fd, doneR)
+				if err != nil {
+					t.Fatal(err)
+				}
+			case res := <-doneR:
+				t.Log("read:", res.Err, res.Size)
+				close(die)
+				return
+			}
+		}
+	}()
+
+	// send
+	err = w.Write(fd, tx, doneW)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-die
+	conn.Close()
+}
+
 func BenchmarkEcho(b *testing.B) {
 	ln := echoServer(b)
 

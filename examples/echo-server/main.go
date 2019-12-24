@@ -15,7 +15,7 @@ func main() {
 
 	log.Println("echo server listening on", ln.Addr())
 
-	w, err := gaio.CreateWatcher()
+	w, err := gaio.CreateWatcher(4096)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -42,7 +42,9 @@ func main() {
 				}
 
 				// write the data, we won't start to read again until write completes.
-				w.Write(res.Fd, res.Buffer[:res.Size:cap(res.Buffer)], chTx)
+				buf := make([]byte, len(res.Buffer))
+				copy(buf, res.Buffer[:res.Size])
+				w.Write(res.Fd, buf, chTx)
 			case res := <-chTx:
 				// handle unexpected write error
 				if res.Err != nil {
@@ -51,7 +53,7 @@ func main() {
 					continue
 				}
 				// write complete, start read again
-				w.Read(res.Fd, res.Buffer[:cap(res.Buffer)], chRx)
+				w.Read(res.Fd, chRx)
 			}
 		}
 	}()
@@ -72,7 +74,7 @@ func main() {
 		log.Println("new client", conn.RemoteAddr())
 
 		// kick off the first read action on this conn
-		err = w.Read(fd, make([]byte, 1024), chRx)
+		err = w.Read(fd, chRx)
 		if err != nil {
 			log.Println(err)
 			return

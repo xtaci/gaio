@@ -40,7 +40,7 @@ type Watcher struct {
 	chWriters         chan aiocb
 
 	// internal buffer for reading
-	buffer []byte
+	swapbuffer chan []byte
 
 	die     chan struct{}
 	dieOnce sync.Once
@@ -51,7 +51,7 @@ type Watcher struct {
 }
 
 // CreateWatcher creates a management object for monitoring events of net.Conn
-func CreateWatcher() (*Watcher, error) {
+func CreateWatcher(bufsize int) (*Watcher, error) {
 	w := new(Watcher)
 	pfd, err := openPoll()
 	if err != nil {
@@ -59,7 +59,10 @@ func CreateWatcher() (*Watcher, error) {
 	}
 	w.pfd = pfd
 
-	w.buffer = make([]byte, 4096)
+	w.swapbuffer = make(chan []byte, 2)
+	for i := 0; i < cap(w.swapbuffer); i++ {
+		w.swapbuffer <- make([]byte, bufsize)
+	}
 
 	w.chReadableNotify = make(chan int)
 	w.chWritableNotify = make(chan int)
@@ -132,9 +135,9 @@ func (w *Watcher) StopWatch(fd int) {
 }
 
 // Read submits a read requests and notify with done
-func (w *Watcher) Read(fd int, buf []byte, done chan OpResult) error {
+func (w *Watcher) Read(fd int, done chan OpResult) error {
 	select {
-	case w.chReaders <- aiocb{fd: fd, buffer: buf, done: done}:
+	case w.chReaders <- aiocb{fd: fd, done: done}:
 		return nil
 	case <-w.die:
 		return ErrWatcherClosed
@@ -154,17 +157,15 @@ func (w *Watcher) Write(fd int, buf []byte, done chan OpResult) error {
 // tryRead will try to read data on aiocb and notify
 // returns true if io has completed, false means EAGAIN
 func (w *Watcher) tryRead(pcb *aiocb) (complete bool) {
-	size := len(pcb.buffer)
-	if len(w.buffer) < size {
-		size = len(w.buffer)
-	}
-	nr, er := syscall.Read(pcb.fd, w.buffer[:size])
+	buf := <-w.swapbuffer
+	defer func() { w.swapbuffer <- buf }()
+
+	nr, er := syscall.Read(pcb.fd, buf)
 	if er == syscall.EAGAIN {
 		return false
 	}
-	copy(pcb.buffer, w.buffer)
 	if pcb.done != nil {
-		pcb.done <- OpResult{Fd: pcb.fd, Buffer: pcb.buffer, Size: nr, Err: er}
+		pcb.done <- OpResult{Fd: pcb.fd, Buffer: buf, Size: nr, Err: er}
 	}
 	return true
 }

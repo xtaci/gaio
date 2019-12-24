@@ -69,7 +69,8 @@ func (p *poller) Wait(chReadableNotify chan int, chWriteableNotify chan int, die
 	events := make([]syscall.Kevent_t, 128)
 	for {
 		p.Lock()
-		changes := p.changes
+		changes := make([]syscall.Kevent_t, len(p.changes))
+		copy(changes, p.changes)
 		p.changes = p.changes[:0]
 		p.Unlock()
 

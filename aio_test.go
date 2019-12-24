@@ -22,7 +22,7 @@ func echoServer(t testing.TB) net.Listener {
 		t.Fatal(err)
 	}
 
-	w, err := CreateWatcher()
+	w, err := CreateWatcher(4096)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,14 +47,16 @@ func echoServer(t testing.TB) net.Listener {
 				}
 
 				// write the data, we won't start to read again until write completes.
-				w.Write(res.Fd, res.Buffer[:res.Size:cap(res.Buffer)], chTx)
+				buf := make([]byte, len(res.Buffer))
+				copy(buf, res.Buffer[:res.Size])
+				w.Write(res.Fd, buf, chTx)
 			case res := <-chTx:
 				if res.Err != nil {
 					log.Println("write error:", res.Err, res.Size)
 					w.StopWatch(res.Fd)
 				}
 				// write complete, start read again
-				w.Read(res.Fd, res.Buffer[:cap(res.Buffer)], chRx)
+				w.Read(res.Fd, chRx)
 			}
 		}
 	}()
@@ -76,7 +78,7 @@ func echoServer(t testing.TB) net.Listener {
 			log.Println("watching", conn.RemoteAddr(), "fd:", fd)
 
 			// kick off
-			err = w.Read(fd, make([]byte, 1024), chRx)
+			err = w.Read(fd, chRx)
 			if err != nil {
 				log.Println(err)
 				return

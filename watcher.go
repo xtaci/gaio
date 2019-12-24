@@ -228,14 +228,27 @@ func (w *Watcher) loop() {
 		case cb := <-w.chReaders:
 			pendingReaders[cb.fd] = append(pendingReaders[cb.fd], cb)
 
-			if w.tryRead(&pendingReaders[cb.fd][0]) {
-				pendingReaders[cb.fd] = pendingReaders[cb.fd][1:]
+			for {
+				if len(pendingReaders[cb.fd]) == 0 {
+					break
+				}
+				if w.tryRead(&pendingReaders[cb.fd][0]) {
+					pendingReaders[cb.fd] = pendingReaders[cb.fd][1:]
+				} else {
+					break
+				}
 			}
 		case cb := <-w.chWriters:
 			pendingWriters[cb.fd] = append(pendingWriters[cb.fd], cb)
-
-			if w.tryWrite(&pendingWriters[cb.fd][0]) {
-				pendingWriters[cb.fd] = pendingWriters[cb.fd][1:]
+			for {
+				if len(pendingWriters[cb.fd]) == 0 {
+					break
+				}
+				if w.tryWrite(&pendingWriters[cb.fd][0]) {
+					pendingWriters[cb.fd] = pendingWriters[cb.fd][1:]
+				} else {
+					break
+				}
 			}
 		case fd := <-w.chReadableNotify:
 			for {

@@ -213,7 +213,7 @@ func TestBidirectionWatcher(t *testing.T) {
 				}
 
 				t.Log("written:", res.Err, res.Size)
-				err = w.Read(fd, doneR)
+				err := w.Read(fd, doneR)
 				if err != nil {
 					t.Fatal(err)
 				}

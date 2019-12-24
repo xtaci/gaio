@@ -32,10 +32,12 @@ type OpResult struct {
 type Watcher struct {
 	pfd *poller // poll fd
 
-	chReadableNotify chan int
-	chWritableNotify chan int
-	chReaders        chan aiocb
-	chWriters        chan aiocb
+	// loop
+	chReadableNotify  chan int
+	chWritableNotify  chan int
+	chStopWatchNotify chan int
+	chReaders         chan aiocb
+	chWriters         chan aiocb
 
 	die     chan struct{}
 	dieOnce sync.Once
@@ -56,8 +58,10 @@ func CreateWatcher() (*Watcher, error) {
 
 	w.chReadableNotify = make(chan int)
 	w.chWritableNotify = make(chan int)
+	w.chStopWatchNotify = make(chan int)
 	w.chReaders = make(chan aiocb)
 	w.chWriters = make(chan aiocb)
+
 	w.conns = make(map[int]net.Conn)
 	w.die = make(chan struct{})
 
@@ -113,8 +117,13 @@ func (w *Watcher) Watch(conn net.Conn) (fd int, err error) {
 func (w *Watcher) StopWatch(fd int) {
 	w.pfd.Unwatch(fd)
 	w.connsLock.Lock()
-	defer w.connsLock.Unlock()
 	delete(w.conns, fd)
+	w.connsLock.Unlock()
+
+	select {
+	case w.chStopWatchNotify <- fd:
+	case <-w.die:
+	}
 }
 
 // Read submits a read requests and notify with done
@@ -211,6 +220,9 @@ func (w *Watcher) loop() {
 					break
 				}
 			}
+		case fd := <-w.chStopWatchNotify:
+			delete(pendingReaders, fd)
+			delete(pendingWriters, fd)
 		case <-w.die:
 			return
 		}

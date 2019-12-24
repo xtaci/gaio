@@ -29,7 +29,7 @@ func (p *poller) Unwatch(fd int) error {
 	return unix.EpollCtl(p.pfd, unix.EPOLL_CTL_DEL, fd, &unix.EpollEvent{Fd: int32(fd), Events: unix.EPOLLIN | unix.EPOLLOUT})
 }
 
-func (p *poller) Wait(chReadableNotify chan int, chWriteableNotify chan int) error {
+func (p *poller) Wait(chReadableNotify chan int, chWriteableNotify chan int, die chan struct{}) error {
 	events := make([]unix.EpollEvent, 64)
 	for {
 		n, err := unix.EpollWait(p.pfd, events, -1)
@@ -39,11 +39,17 @@ func (p *poller) Wait(chReadableNotify chan int, chWriteableNotify chan int) err
 
 		for i := 0; i < n; i++ {
 			if events[i].Events&unix.EPOLLIN > 0 {
-				chReadableNotify <- int(events[i].Fd)
+				select {
+				case chReadableNotify <- int(events[i].Fd):
+				case <-die:
+				}
 
 			}
 			if events[i].Events&unix.EPOLLOUT > 0 {
-				chWriteableNotify <- int(events[i].Fd)
+				select {
+				case chWriteableNotify <- int(events[i].Fd):
+				case <-die:
+				}
 			}
 		}
 	}

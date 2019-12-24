@@ -61,7 +61,7 @@ func CreateWatcher() (*Watcher, error) {
 	w.conns = make(map[int]net.Conn)
 	w.die = make(chan struct{})
 
-	go w.pfd.Wait(w.chReadableNotify, w.chWritableNotify)
+	go w.pfd.Wait(w.chReadableNotify, w.chWritableNotify, w.die)
 	go w.loop()
 	return w, nil
 }
@@ -197,6 +197,8 @@ func (w *Watcher) loop() {
 				}
 				pendingWriters[fd] = cb
 			}
+		case <-w.die:
+			return
 		}
 	}
 }

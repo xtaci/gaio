@@ -59,7 +59,7 @@ func (p *poller) Unwatch(fd int) error {
 	return p.trigger()
 }
 
-func (p *poller) Wait(chReadableNotify chan int, chWriteableNotify chan int) error {
+func (p *poller) Wait(chReadableNotify chan int, chWriteableNotify chan int, die chan struct{}) error {
 	events := make([]syscall.Kevent_t, 128)
 	for {
 		n, err := syscall.Kevent(p.fd, p.changes, events, nil)
@@ -70,11 +70,17 @@ func (p *poller) Wait(chReadableNotify chan int, chWriteableNotify chan int) err
 		for i := 0; i < n; i++ {
 			if events[i].Ident != 0 {
 				if events[i].Filter == syscall.EVFILT_READ {
-					chReadableNotify <- int(events[i].Ident)
+					select {
+					case chReadableNotify <- int(events[i].Ident):
+					case <-die:
+					}
 
 				}
 				if events[i].Filter == syscall.EVFILT_WRITE {
-					chWriteableNotify <- int(events[i].Ident)
+					select {
+					case chWriteableNotify <- int(events[i].Ident):
+					case <-die:
+					}
 				}
 			}
 		}

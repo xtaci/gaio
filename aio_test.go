@@ -16,13 +16,17 @@ func init() {
 	go http.ListenAndServe(":6060", nil)
 }
 
+const (
+	bufSize = 65536
+)
+
 func echoServer(t testing.TB) net.Listener {
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	w, err := CreateWatcher(4096)
+	w, err := CreateWatcher(bufSize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +57,7 @@ func echoServer(t testing.TB) net.Listener {
 				// so we only need at most 1 write buffer for a connection
 				buf, ok := wbuffers[res.Fd]
 				if !ok {
-					buf = make([]byte, 4096)
+					buf = make([]byte, bufSize)
 					wbuffers[res.Fd] = buf
 				}
 				copy(buf, res.Buffer[:res.Size])
@@ -165,7 +169,7 @@ func BenchmarkEcho(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	rx := make([]byte, 65536)
+	rx := make([]byte, bufSize)
 
 	conn, err := net.DialTCP("tcp", nil, addr)
 	if err != nil {

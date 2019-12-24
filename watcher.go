@@ -23,10 +23,16 @@ type aiocb struct {
 
 // OpResult is the result of an aysnc-io
 type OpResult struct {
-	Fd     int    // related file descriptor to this result
-	Buffer []byte // the original committed buffer
-	Size   int    // number of bytes sent or received
-	Err    error  // IO error
+	// related file descriptor to this result
+	Fd int
+	// if the operation is Write, buffer is the original committed one
+	// if the operation is Read, buffer points to internal buffer, you need
+	// to process immediately, or copy and save by yourself.
+	Buffer []byte
+	// number of bytes sent or received, Buffer[:Size] is the content
+	Size int
+	// IO error
+	Err error
 }
 
 // Watcher will monitor events and process async-io request(s),

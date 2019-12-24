@@ -157,6 +157,7 @@ func TestEchoHuge(t *testing.T) {
 func BenchmarkEcho(b *testing.B) {
 	ln := echoServer(b)
 
+	numLoops := b.N
 	addr, _ := net.ResolveTCPAddr("tcp", ln.Addr().String())
 	tx := make([]byte, 1024*1024)
 	_, err := io.ReadFull(rand.Reader, tx)
@@ -177,7 +178,7 @@ func BenchmarkEcho(b *testing.B) {
 	b.SetBytes(int64(len(tx)))
 	b.ResetTimer()
 	go func() {
-		for i := 0; i < b.N; i++ {
+		for i := 0; i < numLoops; i++ {
 			_, err := conn.Write(tx)
 			if err != nil {
 				b.Fatal(err)
@@ -192,7 +193,7 @@ func BenchmarkEcho(b *testing.B) {
 			b.Fatal(err)
 		}
 		count += n
-		if count == len(tx)*b.N {
+		if count == len(tx)*numLoops {
 			break
 		}
 	}

@@ -227,7 +227,6 @@ func (w *Watcher) loop() {
 		select {
 		case cb := <-w.chReaders:
 			pendingReaders[cb.fd] = append(pendingReaders[cb.fd], cb)
-
 			for {
 				if len(pendingReaders[cb.fd]) == 0 {
 					break

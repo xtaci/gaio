@@ -137,65 +137,81 @@ func (w *Watcher) Write(fd int, buf []byte, done chan OpResult) error {
 	}
 }
 
+// tryRead will try to read data on aiocb and notify
+// returns true if io has completed, false means EAGAIN
+func (w *Watcher) tryRead(pcb *aiocb) (complete bool) {
+	nr, er := syscall.Read(pcb.fd, pcb.buffer)
+	if er == syscall.EAGAIN {
+		return false
+	}
+	if pcb.done != nil {
+		pcb.done <- OpResult{Fd: pcb.fd, Buffer: pcb.buffer, Size: nr, Err: er}
+	}
+	return true
+}
+
+func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
+	nw, ew := syscall.Write(pcb.fd, pcb.buffer[pcb.size:])
+	if ew == syscall.EAGAIN {
+		return false
+	}
+
+	if ew == nil {
+		pcb.size += nw
+	}
+
+	if pcb.size == len(pcb.buffer) || ew != nil {
+		if pcb.done != nil {
+			pcb.done <- OpResult{Fd: pcb.fd, Buffer: pcb.buffer, Size: nw, Err: ew}
+		}
+		return true
+	}
+	return false
+}
+
 func (w *Watcher) loop() {
-	pendingReaders := make(map[int]aiocb)
-	pendingWriters := make(map[int]aiocb)
+	pendingReaders := make(map[int][]aiocb)
+	pendingWriters := make(map[int][]aiocb)
 
 	for {
 		select {
 		case cb := <-w.chReaders:
-			nr, er := syscall.Read(cb.fd, cb.buffer)
-			if er == syscall.EAGAIN {
-				pendingReaders[cb.fd] = cb
-				continue
+			// enqueue
+			pendingReaders[cb.fd] = append(pendingReaders[cb.fd], cb)
+
+			if w.tryRead(&pendingReaders[cb.fd][0]) {
+				pendingReaders[cb.fd] = pendingReaders[cb.fd][1:]
 			}
-			cb.done <- OpResult{Fd: cb.fd, Buffer: cb.buffer, Size: nr, Err: er}
 		case cb := <-w.chWriters:
-			nw, ew := syscall.Write(cb.fd, cb.buffer)
-			if ew == syscall.EAGAIN {
-				pendingWriters[cb.fd] = cb
-				continue
-			}
+			// enqueue
+			pendingWriters[cb.fd] = append(pendingWriters[cb.fd], cb)
 
-			if nw == len(cb.buffer) || ew != nil {
-				cb.done <- OpResult{Fd: cb.fd, Buffer: cb.buffer, Size: nw, Err: ew}
-				continue
+			if w.tryWrite(&pendingWriters[cb.fd][0]) {
+				pendingWriters[cb.fd] = pendingWriters[cb.fd][1:]
 			}
-
-			// unsent buffer
-			cb.size = nw
-			pendingWriters[cb.fd] = cb
 		case fd := <-w.chReadableNotify:
-			//log.Println(fd, "readn")
-			cb, ok := pendingReaders[fd]
-			if ok {
-				nr, er := syscall.Read(cb.fd, cb.buffer)
-				if er == syscall.EAGAIN {
-					continue
+			for {
+				if len(pendingReaders[fd]) == 0 {
+					break
 				}
-				delete(pendingReaders, fd)
-				cb.done <- OpResult{Fd: fd, Buffer: cb.buffer, Size: nr, Err: er}
+
+				if w.tryRead(&pendingReaders[fd][0]) {
+					pendingReaders[fd] = pendingReaders[fd][1:]
+				} else {
+					break
+				}
 			}
 		case fd := <-w.chWritableNotify:
-			//log.Println(fd, "writen")
-			cb, ok := pendingWriters[fd]
-			if ok {
-				nw, ew := syscall.Write(cb.fd, cb.buffer[cb.size:])
-				if ew == syscall.EAGAIN {
-					continue
+			for {
+				if len(pendingWriters[fd]) == 0 {
+					break
 				}
 
-				if ew == nil {
-					cb.size += nw
+				if w.tryWrite(&pendingWriters[fd][0]) {
+					pendingWriters[fd] = pendingWriters[fd][1:]
+				} else {
+					break
 				}
-
-				// return if write complete or error
-				if cb.size == len(cb.buffer) || ew != nil {
-					delete(pendingWriters, cb.fd)
-					cb.done <- OpResult{Fd: fd, Buffer: cb.buffer, Size: cb.size, Err: ew}
-					continue
-				}
-				pendingWriters[fd] = cb
 			}
 		case <-w.die:
 			return

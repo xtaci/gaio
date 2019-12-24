@@ -29,9 +29,8 @@ This library is designed to fix.
 
 1. Only a fixed number of goroutines will be created per **Watcher**(the core object of this library).
 2. The IO-completion notification on a **Watcher** is sequential, that means buffer can be reused in some pattern.
-3. You can only have one reader and one writer on one specific connection at one time, newer ones will replace the old ones.
-4. Non-intrusive design, this library works with `net.Listener` and `net.Conn`. (with `syscall.RawConn` support)
-5. Support for Linux, BSD.
+3. Non-intrusive design, this library works with `net.Listener` and `net.Conn`. (with `syscall.RawConn` support)
+4. Support for Linux, BSD.
 
 ## Documentation
 

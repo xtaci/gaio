@@ -176,14 +176,12 @@ func (w *Watcher) loop() {
 	for {
 		select {
 		case cb := <-w.chReaders:
-			// enqueue
 			pendingReaders[cb.fd] = append(pendingReaders[cb.fd], cb)
 
 			if w.tryRead(&pendingReaders[cb.fd][0]) {
 				pendingReaders[cb.fd] = pendingReaders[cb.fd][1:]
 			}
 		case cb := <-w.chWriters:
-			// enqueue
 			pendingWriters[cb.fd] = append(pendingWriters[cb.fd], cb)
 
 			if w.tryWrite(&pendingWriters[cb.fd][0]) {

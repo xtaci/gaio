@@ -38,9 +38,9 @@ For complete documentation, see the associated [Godoc](https://godoc.org/github.
 
 ## Benchmark
 
-64KB recv buffer
+An Echo-server with 64KB receiving buffer
 ```
-2019/12/24 15:29:05 watching 127.0.0.1:62772 fd: 16
+BenchmarkEcho-4   	2019/12/24 15:42:16
     1485	    743233 ns/op	1410.83 MB/s	    1593 B/op	      32 allocs/op
 --- BENCH: BenchmarkEcho-4
     aio_test.go:180: sending 1048576 bytes for 1 times

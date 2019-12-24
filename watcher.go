@@ -223,56 +223,47 @@ func (w *Watcher) loop() {
 	pendingReaders := make(map[int][]aiocb)
 	pendingWriters := make(map[int][]aiocb)
 
+	// nonblocking queue ops
+	tryReadAll := func(fd int) {
+		for {
+			if len(pendingReaders[fd]) == 0 {
+				break
+			}
+
+			if w.tryRead(&pendingReaders[fd][0]) {
+				pendingReaders[fd] = pendingReaders[fd][1:]
+			} else {
+				break
+			}
+		}
+	}
+
+	tryWriteAll := func(fd int) {
+		for {
+			if len(pendingWriters[fd]) == 0 {
+				break
+			}
+
+			if w.tryWrite(&pendingWriters[fd][0]) {
+				pendingWriters[fd] = pendingWriters[fd][1:]
+			} else {
+				break
+			}
+		}
+	}
+
 	for {
 		select {
 		case cb := <-w.chReaders:
 			pendingReaders[cb.fd] = append(pendingReaders[cb.fd], cb)
-			for {
-				if len(pendingReaders[cb.fd]) == 0 {
-					break
-				}
-				if w.tryRead(&pendingReaders[cb.fd][0]) {
-					pendingReaders[cb.fd] = pendingReaders[cb.fd][1:]
-				} else {
-					break
-				}
-			}
+			tryReadAll(cb.fd)
 		case cb := <-w.chWriters:
 			pendingWriters[cb.fd] = append(pendingWriters[cb.fd], cb)
-			for {
-				if len(pendingWriters[cb.fd]) == 0 {
-					break
-				}
-				if w.tryWrite(&pendingWriters[cb.fd][0]) {
-					pendingWriters[cb.fd] = pendingWriters[cb.fd][1:]
-				} else {
-					break
-				}
-			}
+			tryWriteAll(cb.fd)
 		case fd := <-w.chReadableNotify:
-			for {
-				if len(pendingReaders[fd]) == 0 {
-					break
-				}
-
-				if w.tryRead(&pendingReaders[fd][0]) {
-					pendingReaders[fd] = pendingReaders[fd][1:]
-				} else {
-					break
-				}
-			}
+			tryReadAll(fd)
 		case fd := <-w.chWritableNotify:
-			for {
-				if len(pendingWriters[fd]) == 0 {
-					break
-				}
-
-				if w.tryWrite(&pendingWriters[fd][0]) {
-					pendingWriters[fd] = pendingWriters[fd][1:]
-				} else {
-					break
-				}
-			}
+			tryWriteAll(fd)
 		case fd := <-w.chStopWatchNotify:
 			delete(pendingReaders, fd)
 			delete(pendingWriters, fd)

@@ -23,7 +23,8 @@ For a typical golang network program, you would `lis.Accept()` a connection and 
 
 Then you need at least **2KB(goroutine stack) + 4KB(buffer)** for ONE connection, at least **6KB x 10K = 60MB** in total, this number will be doubled with `conn.Write()`.
 
-This library is designed to fix.
+By eliminating **One goroutine per one connection scheme**, 2KB goroutine stack can be saved, and with the strict order for event delivery, 4KB buffer can be shared in a `Watcher`
+
 
 ## Guarantees
 

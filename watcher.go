@@ -23,13 +23,13 @@ type aiocb struct {
 
 // OpResult is the result of an aysnc-io
 type OpResult struct {
-	// related file descriptor to this result
+	// Related file descriptor to this result
 	Fd int
-	// if the operation is Write, buffer is the original committed one
-	// if the operation is Read, buffer points to internal buffer, you need
+	// If the operation is Write, buffer is the original committed one,
+	// if the operation is Read, buffer points to a internal buffer, you need
 	// to process immediately, or copy and save by yourself.
 	Buffer []byte
-	// number of bytes sent or received, Buffer[:Size] is the content
+	// Number of bytes sent or received, Buffer[:Size] is the content sent or received.
 	Size int
 	// IO error
 	Err error
@@ -147,7 +147,8 @@ func (w *Watcher) StopWatch(fd int) {
 	}
 }
 
-// Read submits a read requests and notify with done, the cap(done) must be 0, i.e unbuffered chan.
+// Read submits a read requests and notify IO-completion with done channel,
+// the capacity of done has to be be 0, i.e an unbuffered chan.
 func (w *Watcher) Read(fd int, done chan OpResult) error {
 	if cap(done) != 0 {
 		return ErrBufferedChan
@@ -160,7 +161,8 @@ func (w *Watcher) Read(fd int, done chan OpResult) error {
 	}
 }
 
-// Write submits a write requests and notify with done, the cap(done) must be 0, i.e unbuffered chan.
+// Write submits a write requests and notify IO-completion with done channel,
+// the capacity of done has to be be 0, i.e an unbuffered chan.
 func (w *Watcher) Write(fd int, buf []byte, done chan OpResult) error {
 	// do nothing
 	if len(buf) == 0 {

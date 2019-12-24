@@ -39,6 +39,9 @@ type Watcher struct {
 	chReaders         chan aiocb
 	chWriters         chan aiocb
 
+	// internal buffer for reading
+	buffer []byte
+
 	die     chan struct{}
 	dieOnce sync.Once
 
@@ -55,6 +58,8 @@ func CreateWatcher() (*Watcher, error) {
 		return nil, err
 	}
 	w.pfd = pfd
+
+	w.buffer = make([]byte, 4096)
 
 	w.chReadableNotify = make(chan int)
 	w.chWritableNotify = make(chan int)
@@ -149,10 +154,15 @@ func (w *Watcher) Write(fd int, buf []byte, done chan OpResult) error {
 // tryRead will try to read data on aiocb and notify
 // returns true if io has completed, false means EAGAIN
 func (w *Watcher) tryRead(pcb *aiocb) (complete bool) {
-	nr, er := syscall.Read(pcb.fd, pcb.buffer)
+	size := len(pcb.buffer)
+	if len(w.buffer) < size {
+		size = len(w.buffer)
+	}
+	nr, er := syscall.Read(pcb.fd, w.buffer[:size])
 	if er == syscall.EAGAIN {
 		return false
 	}
+	copy(pcb.buffer, w.buffer)
 	if pcb.done != nil {
 		pcb.done <- OpResult{Fd: pcb.fd, Buffer: pcb.buffer, Size: nr, Err: er}
 	}

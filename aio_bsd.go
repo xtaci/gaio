@@ -3,12 +3,14 @@
 package gaio
 
 import (
+	"sync"
 	"syscall"
 )
 
 type poller struct {
 	fd      int
 	changes []syscall.Kevent_t
+	sync.Mutex
 }
 
 func openPoll() (*poller, error) {
@@ -44,25 +46,34 @@ func (p *poller) trigger() error {
 }
 
 func (p *poller) Watch(fd int) error {
+	p.Lock()
 	p.changes = append(p.changes,
 		syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_READ},
 		syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_WRITE},
 	)
+	p.Unlock()
 	return p.trigger()
 }
 
 func (p *poller) Unwatch(fd int) error {
+	p.Lock()
 	p.changes = append(p.changes,
 		syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_READ},
 		syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_WRITE},
 	)
+	p.Unlock()
 	return p.trigger()
 }
 
 func (p *poller) Wait(chReadableNotify chan int, chWriteableNotify chan int, die chan struct{}) error {
 	events := make([]syscall.Kevent_t, 128)
 	for {
-		n, err := syscall.Kevent(p.fd, p.changes, events, nil)
+		p.Lock()
+		changes := p.changes
+		p.changes = p.changes[:0]
+		p.Unlock()
+
+		n, err := syscall.Kevent(p.fd, changes, events, nil)
 		if err != nil && err != syscall.EINTR {
 			return err
 		}

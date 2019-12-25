@@ -115,6 +115,7 @@ func main() {
 		}
 
 		// kick off the first read action on this conn
+		// passing nil to 'buf' means use internal buffer
 		err = w.Read(fd, nil, chRx)
 		if err != nil {
 			log.Println(err)

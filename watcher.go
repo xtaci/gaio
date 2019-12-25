@@ -43,8 +43,12 @@ type Watcher struct {
 	chReadableNotify  chan int
 	chWritableNotify  chan int
 	chStopWatchNotify chan int
-	chReaders         chan aiocb
-	chWriters         chan aiocb
+	chPendingNotify   chan struct{}
+
+	// lock for pending
+	pendingReaders map[int][]aiocb
+	pendingWriters map[int][]aiocb
+	pendingMutex   sync.Mutex
 
 	// internal buffer for reading
 	swapBuffer chan []byte
@@ -76,8 +80,11 @@ func CreateWatcher(bufsize int) (*Watcher, error) {
 	w.chReadableNotify = make(chan int)
 	w.chWritableNotify = make(chan int)
 	w.chStopWatchNotify = make(chan int)
-	w.chReaders = make(chan aiocb)
-	w.chWriters = make(chan aiocb)
+	w.chPendingNotify = make(chan struct{}, 1)
+
+	// loop related map
+	w.pendingReaders = make(map[int][]aiocb)
+	w.pendingWriters = make(map[int][]aiocb)
 
 	// hold net.Conn only
 	w.conns = make(map[int]net.Conn)
@@ -147,17 +154,31 @@ func (w *Watcher) StopWatch(fd int) {
 	}
 }
 
+// notify new operations pending
+func (w *Watcher) notifyPending() {
+	select {
+	case w.chPendingNotify <- struct{}{}:
+	default:
+	}
+}
+
 // Read submits a read requests and notify IO-completion with done channel,
 // the capacity of done has to be be 0, i.e an unbuffered chan.
 func (w *Watcher) Read(fd int, done chan OpResult) error {
 	if cap(done) != 0 {
 		return ErrBufferedChan
 	}
+
 	select {
-	case w.chReaders <- aiocb{fd: fd, done: done}:
-		return nil
 	case <-w.die:
 		return ErrWatcherClosed
+	default:
+		w.pendingMutex.Lock()
+		w.pendingReaders[fd] = append(w.pendingReaders[fd], aiocb{fd: fd, done: done})
+		w.pendingMutex.Unlock()
+
+		w.notifyPending()
+		return nil
 	}
 }
 
@@ -174,10 +195,15 @@ func (w *Watcher) Write(fd int, buf []byte, done chan OpResult) error {
 	}
 
 	select {
-	case w.chWriters <- aiocb{fd: fd, buffer: buf, done: done}:
-		return nil
 	case <-w.die:
 		return ErrWatcherClosed
+	default:
+		w.pendingMutex.Lock()
+		w.pendingWriters[fd] = append(w.pendingWriters[fd], aiocb{fd: fd, buffer: buf, done: done})
+		w.pendingMutex.Unlock()
+
+		w.notifyPending()
+		return nil
 	}
 }
 
@@ -220,18 +246,18 @@ func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
 
 // the core event loop of this watcher
 func (w *Watcher) loop() {
-	pendingReaders := make(map[int][]aiocb)
-	pendingWriters := make(map[int][]aiocb)
+	queuedReaders := make(map[int][]aiocb)
+	queuedWriters := make(map[int][]aiocb)
 
 	// nonblocking queue ops
 	tryReadAll := func(fd int) {
 		for {
-			if len(pendingReaders[fd]) == 0 {
+			if len(queuedReaders[fd]) == 0 {
 				break
 			}
 
-			if w.tryRead(&pendingReaders[fd][0]) {
-				pendingReaders[fd] = pendingReaders[fd][1:]
+			if w.tryRead(&queuedReaders[fd][0]) {
+				queuedReaders[fd] = queuedReaders[fd][1:]
 			} else {
 				break
 			}
@@ -240,12 +266,12 @@ func (w *Watcher) loop() {
 
 	tryWriteAll := func(fd int) {
 		for {
-			if len(pendingWriters[fd]) == 0 {
+			if len(queuedWriters[fd]) == 0 {
 				break
 			}
 
-			if w.tryWrite(&pendingWriters[fd][0]) {
-				pendingWriters[fd] = pendingWriters[fd][1:]
+			if w.tryWrite(&queuedWriters[fd][0]) {
+				queuedWriters[fd] = queuedWriters[fd][1:]
 			} else {
 				break
 			}
@@ -254,19 +280,35 @@ func (w *Watcher) loop() {
 
 	for {
 		select {
-		case cb := <-w.chReaders:
-			pendingReaders[cb.fd] = append(pendingReaders[cb.fd], cb)
-			tryReadAll(cb.fd)
-		case cb := <-w.chWriters:
-			pendingWriters[cb.fd] = append(pendingWriters[cb.fd], cb)
-			tryWriteAll(cb.fd)
+		case <-w.chPendingNotify:
+			w.pendingMutex.Lock()
+			rfds := make([]int, 0, len(w.pendingReaders))
+			wfds := make([]int, 0, len(w.pendingWriters))
+			for fd, cbs := range w.pendingReaders {
+				queuedReaders[fd] = append(queuedReaders[fd], cbs...)
+				rfds = append(rfds, fd)
+				delete(w.pendingReaders, fd)
+			}
+			for fd, cbs := range w.pendingWriters {
+				queuedWriters[fd] = append(queuedWriters[fd], cbs...)
+				wfds = append(wfds, fd)
+				delete(w.pendingWriters, fd)
+			}
+			w.pendingMutex.Unlock()
+
+			for _, fd := range rfds {
+				tryReadAll(fd)
+			}
+			for _, fd := range wfds {
+				tryWriteAll(fd)
+			}
 		case fd := <-w.chReadableNotify:
 			tryReadAll(fd)
 		case fd := <-w.chWritableNotify:
 			tryWriteAll(fd)
 		case fd := <-w.chStopWatchNotify:
-			delete(pendingReaders, fd)
-			delete(pendingWriters, fd)
+			delete(queuedReaders, fd)
+			delete(queuedWriters, fd)
 		case <-w.die:
 			return
 		}

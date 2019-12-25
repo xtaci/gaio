@@ -163,10 +163,13 @@ func (w *Watcher) notifyPending() {
 	}
 }
 
-// Read submits a read requests and notify IO-completion with done channel,
-// the capacity of done has to be be 0, i.e an unbuffered chan.
-// buf can be set to nil to use internal buffer, the sequence of notification
-// can guarantee the buffer will not be overwritten by next read
+// Read submits an aysnc read requests to be notified via 'done' channel,
+//
+// the capacity of 'done' has to be be 0, i.e an unbuffered chan.
+//
+// 'buf' can be set to nil to use internal buffer.
+// The sequence of notification can guarantee the buffer will not be overwritten
+// before next read notification received via <-done.
 func (w *Watcher) Read(fd int, buf []byte, done chan OpResult) error {
 	if cap(done) != 0 {
 		return ErrBufferedChan
@@ -185,8 +188,11 @@ func (w *Watcher) Read(fd int, buf []byte, done chan OpResult) error {
 	}
 }
 
-// Write submits a write requests and notify IO-completion with done channel,
-// the capacity of done has to be be 0, i.e an unbuffered chan.
+// Write submits a write requests to be notifed via 'done' channel,
+//
+// the capacity of 'done' has to be be 0, i.e an unbuffered chan.
+//
+// the notification order of Write is guaranteed to be sequential.
 func (w *Watcher) Write(fd int, buf []byte, done chan OpResult) error {
 	// do nothing
 	if len(buf) == 0 {
@@ -211,7 +217,7 @@ func (w *Watcher) Write(fd int, buf []byte, done chan OpResult) error {
 }
 
 // tryRead will try to read data on aiocb and notify
-// returns true if io has completed, false means not.
+// returns true if IO has completed, false means not.
 func (w *Watcher) tryRead(pcb *aiocb) (complete bool) {
 	buf := pcb.buffer
 	if buf == nil { // internal buffer
@@ -255,7 +261,7 @@ func (w *Watcher) loop() {
 	queuedReaders := make(map[int][]aiocb)
 	queuedWriters := make(map[int][]aiocb)
 
-	// nonblocking queue ops
+	// nonblocking queue ops on fd
 	tryReadAll := func(fd int) {
 		for {
 			if len(queuedReaders[fd]) == 0 {

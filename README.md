@@ -85,7 +85,8 @@ func main() {
 					continue
 				}
 
-				// write the generated data, we won't start to read again until write completes.
+				// write the generated data, we won't start to read again 
+				// until write completes.
 				buf := make([]byte, res.Size)
 				copy(buf, res.Buffer[:res.Size])
 				w.Write(res.Fd, buf, chTx)

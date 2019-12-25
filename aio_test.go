@@ -69,7 +69,7 @@ func echoServer(t testing.TB) net.Listener {
 					w.StopWatch(res.Fd)
 				}
 				// write complete, start read again
-				w.Read(res.Fd, chRx)
+				w.Read(res.Fd, nil, chRx)
 			}
 		}
 	}()
@@ -91,7 +91,7 @@ func echoServer(t testing.TB) net.Listener {
 			//log.Println("watching", conn.RemoteAddr(), "fd:", fd)
 
 			// kick off
-			err = w.Read(fd, chRx)
+			err = w.Read(fd, nil, chRx)
 			if err != nil {
 				log.Println(err)
 				return
@@ -175,7 +175,7 @@ func TestBufferedDone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = w.Read(fd, make(chan OpResult, 1))
+	err = w.Read(fd, nil, make(chan OpResult, 1))
 	if err != ErrBufferedChan {
 		t.Fatal("misbehavior")
 	}
@@ -213,7 +213,7 @@ func TestBidirectionWatcher(t *testing.T) {
 				}
 
 				t.Log("written:", res.Err, res.Size)
-				err := w.Read(fd, doneR)
+				err := w.Read(fd, nil, doneR)
 				if err != nil {
 					t.Fatal(err)
 				}

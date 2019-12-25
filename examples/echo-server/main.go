@@ -53,7 +53,7 @@ func main() {
 					continue
 				}
 				// write complete, start read again
-				w.Read(res.Fd, chRx)
+				w.Read(res.Fd, nil, chRx)
 			}
 		}
 	}()
@@ -74,7 +74,7 @@ func main() {
 		log.Println("new client", conn.RemoteAddr())
 
 		// kick off the first read action on this conn
-		err = w.Read(fd, chRx)
+		err = w.Read(fd, nil, chRx)
 		if err != nil {
 			log.Println(err)
 			return

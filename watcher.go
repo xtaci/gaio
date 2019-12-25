@@ -15,10 +15,11 @@ var (
 
 // aiocb contains all info for a request
 type aiocb struct {
-	fd     int
-	buffer []byte
-	size   int
-	done   chan OpResult
+	fd       int
+	buffer   []byte
+	internal bool // mark if the buffer is internal
+	size     int
+	done     chan OpResult
 }
 
 // OpResult is the result of an aysnc-io
@@ -164,7 +165,9 @@ func (w *Watcher) notifyPending() {
 
 // Read submits a read requests and notify IO-completion with done channel,
 // the capacity of done has to be be 0, i.e an unbuffered chan.
-func (w *Watcher) Read(fd int, done chan OpResult) error {
+// buf can be set to nil to use internal buffer, the sequence of notification
+// can guarantee the buffer will not be overwritten by next read
+func (w *Watcher) Read(fd int, buf []byte, done chan OpResult) error {
 	if cap(done) != 0 {
 		return ErrBufferedChan
 	}
@@ -174,7 +177,7 @@ func (w *Watcher) Read(fd int, done chan OpResult) error {
 		return ErrWatcherClosed
 	default:
 		w.pendingMutex.Lock()
-		w.pendingReaders[fd] = append(w.pendingReaders[fd], aiocb{fd: fd, done: done})
+		w.pendingReaders[fd] = append(w.pendingReaders[fd], aiocb{fd: fd, buffer: buf, done: done})
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()
@@ -210,8 +213,11 @@ func (w *Watcher) Write(fd int, buf []byte, done chan OpResult) error {
 // tryRead will try to read data on aiocb and notify
 // returns true if io has completed, false means not.
 func (w *Watcher) tryRead(pcb *aiocb) (complete bool) {
-	buf := <-w.swapBuffer
-	defer func() { w.swapBuffer <- buf }()
+	buf := pcb.buffer
+	if buf == nil { // internal buffer
+		buf = <-w.swapBuffer
+		defer func() { w.swapBuffer <- buf }()
+	}
 
 	nr, er := syscall.Read(pcb.fd, buf)
 	if er == syscall.EAGAIN {

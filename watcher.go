@@ -58,8 +58,8 @@ type Watcher struct {
 	dieOnce sync.Once
 
 	// hold net.Conn to prevent from GC
-	conns     map[int]net.Conn
-	connsLock sync.Mutex
+	conns      map[int]net.Conn
+	connsMutex sync.Mutex
 }
 
 // CreateWatcher creates a management object for monitoring file descriptors
@@ -136,18 +136,18 @@ func (w *Watcher) Watch(conn net.Conn) (fd int, err error) {
 	w.pfd.Watch(fd)
 
 	// prevent conn from GC
-	w.connsLock.Lock()
+	w.connsMutex.Lock()
 	w.conns[fd] = conn
-	w.connsLock.Unlock()
+	w.connsMutex.Unlock()
 	return fd, nil
 }
 
 // StopWatch events related to this fd
 func (w *Watcher) StopWatch(fd int) {
 	w.pfd.Unwatch(fd)
-	w.connsLock.Lock()
+	w.connsMutex.Lock()
 	delete(w.conns, fd)
-	w.connsLock.Unlock()
+	w.connsMutex.Unlock()
 
 	select {
 	case w.chStopWatchNotify <- fd:

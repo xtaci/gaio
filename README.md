@@ -23,7 +23,7 @@ For a typical golang network program, you would first `conn := lis.Accept()` to 
 
 In this case, you need at least **2KB(goroutine stack) + 4KB(buffer)** for receiving data on one connection, at least **6KB x 10K = 60MB** in total, this number will be doubled with data sending goroutine, not counting the **context switches**
 
-By eliminating **one goroutine per one connection scheme**, the 2KB goroutine stack can be saved, then by restricting delivery order or events, one **common buffer** can be shared for all incoming connections in a `Watcher`.
+By eliminating **one goroutine per one connection scheme**, the 2KB goroutine stack can be saved, then by restricting delivery order or events, internal **mutual buffer** can be shared for all incoming connections in a `Watcher`.
 
 ## Guarantees
 

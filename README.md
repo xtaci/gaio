@@ -48,7 +48,7 @@ BenchmarkEcho-4   	2019/12/24 15:42:16
 
 ## Usage
 
-A simple echo server
+Example echo server:
 
 ```go
 func main() {
@@ -125,6 +125,10 @@ func main() {
 ```
 
 More to be found: https://github.com/xtaci/gaio/tree/master/examples
+
+## License
+
+`gaio` source code is available under the MIT [License](/LICENSE).
 
 ## Status
 

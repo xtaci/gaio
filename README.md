@@ -19,9 +19,9 @@ For a typical golang network program, you would first `conn := lis.Accept()` to 
 
 In this case, you need at least **2KB(goroutine stack) + 4KB(buffer)** for receiving data on one connection, at least **6KB x 10K = 60MB** in total, this number will be doubled with data sending goroutine, not counting the **context switches**
 
-By eliminating **one goroutine per one connection scheme**, the 2KB goroutine stack can be saved, then by restricting delivery order or events, internal **mutual buffer** can be shared for all incoming connections in a `Watcher`.
+```gaio``` is an [proactor pattern](https://en.wikipedia.org/wiki/Proactor_pattern) networking library satisfy both **memory requirements** and **performance requirements**.
 
-```gaio``` is an [proactor pattern](https://en.wikipedia.org/wiki/Proactor_pattern) networking library satisfy both **memory constraint** and performance requirements.
+By eliminating **one goroutine per one connection scheme** with **Edge-Triggered IO Multiplexing**, the 2KB goroutine stack can be saved, and by restricting delivery order or events, internal **mutual buffer** can be shared for all incoming connections in a `Watcher`.
 
 ## Guarantees
 

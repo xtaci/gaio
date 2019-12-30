@@ -61,7 +61,7 @@ func echoServer(t testing.TB) net.Listener {
 					wbuffers[res.Fd] = buf
 				}
 				copy(buf, res.Buffer[:res.Size])
-				w.Write(res.Fd, buf[:res.Size], chTx)
+				w.Write(res.Fd, buf[:res.Size], chTx, nil)
 			case res := <-chTx:
 				if res.Err != nil {
 					log.Println("write error:", res.Err, res.Size)
@@ -69,7 +69,7 @@ func echoServer(t testing.TB) net.Listener {
 					w.StopWatch(res.Fd)
 				}
 				// write complete, start read again
-				w.Read(res.Fd, nil, chRx)
+				w.Read(res.Fd, nil, chRx, nil)
 			}
 		}
 	}()
@@ -91,7 +91,7 @@ func echoServer(t testing.TB) net.Listener {
 			//log.Println("watching", conn.RemoteAddr(), "fd:", fd)
 
 			// kick off
-			err = w.Read(fd, nil, chRx)
+			err = w.Read(fd, nil, chRx, nil)
 			if err != nil {
 				log.Println(err)
 				return
@@ -175,7 +175,7 @@ func TestBufferedDone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = w.Read(fd, nil, make(chan OpResult, 1))
+	err = w.Read(fd, nil, make(chan OpResult, 1), nil)
 	if err != ErrBufferedChan {
 		t.Fatal("misbehavior")
 	}
@@ -213,7 +213,7 @@ func TestBidirectionWatcher(t *testing.T) {
 				}
 
 				t.Log("written:", res.Err, res.Size)
-				err := w.Read(fd, nil, doneR)
+				err := w.Read(fd, nil, doneR, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -226,7 +226,7 @@ func TestBidirectionWatcher(t *testing.T) {
 	}()
 
 	// send
-	err = w.Write(fd, tx, doneW)
+	err = w.Write(fd, tx, doneW, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -19,6 +19,7 @@ var (
 
 // aiocb contains all info for a request
 type aiocb struct {
+	ctx      interface{}
 	fd       int
 	buffer   []byte
 	internal bool // mark if the buffer is internal
@@ -176,7 +177,7 @@ func (w *Watcher) notifyPending() {
 // 'buf' can be set to nil to use internal buffer.
 // The sequence of notification can guarantee the buffer will not be overwritten
 // before next read notification received via <-done.
-func (w *Watcher) Read(fd int, buf []byte, done chan OpResult) error {
+func (w *Watcher) Read(fd int, buf []byte, done chan OpResult, ctx interface{}) error {
 	if cap(done) != 0 {
 		return ErrBufferedChan
 	}
@@ -186,7 +187,7 @@ func (w *Watcher) Read(fd int, buf []byte, done chan OpResult) error {
 		return ErrWatcherClosed
 	default:
 		w.pendingMutex.Lock()
-		w.pendingReaders[fd] = append(w.pendingReaders[fd], aiocb{fd: fd, buffer: buf, done: done})
+		w.pendingReaders[fd] = append(w.pendingReaders[fd], aiocb{ctx: ctx, fd: fd, buffer: buf, done: done})
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()
@@ -199,7 +200,7 @@ func (w *Watcher) Read(fd int, buf []byte, done chan OpResult) error {
 // the capacity of 'done' has to be be 0, i.e an unbuffered chan.
 //
 // the notification order of Write is guaranteed to be sequential.
-func (w *Watcher) Write(fd int, buf []byte, done chan OpResult) error {
+func (w *Watcher) Write(fd int, buf []byte, done chan OpResult, ctx interface{}) error {
 	// do nothing
 	if len(buf) == 0 {
 		return nil
@@ -214,7 +215,7 @@ func (w *Watcher) Write(fd int, buf []byte, done chan OpResult) error {
 		return ErrWatcherClosed
 	default:
 		w.pendingMutex.Lock()
-		w.pendingWriters[fd] = append(w.pendingWriters[fd], aiocb{fd: fd, buffer: buf, done: done})
+		w.pendingWriters[fd] = append(w.pendingWriters[fd], aiocb{ctx: ctx, fd: fd, buffer: buf, done: done})
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()
@@ -236,7 +237,7 @@ func (w *Watcher) tryRead(pcb *aiocb) (complete bool) {
 		return false
 	}
 	if pcb.done != nil {
-		pcb.done <- OpResult{Fd: pcb.fd, Buffer: buf, Size: nr, Err: er}
+		pcb.done <- OpResult{Fd: pcb.fd, Buffer: buf, Size: nr, Err: er, Context: pcb.ctx}
 	}
 	return true
 }
@@ -255,7 +256,7 @@ func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
 	// all bytes written or has error
 	if pcb.size == len(pcb.buffer) || ew != nil {
 		if pcb.done != nil {
-			pcb.done <- OpResult{Fd: pcb.fd, Buffer: pcb.buffer, Size: nw, Err: ew}
+			pcb.done <- OpResult{Fd: pcb.fd, Buffer: pcb.buffer, Size: nw, Err: ew, Context: pcb.ctx}
 		}
 		return true
 	}

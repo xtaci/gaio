@@ -44,7 +44,7 @@ func main() {
 				// write the data, we won't start to read again until write completes.
 				buf := make([]byte, res.Size)
 				copy(buf, res.Buffer[:res.Size])
-				w.Write(res.Fd, buf, chTx)
+				w.Write(res.Fd, buf, chTx, nil)
 			case res := <-chTx:
 				// handle unexpected write error
 				if res.Err != nil {
@@ -53,7 +53,7 @@ func main() {
 					continue
 				}
 				// write complete, start read again
-				w.Read(res.Fd, nil, chRx)
+				w.Read(res.Fd, nil, chRx, nil)
 			}
 		}
 	}()
@@ -74,7 +74,7 @@ func main() {
 		log.Println("new client", conn.RemoteAddr())
 
 		// kick off the first read action on this conn
-		err = w.Read(fd, nil, chRx)
+		err = w.Read(fd, nil, chRx, nil)
 		if err != nil {
 			log.Println(err)
 			return

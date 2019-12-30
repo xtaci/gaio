@@ -38,6 +38,8 @@ type OpResult struct {
 	Size int
 	// IO error
 	Err error
+	// A Context along with requests
+	Context interface{}
 }
 
 // Watcher will monitor events and process async-io request(s),

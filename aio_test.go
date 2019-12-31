@@ -31,14 +31,18 @@ func echoServer(t testing.TB) net.Listener {
 		t.Fatal(err)
 	}
 
-	chRx := make(chan OpResult)
-	chTx := make(chan OpResult)
 	// ping-pong scheme echo server
 	go func() {
 		wbuffers := make(map[int][]byte)
 		for {
-			select {
-			case res := <-chRx:
+			res, err := w.WaitIO()
+			if err != nil {
+				t.Log(err)
+				return
+			}
+
+			switch res.Op {
+			case OpRead:
 				if res.Err != nil {
 					log.Println("read error:", res.Err, res.Size)
 					delete(wbuffers, res.Fd)
@@ -61,15 +65,16 @@ func echoServer(t testing.TB) net.Listener {
 					wbuffers[res.Fd] = buf
 				}
 				copy(buf, res.Buffer[:res.Size])
-				w.Write(res.Fd, buf[:res.Size], chTx, nil)
-			case res := <-chTx:
+				w.Write(nil, res.Fd, buf[:res.Size])
+
+			case OpWrite:
 				if res.Err != nil {
 					log.Println("write error:", res.Err, res.Size)
 					delete(wbuffers, res.Fd)
 					w.StopWatch(res.Fd)
 				}
 				// write complete, start read again
-				w.Read(res.Fd, nil, chRx, nil)
+				w.Read(nil, res.Fd, nil)
 			}
 		}
 	}()
@@ -91,7 +96,7 @@ func echoServer(t testing.TB) net.Listener {
 			//log.Println("watching", conn.RemoteAddr(), "fd:", fd)
 
 			// kick off
-			err = w.Read(fd, nil, chRx, nil)
+			err = w.Read(nil, fd, nil)
 			if err != nil {
 				log.Println(err)
 				return
@@ -158,30 +163,6 @@ func TestEchoHuge(t *testing.T) {
 	conn.Close()
 }
 
-func TestBufferedDone(t *testing.T) {
-	ln := echoServer(t)
-	conn, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	w, err := CreateWatcher(bufSize)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	fd, err := w.Watch(conn)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = w.Read(fd, nil, make(chan OpResult, 1), nil)
-	if err != ErrBufferedChan {
-		t.Fatal("misbehavior")
-	}
-	conn.Close()
-}
-
 func TestBidirectionWatcher(t *testing.T) {
 	ln := echoServer(t)
 	conn, err := net.Dial("tcp", ln.Addr().String())
@@ -200,24 +181,28 @@ func TestBidirectionWatcher(t *testing.T) {
 	}
 
 	tx := []byte("hello world")
-	doneR := make(chan OpResult)
-	doneW := make(chan OpResult)
 	die := make(chan struct{})
 	go func() {
 		for {
-			select {
-			case res := <-doneW:
+			res, err := w.WaitIO()
+			if err != nil {
+				t.Log(err)
+				return
+			}
+
+			switch res.Op {
+			case OpWrite:
 				// recv
 				if res.Err != nil {
 					t.Fatal(res.Err)
 				}
 
 				t.Log("written:", res.Err, res.Size)
-				err := w.Read(fd, nil, doneR, nil)
+				err := w.Read(nil, fd, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
-			case res := <-doneR:
+			case OpRead:
 				t.Log("read:", res.Err, res.Size)
 				close(die)
 				return
@@ -226,7 +211,7 @@ func TestBidirectionWatcher(t *testing.T) {
 	}()
 
 	// send
-	err = w.Write(fd, tx, doneW, nil)
+	err = w.Write(nil, fd, tx)
 	if err != nil {
 		t.Fatal(err)
 	}

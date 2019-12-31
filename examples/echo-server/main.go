@@ -20,13 +20,16 @@ func main() {
 		log.Fatal(err)
 	}
 
-	chRx := make(chan gaio.OpResult)
-	chTx := make(chan gaio.OpResult)
-
 	go func() {
 		for {
-			select {
-			case res := <-chRx:
+			res, err := w.WaitIO()
+			if err != nil {
+				log.Println(err)
+				return
+			}
+
+			switch res.Op {
+			case gaio.OpRead:
 				// handle unexpected read error
 				if res.Err != nil {
 					log.Println("read error")
@@ -44,8 +47,8 @@ func main() {
 				// write the data, we won't start to read again until write completes.
 				buf := make([]byte, res.Size)
 				copy(buf, res.Buffer[:res.Size])
-				w.Write(res.Fd, buf, chTx, nil)
-			case res := <-chTx:
+				w.Write(nil, res.Fd, buf)
+			case gaio.OpWrite:
 				// handle unexpected write error
 				if res.Err != nil {
 					log.Println("write error")
@@ -53,7 +56,7 @@ func main() {
 					continue
 				}
 				// write complete, start read again
-				w.Read(res.Fd, nil, chRx, nil)
+				w.Read(nil, res.Fd, nil)
 			}
 		}
 	}()
@@ -74,7 +77,7 @@ func main() {
 		log.Println("new client", conn.RemoteAddr())
 
 		// kick off the first read action on this conn
-		err = w.Read(fd, nil, chRx, nil)
+		err = w.Read(nil, fd, nil)
 		if err != nil {
 			log.Println(err)
 			return

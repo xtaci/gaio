@@ -14,7 +14,15 @@ import (
 var (
 	ErrNoRawConn     = errors.New("net.Conn does implement net.RawConn")
 	ErrWatcherClosed = errors.New("watcher closed")
-	ErrBufferedChan  = errors.New("cannot use bufferd chan to notify")
+)
+
+// Operation Type
+type OpType int
+
+const (
+	// identify operation type on OpResult
+	OpRead OpType = iota
+	OpWrite
 )
 
 // aiocb contains all info for a request
@@ -24,11 +32,14 @@ type aiocb struct {
 	buffer   []byte
 	internal bool // mark if the buffer is internal
 	size     int
-	done     chan OpResult
 }
 
 // OpResult is the result of an aysnc-io
 type OpResult struct {
+	// Operation Type
+	Op OpType
+	// A Context along with requests
+	Context interface{}
 	// Related file descriptor to this result
 	Fd int
 	// If the operation is Write, buffer is the original committed one,
@@ -39,8 +50,6 @@ type OpResult struct {
 	Size int
 	// IO error
 	Err error
-	// A Context along with requests
-	Context interface{}
 }
 
 // Watcher will monitor events and process async-io request(s),
@@ -52,6 +61,7 @@ type Watcher struct {
 	chWritableNotify  chan int
 	chStopWatchNotify chan int
 	chPendingNotify   chan struct{}
+	chIOCompletion    chan OpResult
 
 	// lock for pending
 	pendingReaders map[int][]aiocb
@@ -89,6 +99,7 @@ func CreateWatcher(bufsize int) (*Watcher, error) {
 	w.chWritableNotify = make(chan int)
 	w.chStopWatchNotify = make(chan int)
 	w.chPendingNotify = make(chan struct{}, 1)
+	w.chIOCompletion = make(chan OpResult)
 
 	// loop related map
 	w.pendingReaders = make(map[int][]aiocb)
@@ -170,24 +181,28 @@ func (w *Watcher) notifyPending() {
 	}
 }
 
-// Read submits an aysnc read requests to be notified via 'done' channel,
-//
-// the capacity of 'done' has to be be 0, i.e an unbuffered chan.
+// Wait blocks until any read/write completion, or error
+func (w *Watcher) WaitIO() (r OpResult, err error) {
+	select {
+	case r := <-w.chIOCompletion:
+		return r, nil
+	case <-w.die:
+		return r, ErrWatcherClosed
+	}
+}
+
+// Read submits an aysnc read requests to be notified via WaitIO()
 //
 // 'buf' can be set to nil to use internal buffer.
 // The sequence of notification can guarantee the buffer will not be overwritten
-// before next read notification received via <-done.
-func (w *Watcher) Read(fd int, buf []byte, done chan OpResult, ctx interface{}) error {
-	if cap(done) != 0 {
-		return ErrBufferedChan
-	}
-
+// before next WaitIO returns
+func (w *Watcher) Read(ctx interface{}, fd int, buf []byte) error {
 	select {
 	case <-w.die:
 		return ErrWatcherClosed
 	default:
 		w.pendingMutex.Lock()
-		w.pendingReaders[fd] = append(w.pendingReaders[fd], aiocb{ctx: ctx, fd: fd, buffer: buf, done: done})
+		w.pendingReaders[fd] = append(w.pendingReaders[fd], aiocb{ctx: ctx, fd: fd, buffer: buf})
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()
@@ -195,19 +210,13 @@ func (w *Watcher) Read(fd int, buf []byte, done chan OpResult, ctx interface{}) 
 	}
 }
 
-// Write submits a write requests to be notifed via 'done' channel,
-//
-// the capacity of 'done' has to be be 0, i.e an unbuffered chan.
+// Write submits a write requests to be notifed via WaitIO()
 //
 // the notification order of Write is guaranteed to be sequential.
-func (w *Watcher) Write(fd int, buf []byte, done chan OpResult, ctx interface{}) error {
+func (w *Watcher) Write(ctx interface{}, fd int, buf []byte) error {
 	// do nothing
 	if len(buf) == 0 {
 		return nil
-	}
-
-	if cap(done) != 0 {
-		return ErrBufferedChan
 	}
 
 	select {
@@ -215,7 +224,7 @@ func (w *Watcher) Write(fd int, buf []byte, done chan OpResult, ctx interface{})
 		return ErrWatcherClosed
 	default:
 		w.pendingMutex.Lock()
-		w.pendingWriters[fd] = append(w.pendingWriters[fd], aiocb{ctx: ctx, fd: fd, buffer: buf, done: done})
+		w.pendingWriters[fd] = append(w.pendingWriters[fd], aiocb{ctx: ctx, fd: fd, buffer: buf})
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()
@@ -236,10 +245,12 @@ func (w *Watcher) tryRead(pcb *aiocb) (complete bool) {
 	if er == syscall.EAGAIN {
 		return false
 	}
-	if pcb.done != nil {
-		pcb.done <- OpResult{Fd: pcb.fd, Buffer: buf, Size: nr, Err: er, Context: pcb.ctx}
+	select {
+	case w.chIOCompletion <- OpResult{Op: OpRead, Fd: pcb.fd, Buffer: buf, Size: nr, Err: er, Context: pcb.ctx}:
+		return true
+	case <-w.die:
+		return false
 	}
-	return true
 }
 
 func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
@@ -255,10 +266,12 @@ func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
 
 	// all bytes written or has error
 	if pcb.size == len(pcb.buffer) || ew != nil {
-		if pcb.done != nil {
-			pcb.done <- OpResult{Fd: pcb.fd, Buffer: pcb.buffer, Size: nw, Err: ew, Context: pcb.ctx}
+		select {
+		case w.chIOCompletion <- OpResult{Op: OpWrite, Fd: pcb.fd, Buffer: pcb.buffer, Size: nw, Err: ew, Context: pcb.ctx}:
+			return true
+		case <-w.die:
+			return false
 		}
-		return true
 	}
 	return false
 }

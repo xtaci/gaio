@@ -10,6 +10,7 @@ import (
 	"net"
 	"sync"
 	"syscall"
+	"time"
 )
 
 var (
@@ -33,6 +34,7 @@ type aiocb struct {
 	buffer   []byte
 	internal bool // mark if the buffer is internal
 	size     int
+	deadline time.Time
 }
 
 // OpResult is the result of an aysnc-io
@@ -199,12 +201,17 @@ func (w *Watcher) WaitIO() (r OpResult, err error) {
 // The sequence of notification can guarantee the buffer will not be overwritten
 // before next WaitIO returns
 func (w *Watcher) Read(ctx interface{}, fd int, buf []byte) error {
+	return w.ReadTimeout(ctx, fd, buf, time.Time{})
+}
+
+// ReadTimeout like above, submits an aysnc Read requests with timeout to be notified via WaitIO()
+func (w *Watcher) ReadTimeout(ctx interface{}, fd int, buf []byte, deadline time.Time) error {
 	select {
 	case <-w.die:
 		return ErrWatcherClosed
 	default:
 		w.pendingMutex.Lock()
-		w.pendingReaders[fd] = append(w.pendingReaders[fd], &aiocb{ctx: ctx, fd: fd, buffer: buf})
+		w.pendingReaders[fd] = append(w.pendingReaders[fd], &aiocb{ctx: ctx, fd: fd, buffer: buf, deadline: deadline})
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()
@@ -216,17 +223,16 @@ func (w *Watcher) Read(ctx interface{}, fd int, buf []byte) error {
 //
 // the notification order of Write is guaranteed to be sequential.
 func (w *Watcher) Write(ctx interface{}, fd int, buf []byte) error {
-	// do nothing
-	if len(buf) == 0 {
-		return nil
-	}
+	return w.WriteTimeout(ctx, fd, buf, time.Time{})
+}
 
+func (w *Watcher) WriteTimeout(ctx interface{}, fd int, buf []byte, deadline time.Time) error {
 	select {
 	case <-w.die:
 		return ErrWatcherClosed
 	default:
 		w.pendingMutex.Lock()
-		w.pendingWriters[fd] = append(w.pendingWriters[fd], &aiocb{ctx: ctx, fd: fd, buffer: buf})
+		w.pendingWriters[fd] = append(w.pendingWriters[fd], &aiocb{ctx: ctx, fd: fd, buffer: buf, deadline: deadline})
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()
@@ -256,14 +262,19 @@ func (w *Watcher) tryRead(pcb *aiocb) (complete bool) {
 }
 
 func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
-	nw, ew := syscall.Write(pcb.fd, pcb.buffer[pcb.size:])
-	if ew == syscall.EAGAIN {
-		return false
-	}
+	var nw int
+	var ew error
 
-	// if ew is nil, accumulate bytes written
-	if ew == nil {
-		pcb.size += nw
+	if pcb.buffer != nil {
+		nw, ew = syscall.Write(pcb.fd, pcb.buffer[pcb.size:])
+		if ew == syscall.EAGAIN {
+			return false
+		}
+
+		// if ew is nil, accumulate bytes written
+		if ew == nil {
+			pcb.size += nw
+		}
 	}
 
 	// all bytes written or has error

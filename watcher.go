@@ -5,6 +5,7 @@
 package gaio
 
 import (
+	"container/list"
 	"errors"
 	"net"
 	"sync"
@@ -63,9 +64,10 @@ type Watcher struct {
 	chPendingNotify   chan struct{}
 	chIOCompletion    chan OpResult
 
-	// lock for pending
-	pendingReaders map[int][]aiocb
-	pendingWriters map[int][]aiocb
+	// lock for pending io operations
+	// aiocb is associated to fd
+	pendingReaders map[int][]*aiocb
+	pendingWriters map[int][]*aiocb
 	pendingMutex   sync.Mutex
 
 	// internal buffer for reading
@@ -102,8 +104,8 @@ func CreateWatcher(bufsize int) (*Watcher, error) {
 	w.chIOCompletion = make(chan OpResult)
 
 	// loop related map
-	w.pendingReaders = make(map[int][]aiocb)
-	w.pendingWriters = make(map[int][]aiocb)
+	w.pendingReaders = make(map[int][]*aiocb)
+	w.pendingWriters = make(map[int][]*aiocb)
 
 	// hold net.Conn only
 	w.conns = make(map[int]net.Conn)
@@ -202,7 +204,7 @@ func (w *Watcher) Read(ctx interface{}, fd int, buf []byte) error {
 		return ErrWatcherClosed
 	default:
 		w.pendingMutex.Lock()
-		w.pendingReaders[fd] = append(w.pendingReaders[fd], aiocb{ctx: ctx, fd: fd, buffer: buf})
+		w.pendingReaders[fd] = append(w.pendingReaders[fd], &aiocb{ctx: ctx, fd: fd, buffer: buf})
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()
@@ -224,7 +226,7 @@ func (w *Watcher) Write(ctx interface{}, fd int, buf []byte) error {
 		return ErrWatcherClosed
 	default:
 		w.pendingMutex.Lock()
-		w.pendingWriters[fd] = append(w.pendingWriters[fd], aiocb{ctx: ctx, fd: fd, buffer: buf})
+		w.pendingWriters[fd] = append(w.pendingWriters[fd], &aiocb{ctx: ctx, fd: fd, buffer: buf})
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()
@@ -278,34 +280,32 @@ func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
 
 // the core event loop of this watcher
 func (w *Watcher) loop() {
-	queuedReaders := make(map[int][]aiocb)
-	queuedWriters := make(map[int][]aiocb)
+	queuedReaders := make(map[int]*list.List)
+	queuedWriters := make(map[int]*list.List)
 
 	// nonblocking queue ops on fd
 	tryReadAll := func(fd int) {
-		for {
-			if len(queuedReaders[fd]) == 0 {
-				break
-			}
-
-			if w.tryRead(&queuedReaders[fd][0]) {
-				queuedReaders[fd] = queuedReaders[fd][1:]
-			} else {
-				break
+		if l, ok := queuedReaders[fd]; ok {
+			for l.Len() > 0 {
+				elem := l.Front()
+				if w.tryRead(elem.Value.(*aiocb)) {
+					l.Remove(elem)
+				} else {
+					return
+				}
 			}
 		}
 	}
 
 	tryWriteAll := func(fd int) {
-		for {
-			if len(queuedWriters[fd]) == 0 {
-				break
-			}
-
-			if w.tryWrite(&queuedWriters[fd][0]) {
-				queuedWriters[fd] = queuedWriters[fd][1:]
-			} else {
-				break
+		if l, ok := queuedWriters[fd]; ok {
+			for l.Len() > 0 {
+				elem := l.Front()
+				if w.tryWrite(elem.Value.(*aiocb)) {
+					l.Remove(elem)
+				} else {
+					return
+				}
 			}
 		}
 	}
@@ -317,12 +317,26 @@ func (w *Watcher) loop() {
 			rfds := make([]int, 0, len(w.pendingReaders))
 			wfds := make([]int, 0, len(w.pendingWriters))
 			for fd, cbs := range w.pendingReaders {
-				queuedReaders[fd] = append(queuedReaders[fd], cbs...)
+				l, ok := queuedReaders[fd]
+				if !ok {
+					l = list.New()
+					queuedReaders[fd] = l
+				}
+				for i := range cbs {
+					l.PushBack(cbs[i])
+				}
 				rfds = append(rfds, fd)
 				delete(w.pendingReaders, fd)
 			}
 			for fd, cbs := range w.pendingWriters {
-				queuedWriters[fd] = append(queuedWriters[fd], cbs...)
+				l, ok := queuedWriters[fd]
+				if !ok {
+					l = list.New()
+					queuedWriters[fd] = l
+				}
+				for i := range cbs {
+					l.PushBack(cbs[i])
+				}
 				wfds = append(wfds, fd)
 				delete(w.pendingWriters, fd)
 			}

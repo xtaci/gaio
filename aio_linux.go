@@ -2,14 +2,16 @@
 
 package gaio
 
-import "golang.org/x/sys/unix"
+import "syscall"
+
+const EPOLLET = 0x80000000
 
 type poller struct {
 	pfd int // epoll fd
 }
 
 func openPoll() (*poller, error) {
-	fd, err := unix.EpollCreate1(0)
+	fd, err := syscall.EpollCreate1(0)
 	if err != nil {
 		return nil, err
 	}
@@ -19,26 +21,26 @@ func openPoll() (*poller, error) {
 	return p, err
 }
 
-func (p *poller) Close() error { return unix.Close(p.pfd) }
+func (p *poller) Close() error { return syscall.Close(p.pfd) }
 
 func (p *poller) Watch(fd int) error {
-	return unix.EpollCtl(p.pfd, unix.EPOLL_CTL_ADD, fd, &unix.EpollEvent{Fd: int32(fd), Events: unix.EPOLLIN | unix.EPOLLOUT | unix.EPOLLET})
+	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, fd, &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN | syscall.EPOLLOUT | EPOLLET})
 }
 
 func (p *poller) Unwatch(fd int) error {
-	return unix.EpollCtl(p.pfd, unix.EPOLL_CTL_DEL, fd, &unix.EpollEvent{Fd: int32(fd), Events: unix.EPOLLIN | unix.EPOLLOUT})
+	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_DEL, fd, &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN | syscall.EPOLLOUT | EPOLLET})
 }
 
 func (p *poller) Wait(chReadableNotify chan int, chWriteableNotify chan int, die chan struct{}) error {
-	events := make([]unix.EpollEvent, 64)
+	events := make([]syscall.EpollEvent, 64)
 	for {
-		n, err := unix.EpollWait(p.pfd, events, -1)
-		if err != nil && err != unix.EINTR {
+		n, err := syscall.EpollWait(p.pfd, events, -1)
+		if err != nil && err != syscall.EINTR {
 			return err
 		}
 
 		for i := 0; i < n; i++ {
-			if events[i].Events&unix.EPOLLIN > 0 {
+			if events[i].Events&syscall.EPOLLIN > 0 {
 				select {
 				case chReadableNotify <- int(events[i].Fd):
 				case <-die:
@@ -46,7 +48,7 @@ func (p *poller) Wait(chReadableNotify chan int, chWriteableNotify chan int, die
 				}
 
 			}
-			if events[i].Events&unix.EPOLLOUT > 0 {
+			if events[i].Events&syscall.EPOLLOUT > 0 {
 				select {
 				case chWriteableNotify <- int(events[i].Fd):
 				case <-die:

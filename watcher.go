@@ -201,38 +201,33 @@ func (w *Watcher) WaitIO() (r OpResult, err error) {
 // The sequence of notification can guarantee the buffer will not be overwritten
 // before next WaitIO returns
 func (w *Watcher) Read(ctx interface{}, fd int, buf []byte) error {
-	return w.ReadTimeout(ctx, fd, buf, time.Time{})
+	return w.aioCreate(ctx, OpRead, fd, buf, time.Time{})
 }
 
 // ReadTimeout like above, submits an aysnc Read requests with timeout to be notified via WaitIO()
 func (w *Watcher) ReadTimeout(ctx interface{}, fd int, buf []byte, deadline time.Time) error {
-	select {
-	case <-w.die:
-		return ErrWatcherClosed
-	default:
-		w.pendingMutex.Lock()
-		w.pending[fd] = append(w.pending[fd], &aiocb{op: OpRead, ctx: ctx, fd: fd, buffer: buf, deadline: deadline})
-		w.pendingMutex.Unlock()
-
-		w.notifyPending()
-		return nil
-	}
+	return w.aioCreate(ctx, OpRead, fd, buf, deadline)
 }
 
 // Write submits a write requests to be notifed via WaitIO()
 //
 // the notification order of Write is guaranteed to be sequential.
 func (w *Watcher) Write(ctx interface{}, fd int, buf []byte) error {
-	return w.WriteTimeout(ctx, fd, buf, time.Time{})
+	return w.aioCreate(ctx, OpWrite, fd, buf, time.Time{})
 }
 
 func (w *Watcher) WriteTimeout(ctx interface{}, fd int, buf []byte, deadline time.Time) error {
+	return w.aioCreate(ctx, OpWrite, fd, buf, deadline)
+}
+
+// core async-io creation
+func (w *Watcher) aioCreate(ctx interface{}, op OpType, fd int, buf []byte, deadline time.Time) error {
 	select {
 	case <-w.die:
 		return ErrWatcherClosed
 	default:
 		w.pendingMutex.Lock()
-		w.pending[fd] = append(w.pending[fd], &aiocb{op: OpWrite, ctx: ctx, fd: fd, buffer: buf, deadline: deadline})
+		w.pending[fd] = append(w.pending[fd], &aiocb{op: op, ctx: ctx, fd: fd, buffer: buf, deadline: deadline})
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()

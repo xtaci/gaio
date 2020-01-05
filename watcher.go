@@ -83,7 +83,7 @@ type Watcher struct {
 	die     chan struct{}
 	dieOnce sync.Once
 
-	// hold net.Conn to prevent from GC
+	// hold net.Conn to avoid GC
 	conns      map[int]net.Conn
 	connsMutex sync.Mutex
 }
@@ -164,7 +164,7 @@ func (w *Watcher) Watch(conn net.Conn) (fd int, err error) {
 		return 0, err
 	}
 
-	// prevent conn from GC
+	// avoid GC of conn
 	w.connsMutex.Lock()
 	w.conns[fd] = conn
 	w.connsMutex.Unlock()
@@ -362,8 +362,8 @@ func (w *Watcher) loop() {
 					}
 				}
 				delete(w.pending, fd)
-				// NOTE: API WaitIO prevents cross-deadlock on chan and mutex from happening.
-				// then we can tryReadAll() to complete IO.
+				// NOTE: API WaitIO avoids cross-deadlock between chan and mutex
+				// then we can try to complete IO here.
 				w.tryReadAll(lr)
 				w.tryWriteAll(lw)
 			}
@@ -393,7 +393,7 @@ func (w *Watcher) loop() {
 					}
 				}
 
-				// notify deadline
+				// ErrDeadline
 				select {
 				case w.chIOCompletion <- OpResult{Op: pcb.op, Fd: pcb.fd, Buffer: pcb.buffer, Size: pcb.size, Err: ErrDeadline, Context: pcb.ctx}:
 				case <-w.die:

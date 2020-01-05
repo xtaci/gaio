@@ -354,17 +354,18 @@ func (w *Watcher) loop() {
 				}
 
 				for i := range cbs {
-					switch cbs[i].op {
+					pcb := cbs[i]
+					switch pcb.op {
 					case OpRead:
-						lr.PushBack(cbs[i])
+						lr.PushBack(pcb)
 					case OpWrite:
-						lw.PushBack(cbs[i])
+						lw.PushBack(pcb)
 					}
 
-					if !cbs[i].deadline.IsZero() {
+					if !pcb.deadline.IsZero() {
 						SystemTimedSched.Put(func() {
-							chTimeouts <- cbs[i]
-						}, cbs[i].deadline)
+							chTimeouts <- pcb
+						}, pcb.deadline)
 					}
 				}
 				delete(w.pending, fd)

@@ -11,6 +11,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/xtaci/gaio/internal"
 )
 
 var (
@@ -363,7 +365,7 @@ func (w *Watcher) loop() {
 					}
 
 					if !pcb.deadline.IsZero() {
-						SystemTimedSched.Put(func() {
+						internal.SystemTimedSched.Put(func() {
 							chTimeouts <- pcb
 						}, pcb.deadline)
 					}

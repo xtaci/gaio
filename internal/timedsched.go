@@ -1,4 +1,4 @@
-package gaio
+package internal
 
 import (
 	"container/heap"

@@ -30,13 +30,14 @@ const (
 
 // aiocb contains all info for a request
 type aiocb struct {
-	op       OpType
-	ctx      interface{}
-	fd       int
-	buffer   []byte
-	internal bool // mark if the buffer is internal
-	size     int
-	deadline time.Time
+	ctx       interface{}
+	op        OpType
+	fd        int
+	size      int
+	buffer    []byte
+	completed bool // mark the aiocb is complete
+	internal  bool // mark if the buffer is internal
+	deadline  time.Time
 }
 
 // OpResult is the result of an aysnc-io
@@ -251,6 +252,7 @@ func (w *Watcher) tryRead(pcb *aiocb) (complete bool) {
 	}
 	select {
 	case w.chIOCompletion <- OpResult{Op: OpRead, Fd: pcb.fd, Buffer: buf, Size: nr, Err: er, Context: pcb.ctx}:
+		pcb.completed = true
 		return true
 	case <-w.die:
 		return false
@@ -277,6 +279,7 @@ func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
 	if pcb.size == len(pcb.buffer) || ew != nil {
 		select {
 		case w.chIOCompletion <- OpResult{Op: OpWrite, Fd: pcb.fd, Buffer: pcb.buffer, Size: nw, Err: ew, Context: pcb.ctx}:
+			pcb.completed = true
 			return true
 		case <-w.die:
 			return false
@@ -366,23 +369,26 @@ func (w *Watcher) loop() {
 			delete(queuedWriters, fd)
 		case e := <-chTimeouts:
 			pcb := e.Value.(*aiocb)
-			switch pcb.op {
-			case OpRead:
-				l, ok := queuedReaders[pcb.fd]
-				if ok {
-					l.Remove(e)
+			if !pcb.completed {
+				switch pcb.op {
+				case OpRead:
+					l, ok := queuedReaders[pcb.fd]
+					if ok {
+						l.Remove(e)
+					}
+				case OpWrite:
+					l, ok := queuedWriters[pcb.fd]
+					if ok {
+						l.Remove(e)
+					}
 				}
-			case OpWrite:
-				l, ok := queuedWriters[pcb.fd]
-				if ok {
-					l.Remove(e)
-				}
-			}
 
-			// notify deadline
-			select {
-			case w.chIOCompletion <- OpResult{Op: pcb.op, Fd: pcb.fd, Buffer: pcb.buffer, Size: pcb.size, Err: ErrDeadline, Context: pcb.ctx}:
-			case <-w.die:
+				// notify deadline
+				select {
+				case w.chIOCompletion <- OpResult{Op: pcb.op, Fd: pcb.fd, Buffer: pcb.buffer, Size: pcb.size, Err: ErrDeadline, Context: pcb.ctx}:
+				case <-w.die:
+					return
+				}
 			}
 		case <-w.die:
 			return

@@ -30,6 +30,7 @@ const (
 
 // aiocb contains all info for a request
 type aiocb struct {
+	op       OpType
 	ctx      interface{}
 	fd       int
 	buffer   []byte
@@ -69,9 +70,8 @@ type Watcher struct {
 
 	// lock for pending io operations
 	// aiocb is associated to fd
-	pendingReaders map[int][]*aiocb
-	pendingWriters map[int][]*aiocb
-	pendingMutex   sync.Mutex
+	pending      map[int][]*aiocb
+	pendingMutex sync.Mutex
 
 	// internal buffer for reading
 	swapBuffer chan []byte
@@ -107,8 +107,7 @@ func CreateWatcher(bufsize int) (*Watcher, error) {
 	w.chIOCompletion = make(chan OpResult)
 
 	// loop related map
-	w.pendingReaders = make(map[int][]*aiocb)
-	w.pendingWriters = make(map[int][]*aiocb)
+	w.pending = make(map[int][]*aiocb)
 
 	// hold net.Conn only
 	w.conns = make(map[int]net.Conn)
@@ -212,7 +211,7 @@ func (w *Watcher) ReadTimeout(ctx interface{}, fd int, buf []byte, deadline time
 		return ErrWatcherClosed
 	default:
 		w.pendingMutex.Lock()
-		w.pendingReaders[fd] = append(w.pendingReaders[fd], &aiocb{ctx: ctx, fd: fd, buffer: buf, deadline: deadline})
+		w.pending[fd] = append(w.pending[fd], &aiocb{op: OpRead, ctx: ctx, fd: fd, buffer: buf, deadline: deadline})
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()
@@ -233,7 +232,7 @@ func (w *Watcher) WriteTimeout(ctx interface{}, fd int, buf []byte, deadline tim
 		return ErrWatcherClosed
 	default:
 		w.pendingMutex.Lock()
-		w.pendingWriters[fd] = append(w.pendingWriters[fd], &aiocb{ctx: ctx, fd: fd, buffer: buf, deadline: deadline})
+		w.pending[fd] = append(w.pending[fd], &aiocb{op: OpWrite, ctx: ctx, fd: fd, buffer: buf, deadline: deadline})
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()
@@ -322,44 +321,43 @@ func (w *Watcher) loop() {
 		}
 	}
 
+	chTimeouts := make(chan *list.Element)
+
 	for {
 		select {
 		case <-w.chPendingNotify:
 			w.pendingMutex.Lock()
-			for fd, cbs := range w.pendingReaders {
-				l, ok := queuedReaders[fd]
+			for fd, cbs := range w.pending {
+				lr, ok := queuedReaders[fd]
 				if !ok {
-					l = list.New()
-					queuedReaders[fd] = l
+					lr = list.New()
+					queuedReaders[fd] = lr
 				}
+				lw, ok := queuedWriters[fd]
+				if !ok {
+					lw = list.New()
+					queuedWriters[fd] = lw
+				}
+
 				for i := range cbs {
-					e := l.PushBack(cbs[i])
+					var e *list.Element
+					switch cbs[i].op {
+					case OpRead:
+						e = lr.PushBack(cbs[i])
+					case OpWrite:
+						e = lw.PushBack(cbs[i])
+					}
+
 					if !cbs[i].deadline.IsZero() {
 						SystemTimedSched.Put(func() {
-							l.Remove(e)
+							chTimeouts <- e
 						}, cbs[i].deadline)
 					}
 				}
-				delete(w.pendingReaders, fd)
+				delete(w.pending, fd)
 				// NOTE: API WaitIO prevents cross-deadlock on chan and mutex from happening.
 				// then we can tryReadAll() to complete IO.
 				tryReadAll(fd)
-			}
-			for fd, cbs := range w.pendingWriters {
-				l, ok := queuedWriters[fd]
-				if !ok {
-					l = list.New()
-					queuedWriters[fd] = l
-				}
-				for i := range cbs {
-					e := l.PushBack(cbs[i])
-					if !cbs[i].deadline.IsZero() {
-						SystemTimedSched.Put(func() {
-							l.Remove(e)
-						}, cbs[i].deadline)
-					}
-				}
-				delete(w.pendingWriters, fd)
 				tryWriteAll(fd)
 			}
 			w.pendingMutex.Unlock()
@@ -370,6 +368,26 @@ func (w *Watcher) loop() {
 		case fd := <-w.chStopWatchNotify:
 			delete(queuedReaders, fd)
 			delete(queuedWriters, fd)
+		case e := <-chTimeouts:
+			pcb := e.Value.(*aiocb)
+			switch pcb.op {
+			case OpRead:
+				l, ok := queuedReaders[pcb.fd]
+				if ok {
+					l.Remove(e)
+				}
+			case OpWrite:
+				l, ok := queuedWriters[pcb.fd]
+				if ok {
+					l.Remove(e)
+				}
+			}
+
+			// notify deadline
+			select {
+			case w.chIOCompletion <- OpResult{Op: pcb.op, Fd: pcb.fd, Buffer: pcb.buffer, Size: pcb.size, Err: ErrDeadline, Context: pcb.ctx}:
+			case <-w.die:
+			}
 		case <-w.die:
 			return
 		}

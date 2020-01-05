@@ -14,30 +14,33 @@ import (
 )
 
 var (
-	ErrNoRawConn     = errors.New("net.Conn does implement net.RawConn")
+	// ErrNoRawConn means the connection has not implemented SyscallConn
+	ErrNoRawConn = errors.New("net.Conn does implement net.RawConn")
+	// ErrWatcherClosed means the watcher is closed
 	ErrWatcherClosed = errors.New("watcher closed")
-	ErrDeadline      = errors.New("operation exceeded deadline")
+	// ErrDeadline means the specific operation has exceeded deadline before completion
+	ErrDeadline = errors.New("operation exceeded deadline")
 )
 
-// Operation Type
+// OpType defines Operation Type
 type OpType int
 
 const (
-	// identify operation type on OpResult
+	// OpRead means the aiocb is a read operation
 	OpRead OpType = iota
+	// OpWrite means the aiocb is a write operation
 	OpWrite
 )
 
 // aiocb contains all info for a request
 type aiocb struct {
-	ctx       interface{}
-	op        OpType
-	fd        int
-	size      int
-	buffer    []byte
-	completed bool // mark the aiocb is complete
-	internal  bool // mark if the buffer is internal
-	deadline  time.Time
+	ctx          interface{} // user context associated with this request
+	op           OpType      // read or write
+	fd           int
+	size         int // size received or sent
+	buffer       []byte
+	hasCompleted bool // mark this aiocb has completed
+	deadline     time.Time
 }
 
 // OpResult is the result of an aysnc-io
@@ -156,7 +159,10 @@ func (w *Watcher) Watch(conn net.Conn) (fd int, err error) {
 	}
 
 	// poll this fd
-	w.pfd.Watch(fd)
+	err = w.pfd.Watch(fd)
+	if err != nil {
+		return 0, err
+	}
 
 	// prevent conn from GC
 	w.connsMutex.Lock()
@@ -166,16 +172,24 @@ func (w *Watcher) Watch(conn net.Conn) (fd int, err error) {
 }
 
 // StopWatch events related to this fd
-func (w *Watcher) StopWatch(fd int) {
-	w.pfd.Unwatch(fd)
+func (w *Watcher) StopWatch(fd int) error {
+	err := w.pfd.Unwatch(fd)
+	if err != nil {
+		return err
+	}
+
+	// delete reference
 	w.connsMutex.Lock()
 	delete(w.conns, fd)
 	w.connsMutex.Unlock()
 
+	// notify eventloop
 	select {
 	case w.chStopWatchNotify <- fd:
 	case <-w.die:
+		return ErrWatcherClosed
 	}
+	return nil
 }
 
 // notify new operations pending
@@ -186,7 +200,7 @@ func (w *Watcher) notifyPending() {
 	}
 }
 
-// Wait blocks until any read/write completion, or error
+// WaitIO blocks until any read/write completion, or error
 func (w *Watcher) WaitIO() (r OpResult, err error) {
 	select {
 	case r := <-w.chIOCompletion:
@@ -252,7 +266,7 @@ func (w *Watcher) tryRead(pcb *aiocb) (complete bool) {
 	}
 	select {
 	case w.chIOCompletion <- OpResult{Op: OpRead, Fd: pcb.fd, Buffer: buf, Size: nr, Err: er, Context: pcb.ctx}:
-		pcb.completed = true
+		pcb.hasCompleted = true
 		return true
 	case <-w.die:
 		return false
@@ -279,7 +293,7 @@ func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
 	if pcb.size == len(pcb.buffer) || ew != nil {
 		select {
 		case w.chIOCompletion <- OpResult{Op: OpWrite, Fd: pcb.fd, Buffer: pcb.buffer, Size: nw, Err: ew, Context: pcb.ctx}:
-			pcb.completed = true
+			pcb.hasCompleted = true
 			return true
 		case <-w.die:
 			return false
@@ -367,16 +381,14 @@ func (w *Watcher) loop() {
 			delete(queuedWriters, fd)
 		case e := <-chTimeouts:
 			pcb := e.Value.(*aiocb)
-			if !pcb.completed {
+			if !pcb.hasCompleted {
 				switch pcb.op {
 				case OpRead:
-					l, ok := queuedReaders[pcb.fd]
-					if ok {
+					if l, ok := queuedReaders[pcb.fd]; ok {
 						l.Remove(e)
 					}
 				case OpWrite:
-					l, ok := queuedWriters[pcb.fd]
-					if ok {
+					if l, ok := queuedWriters[pcb.fd]; ok {
 						l.Remove(e)
 					}
 				}

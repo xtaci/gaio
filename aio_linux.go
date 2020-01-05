@@ -4,6 +4,7 @@ package gaio
 
 import "syscall"
 
+// EPOLLET value is incorrect in syscall
 const EPOLLET = 0x80000000
 
 type poller struct {

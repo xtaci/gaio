@@ -38,12 +38,23 @@ For complete documentation, see the associated [Godoc](https://godoc.org/github.
 
 An Echo-server with 64KB receiving buffer
 ```
+=== Macbook Pro ===
 BenchmarkEcho-4   	2019/12/24 15:42:16
     1485	    743233 ns/op	1410.83 MB/s	    1593 B/op	      32 allocs/op
 --- BENCH: BenchmarkEcho-4
     aio_test.go:180: sending 1048576 bytes for 1 times
     aio_test.go:180: sending 1048576 bytes for 100 times
     aio_test.go:180: sending 1048576 bytes for 1485 times
+```
+```
+=== Raspberry Pi 4===
+BenchmarkEcho-4         2020/01/05 22:15:29
+     500           3465074 ns/op         302.61 MB/s        4104 B/op        160 allocs/op
+--- BENCH: BenchmarkEcho-4
+    aio_test.go:288: sending 1048576 bytes for 1 times
+    aio_test.go:288: sending 1048576 bytes for 100 times
+    aio_test.go:288: sending 1048576 bytes for 500 times
+
 ```
 
 ## Usage

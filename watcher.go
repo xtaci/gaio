@@ -254,6 +254,10 @@ func (w *Watcher) aioCreate(ctx interface{}, op OpType, fd int, buf []byte, dead
 // tryRead will try to read data on aiocb and notify
 // returns true if IO has completed, false means not.
 func (w *Watcher) tryRead(pcb *aiocb) (complete bool) {
+	if pcb.hasCompleted {
+		return true
+	}
+
 	buf := pcb.buffer
 	if buf == nil { // internal buffer
 		buf = <-w.swapBuffer
@@ -276,6 +280,10 @@ func (w *Watcher) tryRead(pcb *aiocb) (complete bool) {
 func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
 	var nw int
 	var ew error
+
+	if pcb.hasCompleted {
+		return true
+	}
 
 	if pcb.buffer != nil {
 		nw, ew = syscall.Write(pcb.fd, pcb.buffer[pcb.size:])
@@ -328,7 +336,7 @@ func (w *Watcher) tryWriteAll(l *list.List) {
 func (w *Watcher) loop() {
 	queuedReaders := make(map[int]*list.List)
 	queuedWriters := make(map[int]*list.List)
-	chTimeouts := make(chan *list.Element)
+	chTimeouts := make(chan *aiocb)
 
 	for {
 		select {
@@ -347,17 +355,16 @@ func (w *Watcher) loop() {
 				}
 
 				for i := range cbs {
-					var e *list.Element
 					switch cbs[i].op {
 					case OpRead:
-						e = lr.PushBack(cbs[i])
+						lr.PushBack(cbs[i])
 					case OpWrite:
-						e = lw.PushBack(cbs[i])
+						lw.PushBack(cbs[i])
 					}
 
 					if !cbs[i].deadline.IsZero() {
 						SystemTimedSched.Put(func() {
-							chTimeouts <- e
+							chTimeouts <- cbs[i]
 						}, cbs[i].deadline)
 					}
 				}
@@ -379,23 +386,12 @@ func (w *Watcher) loop() {
 		case fd := <-w.chStopWatchNotify:
 			delete(queuedReaders, fd)
 			delete(queuedWriters, fd)
-		case e := <-chTimeouts:
-			pcb := e.Value.(*aiocb)
+		case pcb := <-chTimeouts:
 			if !pcb.hasCompleted {
-				switch pcb.op {
-				case OpRead:
-					if l, ok := queuedReaders[pcb.fd]; ok {
-						l.Remove(e)
-					}
-				case OpWrite:
-					if l, ok := queuedWriters[pcb.fd]; ok {
-						l.Remove(e)
-					}
-				}
-
 				// ErrDeadline
 				select {
 				case w.chIOCompletion <- OpResult{Op: pcb.op, Fd: pcb.fd, Buffer: pcb.buffer, Size: pcb.size, Err: ErrDeadline, Context: pcb.ctx}:
+					pcb.hasCompleted = true
 				case <-w.die:
 					return
 				}

@@ -85,6 +85,7 @@ func (p *poller) Wait(chReadableNotify chan int, chWriteableNotify chan int, die
 					select {
 					case chReadableNotify <- int(events[i].Ident):
 					case <-die:
+						return nil
 					}
 
 				}
@@ -92,6 +93,7 @@ func (p *poller) Wait(chReadableNotify chan int, chWriteableNotify chan int, die
 					select {
 					case chWriteableNotify <- int(events[i].Ident):
 					case <-die:
+						return nil
 					}
 				}
 			}

@@ -216,6 +216,7 @@ func (w *Watcher) Write(ctx interface{}, fd int, buf []byte) error {
 	return w.aioCreate(ctx, OpWrite, fd, buf, time.Time{})
 }
 
+// WriteTimeout like above, submits an aysnc Write requests with timeout to be notified via WaitIO()
 func (w *Watcher) WriteTimeout(ctx interface{}, fd int, buf []byte, deadline time.Time) error {
 	return w.aioCreate(ctx, OpWrite, fd, buf, deadline)
 }

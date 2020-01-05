@@ -288,38 +288,32 @@ func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
 	return false
 }
 
+func (w *Watcher) tryReadAll(l *list.List) {
+	for l.Len() > 0 {
+		elem := l.Front()
+		if w.tryRead(elem.Value.(*aiocb)) {
+			l.Remove(elem)
+		} else {
+			return
+		}
+	}
+}
+
+func (w *Watcher) tryWriteAll(l *list.List) {
+	for l.Len() > 0 {
+		elem := l.Front()
+		if w.tryWrite(elem.Value.(*aiocb)) {
+			l.Remove(elem)
+		} else {
+			return
+		}
+	}
+}
+
 // the core event loop of this watcher
 func (w *Watcher) loop() {
 	queuedReaders := make(map[int]*list.List)
 	queuedWriters := make(map[int]*list.List)
-
-	// nonblocking queue ops on fd
-	tryReadAll := func(fd int) {
-		if l, ok := queuedReaders[fd]; ok {
-			for l.Len() > 0 {
-				elem := l.Front()
-				if w.tryRead(elem.Value.(*aiocb)) {
-					l.Remove(elem)
-				} else {
-					return
-				}
-			}
-		}
-	}
-
-	tryWriteAll := func(fd int) {
-		if l, ok := queuedWriters[fd]; ok {
-			for l.Len() > 0 {
-				elem := l.Front()
-				if w.tryWrite(elem.Value.(*aiocb)) {
-					l.Remove(elem)
-				} else {
-					return
-				}
-			}
-		}
-	}
-
 	chTimeouts := make(chan *list.Element)
 
 	for {
@@ -356,14 +350,18 @@ func (w *Watcher) loop() {
 				delete(w.pending, fd)
 				// NOTE: API WaitIO prevents cross-deadlock on chan and mutex from happening.
 				// then we can tryReadAll() to complete IO.
-				tryReadAll(fd)
-				tryWriteAll(fd)
+				w.tryReadAll(lr)
+				w.tryWriteAll(lw)
 			}
 			w.pendingMutex.Unlock()
 		case fd := <-w.chReadableNotify:
-			tryReadAll(fd)
+			if l, ok := queuedReaders[fd]; ok {
+				w.tryReadAll(l)
+			}
 		case fd := <-w.chWritableNotify:
-			tryWriteAll(fd)
+			if l, ok := queuedWriters[fd]; ok {
+				w.tryWriteAll(l)
+			}
 		case fd := <-w.chStopWatchNotify:
 			delete(queuedReaders, fd)
 			delete(queuedWriters, fd)

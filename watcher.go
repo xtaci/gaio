@@ -16,6 +16,7 @@ import (
 var (
 	ErrNoRawConn     = errors.New("net.Conn does implement net.RawConn")
 	ErrWatcherClosed = errors.New("watcher closed")
+	ErrDeadline      = errors.New("operation exceeded deadline")
 )
 
 // Operation Type
@@ -332,7 +333,12 @@ func (w *Watcher) loop() {
 					queuedReaders[fd] = l
 				}
 				for i := range cbs {
-					l.PushBack(cbs[i])
+					e := l.PushBack(cbs[i])
+					if !cbs[i].deadline.IsZero() {
+						SystemTimedSched.Put(func() {
+							l.Remove(e)
+						}, cbs[i].deadline)
+					}
 				}
 				delete(w.pendingReaders, fd)
 				// NOTE: API WaitIO prevents cross-deadlock on chan and mutex from happening.
@@ -346,7 +352,12 @@ func (w *Watcher) loop() {
 					queuedWriters[fd] = l
 				}
 				for i := range cbs {
-					l.PushBack(cbs[i])
+					e := l.PushBack(cbs[i])
+					if !cbs[i].deadline.IsZero() {
+						SystemTimedSched.Put(func() {
+							l.Remove(e)
+						}, cbs[i].deadline)
+					}
 				}
 				delete(w.pendingWriters, fd)
 				tryWriteAll(fd)

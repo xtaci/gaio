@@ -47,23 +47,22 @@ type aiocb struct {
 type OpResult struct {
 	// Operation Type
 	Op OpType
-	// A Context along with requests
+	// User context associated with this requests
 	Context interface{}
 	// Related file descriptor to this result
 	Fd int
-	// If the operation is Write, buffer is the original committed one,
-	// if the operation is Read, buffer points to a internal buffer, you need
-	// to process immediately, or copy and save by yourself.
+	// Buffer points to user's supplied buffer or watcher's internal swap buffer
 	Buffer []byte
 	// Number of bytes sent or received, Buffer[:Size] is the content sent or received.
 	Size int
-	// IO error
+	// IO error,timeout error
 	Err error
 }
 
 // Watcher will monitor events and process async-io request(s),
 type Watcher struct {
-	pfd *poller // poll fd
+	// poll fd
+	pfd *poller
 
 	// loop
 	chReadableNotify  chan int

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"testing"
+	"time"
 )
 
 func init() {
@@ -127,6 +128,52 @@ func TestEchoTiny(t *testing.T) {
 	}
 
 	t.Log("rx:", string(tx))
+	conn.Close()
+}
+
+func TestDeadline(t *testing.T) {
+	ln := echoServer(t)
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w, err := CreateWatcher(bufSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fd, err := w.Watch(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	die := make(chan struct{})
+	go func() {
+		for {
+			res, err := w.WaitIO()
+			if err != nil {
+				t.Log(err)
+				return
+			}
+
+			switch res.Op {
+			case OpRead:
+				if res.Err != ErrDeadline {
+					t.Fatal(res.Err, "mismatch")
+				}
+				close(die)
+				return
+			}
+		}
+	}()
+
+	// read with timeout
+	err = w.ReadTimeout(nil, fd, nil, time.Now().Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-die
 	conn.Close()
 }
 

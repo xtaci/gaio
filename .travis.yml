@@ -12,7 +12,7 @@ install:
     - go get github.com/xtaci/gaio
 
 script:
-    - go test -v -run -bench .
+    - go test -v -bench .
     - go test -coverprofile=coverage.txt -covermode=atomic -bench .
 
 after_success:

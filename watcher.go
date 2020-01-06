@@ -343,7 +343,11 @@ func (w *Watcher) loop() {
 		select {
 		case <-w.chPendingNotify:
 			w.pendingMutex.Lock()
-			for fd, cbs := range w.pending {
+			pending := w.pending
+			w.pending = make(map[int][]*aiocb)
+			w.pendingMutex.Unlock()
+
+			for fd, cbs := range pending {
 				lr, ok := queuedReaders[fd]
 				if !ok {
 					lr = list.New()
@@ -371,12 +375,9 @@ func (w *Watcher) loop() {
 					}
 				}
 				delete(w.pending, fd)
-				// NOTE: API WaitIO avoids cross-deadlock between chan and mutex
-				// then we can try to complete IO here.
 				w.tryReadAll(lr)
 				w.tryWriteAll(lw)
 			}
-			w.pendingMutex.Unlock()
 		case fd := <-w.chReadableNotify:
 			if l, ok := queuedReaders[fd]; ok {
 				w.tryReadAll(l)

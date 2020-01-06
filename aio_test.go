@@ -266,6 +266,71 @@ func TestBidirectionWatcher(t *testing.T) {
 	conn.Close()
 }
 
+func Test1K(t *testing.T) {
+	const par = 1024
+	ln := echoServer(t)
+
+	w, err := CreateWatcher(bufSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data := make([]byte, 1024)
+	die := make(chan struct{})
+	go func() {
+		nbytes := 0
+		ntotal := len(data) * par
+		for {
+			res, err := w.WaitIO()
+			if err != nil {
+				t.Log(err)
+				return
+			}
+
+			switch res.Op {
+			case OpWrite:
+				// recv
+				if res.Err != nil {
+					t.Fatal(res.Err)
+				}
+
+				err := w.Read(nil, res.Fd, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+			case OpRead:
+				if res.Err != nil {
+					t.Fatal(err)
+				}
+				nbytes += res.Size
+				if nbytes >= ntotal {
+					t.Log("completed:", nbytes)
+					close(die)
+					return
+				}
+			}
+		}
+	}()
+
+	for i := 0; i < par; i++ {
+		conn, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fd, err := w.Watch(conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// send
+		err = w.Write(nil, fd, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-die
+}
+
 func BenchmarkEcho(b *testing.B) {
 	ln := echoServer(b)
 

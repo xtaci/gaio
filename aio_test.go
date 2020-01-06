@@ -47,14 +47,13 @@ func echoServer(t testing.TB) net.Listener {
 				if res.Err != nil {
 					log.Println("read error:", res.Err, res.Size)
 					delete(wbuffers, res.Fd)
-					w.StopWatch(res.Fd)
+					w.CloseConn(res.Fd)
 					continue
 				}
 
 				if res.Size == 0 {
-					log.Println("client closed")
 					delete(wbuffers, res.Fd)
-					w.StopWatch(res.Fd)
+					w.CloseConn(res.Fd)
 					continue
 				}
 
@@ -71,7 +70,7 @@ func echoServer(t testing.TB) net.Listener {
 				if res.Err != nil {
 					log.Println("write error:", res.Err, res.Size)
 					delete(wbuffers, res.Fd)
-					w.StopWatch(res.Fd)
+					w.CloseConn(res.Fd)
 				}
 				// write complete, start read again
 				w.Read(nil, res.Fd, nil)
@@ -83,15 +82,13 @@ func echoServer(t testing.TB) net.Listener {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
-				log.Println(err)
 				w.Close()
 				return
 			}
 
-			fd, err := w.Watch(conn)
+			fd, err := w.NewConn(conn)
 			if err != nil {
 				w.Close()
-				log.Println(err)
 				return
 			}
 
@@ -147,7 +144,7 @@ func TestDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fd, err := w.Watch(conn)
+	fd, err := w.NewConn(conn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +226,7 @@ func TestBidirectionWatcher(t *testing.T) {
 	}
 	defer w.Close()
 
-	fd, err := w.Watch(conn)
+	fd, err := w.NewConn(conn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +338,7 @@ func testParallel(t *testing.T, par int) {
 			t.Fatal(err)
 		}
 
-		fd, err := w.Watch(conn)
+		fd, err := w.NewConn(conn)
 		if err != nil {
 			t.Fatal(err)
 		}

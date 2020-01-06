@@ -125,16 +125,18 @@ func (w *Watcher) Close() (err error) {
 	w.dieOnce.Do(func() {
 		close(w.die)
 		err = w.pfd.Close()
+		w.connsMutex.Lock()
 		for k := range w.conns {
 			w.conns[k].Close()
 		}
+		w.connsMutex.Unlock()
 	})
 	return err
 }
 
-// Watch starts watching events on `conn`, and returns a file descriptor
+// NewConn starts monitoring events on `conn`, and returns a file descriptor
 // for following IO operations.
-func (w *Watcher) Watch(conn net.Conn) (fd int, err error) {
+func (w *Watcher) NewConn(conn net.Conn) (fd int, err error) {
 	// get file descriptor
 	c, ok := conn.(interface {
 		SyscallConn() (syscall.RawConn, error)
@@ -172,25 +174,24 @@ func (w *Watcher) Watch(conn net.Conn) (fd int, err error) {
 	return fd, nil
 }
 
-// StopWatch events related to this fd
-func (w *Watcher) StopWatch(fd int) error {
-	err := w.pfd.Unwatch(fd)
-	if err != nil {
-		return err
-	}
-
+// CloseConn stops event monitoring on fd, and close the related net.Conn
+func (w *Watcher) CloseConn(fd int) error {
+	_ = w.pfd.Unwatch(fd)
 	// delete reference
 	w.connsMutex.Lock()
-	delete(w.conns, fd)
+	if conn, ok := w.conns[fd]; ok {
+		conn.Close()
+		delete(w.conns, fd)
+	}
 	w.connsMutex.Unlock()
 
 	// notify eventloop
 	select {
 	case w.chStopWatchNotify <- fd:
+		return nil
 	case <-w.die:
 		return ErrWatcherClosed
 	}
-	return nil
 }
 
 // notify new operations pending

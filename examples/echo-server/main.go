@@ -33,14 +33,14 @@ func main() {
 				// handle unexpected read error
 				if res.Err != nil {
 					log.Println("read error")
-					w.StopWatch(res.Fd)
+					w.CloseConn(res.Fd)
 					continue
 				}
 
 				// handle connection close
 				if res.Size == 0 {
 					log.Println("client closed")
-					w.StopWatch(res.Fd)
+					w.CloseConn(res.Fd)
 					continue
 				}
 
@@ -52,7 +52,7 @@ func main() {
 				// handle unexpected write error
 				if res.Err != nil {
 					log.Println("write error")
-					w.StopWatch(res.Fd)
+					w.CloseConn(res.Fd)
 					continue
 				}
 				// write complete, start read again
@@ -68,7 +68,7 @@ func main() {
 			return
 		}
 
-		fd, err := w.Watch(conn)
+		fd, err := w.NewConn(conn)
 		if err != nil {
 			log.Println(err)
 			return

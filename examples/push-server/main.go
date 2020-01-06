@@ -64,7 +64,7 @@ func main() {
 			return
 		}
 
-		fd, err := w.Watch(conn)
+		fd, err := w.NewConn(conn)
 		if err != nil {
 			log.Println(err)
 			return

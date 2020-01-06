@@ -4,8 +4,10 @@ go:
     - 1.12.x
     - 1.13.x
 
+before_script:
+    - ulimit -n 65536
+
 before_install:
-    - ulimit -n 30000
     - go get -t -v ./...
 
 install:

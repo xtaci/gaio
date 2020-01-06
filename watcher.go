@@ -75,7 +75,7 @@ type Watcher struct {
 
 	// lock for pending io operations
 	// aiocb is associated to fd
-	pending      map[int][]*aiocb
+	pending      []*aiocb
 	pendingMutex sync.Mutex
 
 	// internal buffer for reading
@@ -110,9 +110,6 @@ func CreateWatcher(bufsize int) (*Watcher, error) {
 	w.chStopWatchNotify = make(chan int)
 	w.chPendingNotify = make(chan struct{}, 1)
 	w.chIOCompletion = make(chan OpResult)
-
-	// loop related map
-	w.pending = make(map[int][]*aiocb)
 
 	// hold net.Conn only
 	w.conns = make(map[int]net.Conn)
@@ -244,7 +241,7 @@ func (w *Watcher) aioCreate(ctx interface{}, op OpType, fd int, buf []byte, dead
 		return ErrWatcherClosed
 	default:
 		w.pendingMutex.Lock()
-		w.pending[fd] = append(w.pending[fd], &aiocb{op: op, ctx: ctx, fd: fd, buffer: buf, deadline: deadline})
+		w.pending = append(w.pending, &aiocb{op: op, ctx: ctx, fd: fd, buffer: buf, deadline: deadline})
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()
@@ -339,45 +336,57 @@ func (w *Watcher) loop() {
 	queuedWriters := make(map[int]*list.List)
 	chTimeouts := make(chan *aiocb)
 
+	// for copying
+	var pending []*aiocb
+
 	for {
 		select {
 		case <-w.chPendingNotify:
+			// copy from w.pending to local pending
 			w.pendingMutex.Lock()
-			pending := w.pending
-			w.pending = make(map[int][]*aiocb)
+			if cap(pending) < cap(w.pending) {
+				pending = make([]*aiocb, 0, cap(w.pending))
+			}
+			pending = pending[:len(w.pending)]
+			copy(pending, w.pending)
+			w.pending = w.pending[:0]
 			w.pendingMutex.Unlock()
 
-			for fd, cbs := range pending {
-				lr, ok := queuedReaders[fd]
-				if !ok {
-					lr = list.New()
-					queuedReaders[fd] = lr
-				}
-				lw, ok := queuedWriters[fd]
-				if !ok {
-					lw = list.New()
-					queuedWriters[fd] = lw
-				}
-
-				for i := range cbs {
-					pcb := cbs[i]
-					switch pcb.op {
-					case OpRead:
-						lr.PushBack(pcb)
-					case OpWrite:
-						lw.PushBack(pcb)
+			for _, pcb := range pending {
+				switch pcb.op {
+				case OpRead:
+					if w.tryRead(pcb) { // try IO first
+						continue
+					} else {
+						l, ok := queuedReaders[pcb.fd]
+						if !ok {
+							l = list.New()
+							queuedReaders[pcb.fd] = l
+						}
+						l.PushBack(pcb)
 					}
-
-					if !pcb.deadline.IsZero() {
-						internal.SystemTimedSched.Put(func() {
-							chTimeouts <- pcb
-						}, pcb.deadline)
+				case OpWrite:
+					if w.tryWrite(pcb) {
+						continue
+					} else {
+						l, ok := queuedWriters[pcb.fd]
+						if !ok {
+							l = list.New()
+							queuedWriters[pcb.fd] = l
+						}
+						l.PushBack(pcb)
 					}
 				}
-				delete(w.pending, fd)
-				w.tryReadAll(lr)
-				w.tryWriteAll(lw)
+
+				// timer
+				if !pcb.deadline.IsZero() {
+					timedpcb := pcb
+					internal.SystemTimedSched.Put(func() {
+						chTimeouts <- timedpcb
+					}, timedpcb.deadline)
+				}
 			}
+			pending = pending[:0]
 		case fd := <-w.chReadableNotify:
 			if l, ok := queuedReaders[fd]; ok {
 				w.tryReadAll(l)

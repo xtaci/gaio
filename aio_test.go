@@ -266,8 +266,22 @@ func TestBidirectionWatcher(t *testing.T) {
 	conn.Close()
 }
 
-func Test1K(t *testing.T) {
-	const par = 1024
+func Test1k(t *testing.T) {
+	testParallel(t, 1024)
+}
+func Test2k(t *testing.T) {
+	testParallel(t, 2048)
+}
+
+func Test4k(t *testing.T) {
+	testParallel(t, 4096)
+}
+
+func Test8k(t *testing.T) {
+	testParallel(t, 8192)
+}
+
+func testParallel(t *testing.T, par int) {
 	ln := echoServer(t)
 
 	w, err := CreateWatcher(bufSize)

@@ -78,7 +78,8 @@ type Watcher struct {
 	pendingMutex sync.Mutex
 
 	// internal buffer for reading
-	swapBuffer chan []byte
+	swapBuffer     [][]byte
+	nextSwapBuffer int
 
 	die     chan struct{}
 	dieOnce sync.Once
@@ -98,9 +99,9 @@ func CreateWatcher(bufsize int) (*Watcher, error) {
 	w.pfd = pfd
 
 	// swapBuffer for concurrent read
-	w.swapBuffer = make(chan []byte, 2)
-	for i := 0; i < cap(w.swapBuffer); i++ {
-		w.swapBuffer <- make([]byte, bufsize)
+	w.swapBuffer = make([][]byte, 2)
+	for i := 0; i < len(w.swapBuffer); i++ {
+		w.swapBuffer[i] = make([]byte, bufsize)
 	}
 
 	// loop related chan
@@ -256,9 +257,10 @@ func (w *Watcher) tryRead(pcb *aiocb) (complete bool) {
 	}
 
 	buf := pcb.buffer
+	var useSwap bool
 	if buf == nil { // internal buffer
-		buf = <-w.swapBuffer
-		defer func() { w.swapBuffer <- buf }()
+		buf = w.swapBuffer[w.nextSwapBuffer]
+		useSwap = true
 	}
 
 	nr, er := syscall.Read(pcb.fd, buf)
@@ -267,6 +269,10 @@ func (w *Watcher) tryRead(pcb *aiocb) (complete bool) {
 	}
 	select {
 	case w.chIOCompletion <- OpResult{Op: OpRead, Fd: pcb.fd, Buffer: buf, Size: nr, Err: er, Context: pcb.ctx}:
+		// swap buffer if IO successful
+		if useSwap {
+			w.nextSwapBuffer = (w.nextSwapBuffer + 1) % len(w.swapBuffer)
+		}
 		pcb.hasCompleted = true
 		return true
 	case <-w.die:

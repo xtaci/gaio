@@ -281,6 +281,10 @@ func Test8k(t *testing.T) {
 	testParallel(t, 8192)
 }
 
+func Test16k(t *testing.T) {
+	testParallel(t, 16384)
+}
+
 func testParallel(t *testing.T, par int) {
 	ln := echoServer(t)
 

@@ -1,4 +1,7 @@
 language: go
+addons:
+  ulimit:
+    core: unlimited
 go:
     - 1.11.x
     - 1.12.x

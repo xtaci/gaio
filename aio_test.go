@@ -13,21 +13,16 @@ import (
 )
 
 func init() {
-
 	go http.ListenAndServe(":6060", nil)
 }
 
-const (
-	bufSize = 65536
-)
-
-func echoServer(t testing.TB) net.Listener {
+func echoServer(t testing.TB, bufsize int) net.Listener {
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	w, err := CreateWatcher(bufSize)
+	w, err := CreateWatcher(bufsize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +56,7 @@ func echoServer(t testing.TB) net.Listener {
 				// so we only need at most 1 write buffer for a connection
 				buf, ok := wbuffers[res.Fd]
 				if !ok {
-					buf = make([]byte, bufSize)
+					buf = make([]byte, bufsize)
 					wbuffers[res.Fd] = buf
 				}
 				copy(buf, res.Buffer[:res.Size])
@@ -107,7 +102,7 @@ func echoServer(t testing.TB) net.Listener {
 }
 
 func TestEchoTiny(t *testing.T) {
-	ln := echoServer(t)
+	ln := echoServer(t, 1024)
 	defer ln.Close()
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -132,14 +127,14 @@ func TestEchoTiny(t *testing.T) {
 }
 
 func TestDeadline(t *testing.T) {
-	ln := echoServer(t)
+	ln := echoServer(t, 1024)
 	defer ln.Close()
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	w, err := CreateWatcher(bufSize)
+	w, err := CreateWatcher(1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +173,7 @@ func TestDeadline(t *testing.T) {
 }
 
 func TestEchoHuge(t *testing.T) {
-	ln := echoServer(t)
+	ln := echoServer(t, 65536)
 	defer ln.Close()
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -212,14 +207,14 @@ func TestEchoHuge(t *testing.T) {
 }
 
 func TestBidirectionWatcher(t *testing.T) {
-	ln := echoServer(t)
+	ln := echoServer(t, 65536)
 	defer ln.Close()
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	w, err := CreateWatcher(bufSize)
+	w, err := CreateWatcher(65536)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,10 +279,10 @@ func Test8k(t *testing.T) {
 }
 
 func testParallel(t *testing.T, par int) {
-	ln := echoServer(t)
+	ln := echoServer(t, 1024)
 	defer ln.Close()
 
-	w, err := CreateWatcher(bufSize)
+	w, err := CreateWatcher(1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,7 +345,7 @@ func testParallel(t *testing.T, par int) {
 }
 
 func BenchmarkEcho(b *testing.B) {
-	ln := echoServer(b)
+	ln := echoServer(b, 65536)
 	defer ln.Close()
 
 	numLoops := b.N
@@ -361,7 +356,7 @@ func BenchmarkEcho(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	rx := make([]byte, bufSize)
+	rx := make([]byte, 65536)
 
 	conn, err := net.DialTCP("tcp", nil, addr)
 	if err != nil {

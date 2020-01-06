@@ -33,6 +33,12 @@ const (
 	OpWrite
 )
 
+// userspace tracking of fd status
+const (
+	canRead  byte = 1
+	canWrite      = 2
+)
+
 // aiocb contains all info for a request
 type aiocb struct {
 	ctx          interface{} // user context associated with this request
@@ -349,6 +355,9 @@ func (w *Watcher) loop() {
 	queuedWriters := make(map[int][]*aiocb)
 	chTimeouts := make(chan *aiocb)
 
+	// track EPOLLIN and EPOLLOUT
+	fdstatus := make(map[int]byte)
+
 	// for copying
 	var pending []*aiocb
 
@@ -366,20 +375,34 @@ func (w *Watcher) loop() {
 			w.pendingMutex.Unlock()
 
 			for _, pcb := range pending {
+				// load status of fd
+				status, ok := fdstatus[pcb.fd]
+				if !ok { // new fd, init status
+					status = canRead | canWrite
+					fdstatus[pcb.fd] = status
+				}
+
 				switch pcb.op {
 				case OpRead:
-					if len(queuedReaders[pcb.fd]) == 0 {
+					if len(queuedReaders[pcb.fd]) == 0 && status&canRead != 0 {
 						// empty queue should try IO first
 						if w.tryRead(pcb) {
 							continue
+						} else {
+							status &^= canRead
+							fdstatus[pcb.fd] = status
 						}
 					}
 					queuedReaders[pcb.fd] = append(queuedReaders[pcb.fd], pcb)
 				case OpWrite:
-					if len(queuedWriters[pcb.fd]) == 0 {
+					if len(queuedWriters[pcb.fd]) == 0 && status&canWrite != 0 {
 						if w.tryWrite(pcb) {
 							continue
+						} else {
+							status &^= canWrite
+							fdstatus[pcb.fd] = status
 						}
+
 					}
 					queuedWriters[pcb.fd] = append(queuedWriters[pcb.fd], pcb)
 				}
@@ -395,13 +418,20 @@ func (w *Watcher) loop() {
 			pending = pending[:0]
 		case fd := <-w.chReadableNotify:
 			n := w.tryReadAll(queuedReaders[fd])
+			if n == len(queuedReaders[fd]) { // all read complete
+				fdstatus[fd] = fdstatus[fd] | canRead
+			}
 			queuedReaders[fd] = queuedReaders[fd][n:]
 		case fd := <-w.chWritableNotify:
 			n := w.tryWriteAll(queuedWriters[fd])
+			if n == len(queuedWriters[fd]) { // all write complete
+				fdstatus[fd] = fdstatus[fd] | canWrite
+			}
 			queuedWriters[fd] = queuedWriters[fd][n:]
 		case fd := <-w.chStopWatchNotify:
 			delete(queuedReaders, fd)
 			delete(queuedWriters, fd)
+			delete(fdstatus, fd)
 		case pcb := <-chTimeouts:
 			if !pcb.hasCompleted {
 				// ErrDeadline

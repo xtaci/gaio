@@ -175,7 +175,6 @@ func TestDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-die
-	conn.Close()
 }
 
 func TestEchoHuge(t *testing.T) {
@@ -267,7 +266,6 @@ func TestBidirectionWatcher(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-die
-	conn.Close()
 }
 
 func Test1k(t *testing.T) {
@@ -395,6 +393,5 @@ func BenchmarkEcho(b *testing.B) {
 			break
 		}
 	}
-	//		log.Println(i, b.N)
 	conn.Close()
 }

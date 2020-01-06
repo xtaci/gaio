@@ -5,7 +5,7 @@ go:
     - 1.13.x
 
 before_install:
-    - ulimit -a
+    - ulimit -n 30000
     - go get -t -v ./...
 
 install:

@@ -84,11 +84,13 @@ func echoServer(t testing.TB) net.Listener {
 			conn, err := ln.Accept()
 			if err != nil {
 				log.Println(err)
+				w.Close()
 				return
 			}
 
 			fd, err := w.Watch(conn)
 			if err != nil {
+				w.Close()
 				log.Println(err)
 				return
 			}
@@ -98,6 +100,7 @@ func echoServer(t testing.TB) net.Listener {
 			// kick off
 			err = w.Read(nil, fd, nil)
 			if err != nil {
+				w.Close()
 				log.Println(err)
 				return
 			}
@@ -280,10 +283,6 @@ func Test8k(t *testing.T) {
 	testParallel(t, 8192)
 }
 
-func Test16k(t *testing.T) {
-	testParallel(t, 16384)
-}
-
 func testParallel(t *testing.T, par int) {
 	ln := echoServer(t)
 
@@ -346,6 +345,8 @@ func testParallel(t *testing.T, par int) {
 		}
 	}
 	<-die
+	ln.Close()
+	w.Close()
 }
 
 func BenchmarkEcho(b *testing.B) {

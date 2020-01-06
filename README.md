@@ -36,7 +36,7 @@ For complete documentation, see the associated [Godoc](https://godoc.org/github.
 
 ## Benchmark
 
-An Echo-server with 64KB receiving buffer
+Throughput test with 64KB buffer,
 ```
 === Macbook Pro ===
 BenchmarkEcho-4   	2019/12/24 15:42:16
@@ -45,8 +45,7 @@ BenchmarkEcho-4   	2019/12/24 15:42:16
     aio_test.go:180: sending 1048576 bytes for 1 times
     aio_test.go:180: sending 1048576 bytes for 100 times
     aio_test.go:180: sending 1048576 bytes for 1485 times
-```
-```
+
 === Raspberry Pi 4===
 BenchmarkEcho-4         2020/01/05 22:15:29
      500           3465074 ns/op         302.61 MB/s        4104 B/op        160 allocs/op
@@ -54,8 +53,21 @@ BenchmarkEcho-4         2020/01/05 22:15:29
     aio_test.go:288: sending 1048576 bytes for 1 times
     aio_test.go:288: sending 1048576 bytes for 100 times
     aio_test.go:288: sending 1048576 bytes for 500 times
+```
+
+Concurrent echo test, each connection send and receive 1KB data. 8192 connections.
+```
+=== Raspberry Pi 4===
+➜  gaio git:(master) go test -v -run 8k
+=== RUN   Test8k
+--- PASS: Test8k (2.09s)
+    aio_test.go:325: completed: 8388608
+    aio_test.go:41: watcher closed
+PASS
+ok      github.com/xtaci/gaio   2.481s
 
 ```
+
 
 ## Usage
 

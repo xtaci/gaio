@@ -208,28 +208,29 @@ func (w *Watcher) WaitIO() (r OpResult, err error) {
 	}
 }
 
-// Read submits an aysnc read requests to be notified via WaitIO()
-//
-// 'buf' can be set to nil to use internal buffer.
-// The sequence of notification can guarantee the buffer will not be overwritten
-// before next WaitIO returns
+// ReadInternal submits an async read request on 'fd' with context 'ctx', reusing internal buffer
+func (w *Watcher) ReadInternal(ctx interface{}, fd int) error {
+	return w.aioCreate(ctx, OpRead, fd, nil, time.Time{})
+}
+
+// Read submits an async read request on 'fd' with context 'ctx', using buffer 'buf'
 func (w *Watcher) Read(ctx interface{}, fd int, buf []byte) error {
 	return w.aioCreate(ctx, OpRead, fd, buf, time.Time{})
 }
 
-// ReadTimeout like above, submits an aysnc Read requests with timeout to be notified via WaitIO()
+// ReadTimeout submits an async read request on 'fd' with context 'ctx', using buffer 'buf', and
+// expected to be completed before 'deadline'
 func (w *Watcher) ReadTimeout(ctx interface{}, fd int, buf []byte, deadline time.Time) error {
 	return w.aioCreate(ctx, OpRead, fd, buf, deadline)
 }
 
-// Write submits a write requests to be notifed via WaitIO()
-//
-// the notification order of Write is guaranteed to be sequential.
+// Write submits an async write request on 'fd' with context 'ctx', using buffer 'buf'
 func (w *Watcher) Write(ctx interface{}, fd int, buf []byte) error {
 	return w.aioCreate(ctx, OpWrite, fd, buf, time.Time{})
 }
 
-// WriteTimeout like above, submits an aysnc Write requests with timeout to be notified via WaitIO()
+// WriteTimeout submits an async write request on 'fd' with context 'ctx', using buffer 'buf', and
+// expected to be completed before 'deadline'
 func (w *Watcher) WriteTimeout(ctx interface{}, fd int, buf []byte, deadline time.Time) error {
 	return w.aioCreate(ctx, OpWrite, fd, buf, deadline)
 }
@@ -301,6 +302,7 @@ func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
 	}
 
 	// all bytes written or has error
+	// nil buffer still returns
 	if pcb.size == len(pcb.buffer) || ew != nil {
 		select {
 		case w.chIOCompletion <- OpResult{Op: OpWrite, Fd: pcb.fd, Buffer: pcb.buffer, Size: nw, Err: ew, Context: pcb.ctx}:

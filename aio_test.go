@@ -111,6 +111,7 @@ func echoServer(t testing.TB) net.Listener {
 
 func TestEchoTiny(t *testing.T) {
 	ln := echoServer(t)
+	defer ln.Close()
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
@@ -135,6 +136,7 @@ func TestEchoTiny(t *testing.T) {
 
 func TestDeadline(t *testing.T) {
 	ln := echoServer(t)
+	defer ln.Close()
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
@@ -181,6 +183,7 @@ func TestDeadline(t *testing.T) {
 
 func TestEchoHuge(t *testing.T) {
 	ln := echoServer(t)
+	defer ln.Close()
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
@@ -214,6 +217,7 @@ func TestEchoHuge(t *testing.T) {
 
 func TestBidirectionWatcher(t *testing.T) {
 	ln := echoServer(t)
+	defer ln.Close()
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
@@ -223,6 +227,7 @@ func TestBidirectionWatcher(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer w.Close()
 
 	fd, err := w.Watch(conn)
 	if err != nil {
@@ -285,11 +290,13 @@ func Test8k(t *testing.T) {
 
 func testParallel(t *testing.T, par int) {
 	ln := echoServer(t)
+	defer ln.Close()
 
 	w, err := CreateWatcher(bufSize)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer w.Close()
 
 	data := make([]byte, 1024)
 	die := make(chan struct{})
@@ -345,12 +352,11 @@ func testParallel(t *testing.T, par int) {
 		}
 	}
 	<-die
-	ln.Close()
-	w.Close()
 }
 
 func BenchmarkEcho(b *testing.B) {
 	ln := echoServer(b)
+	defer ln.Close()
 
 	numLoops := b.N
 	addr, _ := net.ResolveTCPAddr("tcp", ln.Addr().String())

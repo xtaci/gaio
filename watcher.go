@@ -5,7 +5,6 @@
 package gaio
 
 import (
-	"container/list"
 	"errors"
 	"net"
 	"sync"
@@ -308,32 +307,34 @@ func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
 	return false
 }
 
-func (w *Watcher) tryReadAll(l *list.List) {
-	for l.Len() > 0 {
-		elem := l.Front()
-		if w.tryRead(elem.Value.(*aiocb)) {
-			l.Remove(elem)
+func (w *Watcher) tryReadAll(list []*aiocb) int {
+	count := 0
+	for _, pcb := range list {
+		if w.tryRead(pcb) {
+			count++
 		} else {
-			return
+			return count
 		}
 	}
+	return count
 }
 
-func (w *Watcher) tryWriteAll(l *list.List) {
-	for l.Len() > 0 {
-		elem := l.Front()
-		if w.tryWrite(elem.Value.(*aiocb)) {
-			l.Remove(elem)
+func (w *Watcher) tryWriteAll(list []*aiocb) int {
+	count := 0
+	for _, pcb := range list {
+		if w.tryWrite(pcb) {
+			count++
 		} else {
-			return
+			return count
 		}
 	}
+	return count
 }
 
 // the core event loop of this watcher
 func (w *Watcher) loop() {
-	queuedReaders := make(map[int]*list.List)
-	queuedWriters := make(map[int]*list.List)
+	queuedReaders := make(map[int][]*aiocb)
+	queuedWriters := make(map[int][]*aiocb)
 	chTimeouts := make(chan *aiocb)
 
 	// for copying
@@ -358,23 +359,13 @@ func (w *Watcher) loop() {
 					if w.tryRead(pcb) { // try IO first
 						continue
 					} else {
-						l, ok := queuedReaders[pcb.fd]
-						if !ok {
-							l = list.New()
-							queuedReaders[pcb.fd] = l
-						}
-						l.PushBack(pcb)
+						queuedReaders[pcb.fd] = append(queuedReaders[pcb.fd], pcb)
 					}
 				case OpWrite:
 					if w.tryWrite(pcb) {
 						continue
 					} else {
-						l, ok := queuedWriters[pcb.fd]
-						if !ok {
-							l = list.New()
-							queuedWriters[pcb.fd] = l
-						}
-						l.PushBack(pcb)
+						queuedWriters[pcb.fd] = append(queuedWriters[pcb.fd], pcb)
 					}
 				}
 
@@ -388,13 +379,11 @@ func (w *Watcher) loop() {
 			}
 			pending = pending[:0]
 		case fd := <-w.chReadableNotify:
-			if l, ok := queuedReaders[fd]; ok {
-				w.tryReadAll(l)
-			}
+			n := w.tryReadAll(queuedReaders[fd])
+			queuedReaders[fd] = queuedReaders[fd][n:]
 		case fd := <-w.chWritableNotify:
-			if l, ok := queuedWriters[fd]; ok {
-				w.tryWriteAll(l)
-			}
+			n := w.tryWriteAll(queuedWriters[fd])
+			queuedWriters[fd] = queuedWriters[fd][n:]
 		case fd := <-w.chStopWatchNotify:
 			delete(queuedReaders, fd)
 			delete(queuedWriters, fd)

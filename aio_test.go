@@ -67,7 +67,6 @@ func echoServer(t testing.TB) net.Listener {
 				}
 				copy(buf, res.Buffer[:res.Size])
 				w.Write(nil, res.Fd, buf[:res.Size])
-
 			case OpWrite:
 				if res.Err != nil {
 					log.Println("write error:", res.Err, res.Size)

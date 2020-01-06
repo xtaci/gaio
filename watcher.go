@@ -125,6 +125,9 @@ func (w *Watcher) Close() (err error) {
 	w.dieOnce.Do(func() {
 		close(w.die)
 		err = w.pfd.Close()
+		for k := range w.conns {
+			w.conns[k].Close()
+		}
 	})
 	return err
 }
@@ -364,17 +367,20 @@ func (w *Watcher) loop() {
 			for _, pcb := range pending {
 				switch pcb.op {
 				case OpRead:
-					if w.tryRead(pcb) { // try IO first
-						continue
-					} else {
-						queuedReaders[pcb.fd] = append(queuedReaders[pcb.fd], pcb)
+					if len(queuedReaders[pcb.fd]) == 0 {
+						// empty queue should try IO first
+						if w.tryRead(pcb) {
+							continue
+						}
 					}
+					queuedReaders[pcb.fd] = append(queuedReaders[pcb.fd], pcb)
 				case OpWrite:
-					if w.tryWrite(pcb) {
-						continue
-					} else {
-						queuedWriters[pcb.fd] = append(queuedWriters[pcb.fd], pcb)
+					if len(queuedWriters[pcb.fd]) == 0 {
+						if w.tryWrite(pcb) {
+							continue
+						}
 					}
+					queuedWriters[pcb.fd] = append(queuedWriters[pcb.fd], pcb)
 				}
 
 				// timer

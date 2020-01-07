@@ -200,6 +200,7 @@ func TestEchoHuge(t *testing.T) {
 	if bytes.Compare(tx, rx) != 0 {
 		t.Fatal("incorrect receiving")
 	}
+	t.Log("bytes compare successful")
 	conn.Close()
 }
 

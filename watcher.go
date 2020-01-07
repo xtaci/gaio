@@ -411,7 +411,10 @@ func (w *Watcher) loop() {
 				if !pcb.deadline.IsZero() {
 					timedpcb := pcb
 					internal.SystemTimedSched.Put(func() {
-						chTimeouts <- timedpcb
+						select {
+						case chTimeouts <- timedpcb:
+						case <-w.die:
+						}
 					}, timedpcb.deadline)
 				}
 			}

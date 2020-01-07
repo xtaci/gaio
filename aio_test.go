@@ -403,8 +403,20 @@ func testDeadline(t *testing.T, par int) {
 	}
 }
 
-func BenchmarkEcho(b *testing.B) {
-	ln := echoServer(b, 65536)
+func BenchmarkEcho4K(b *testing.B) {
+	benchmarkEcho(b, 4096)
+}
+
+func BenchmarkEcho64K(b *testing.B) {
+	benchmarkEcho(b, 65536)
+}
+
+func BenchmarkEcho128K(b *testing.B) {
+	benchmarkEcho(b, 128*1024)
+}
+
+func benchmarkEcho(b *testing.B, bufsize int) {
+	ln := echoServer(b, bufsize)
 	defer ln.Close()
 
 	numLoops := b.N
@@ -415,7 +427,7 @@ func BenchmarkEcho(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	rx := make([]byte, 65536)
+	rx := make([]byte, bufsize)
 
 	conn, err := net.DialTCP("tcp", nil, addr)
 	if err != nil {
@@ -423,7 +435,7 @@ func BenchmarkEcho(b *testing.B) {
 		return
 	}
 
-	b.Log("sending", len(tx), "bytes for", b.N, "times")
+	b.Log("sending", len(tx), "bytes for", b.N, "times", "with buffer size:", bufsize)
 	b.ReportAllocs()
 	b.SetBytes(int64(len(tx)))
 	b.ResetTimer()

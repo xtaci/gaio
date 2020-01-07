@@ -42,7 +42,7 @@ For complete documentation, see the associated [Godoc](https://godoc.org/github.
 | Command | `go test -v -run=^$ -bench Echo` |
 | Macbook Pro | 743233 ns/op	1410.83 MB/s	    1593 B/op	      32 allocs/op   |
 | Linux AMD64 | 643445 ns/op	1629.63 MB/s	    3108 B/op	      32 allocs/op   |
-| Raspberry Pi4 | 3465074 ns/op  302.61 MB/s       4104 B/op           160 allocs/op |
+| Raspberry Pi4 | 3306410 ns/op  317.13 MB/s    2180 B/op       32 allocs/op|
 
 | Test Case | 8K concurrent connection echo test |
 |:-------------:|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|

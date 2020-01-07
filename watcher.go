@@ -167,12 +167,6 @@ func (w *Watcher) NewConn(conn net.Conn) (fd int, err error) {
 		return 0, operr
 	}
 
-	// poll this fd
-	err = w.pfd.Watch(fd)
-	if err != nil {
-		return 0, err
-	}
-
 	// avoid GC of conn
 	w.connsMutex.Lock()
 	w.conns[fd] = conn
@@ -182,8 +176,7 @@ func (w *Watcher) NewConn(conn net.Conn) (fd int, err error) {
 
 // CloseConn stops event monitoring on fd, and close the related net.Conn
 func (w *Watcher) CloseConn(fd int) error {
-	_ = w.pfd.Unwatch(fd)
-	// delete reference
+	// close connection and delete reference
 	w.connsMutex.Lock()
 	if conn, ok := w.conns[fd]; ok {
 		conn.Close()
@@ -299,30 +292,30 @@ func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
 		return true
 	}
 
-	for pcb.size < len(pcb.buffer) {
-		if pcb.buffer != nil {
-			nw, ew = syscall.Write(pcb.fd, pcb.buffer[pcb.size:])
-			if ew == syscall.EAGAIN {
-				return false
-			}
+	if pcb.buffer != nil {
+		nw, ew = syscall.Write(pcb.fd, pcb.buffer[pcb.size:])
+		if ew == syscall.EAGAIN {
+			return false
+		}
 
-			// if ew is nil, accumulate bytes written
-			if ew == nil {
-				pcb.size += nw
-			} else { // break due to error
-				break
-			}
+		// if ew is nil, accumulate bytes written
+		if ew == nil {
+			pcb.size += nw
 		}
 	}
 
 	// all bytes written or has error
-	select {
-	case w.chIOCompletion <- OpResult{Op: OpWrite, Fd: pcb.fd, Buffer: pcb.buffer, Size: nw, Err: ew, Context: pcb.ctx}:
-		pcb.hasCompleted = true
-		return true
-	case <-w.die:
-		return false
+	// nil buffer still returns
+	if pcb.size == len(pcb.buffer) || ew != nil {
+		select {
+		case w.chIOCompletion <- OpResult{Op: OpWrite, Fd: pcb.fd, Buffer: pcb.buffer, Size: nw, Err: ew, Context: pcb.ctx}:
+			pcb.hasCompleted = true
+			return true
+		case <-w.die:
+			return false
+		}
 	}
+	return false
 }
 
 func (w *Watcher) tryReadAll(list []*aiocb) int {
@@ -377,7 +370,10 @@ func (w *Watcher) loop() {
 			for _, pcb := range pending {
 				// load status of fd
 				status, ok := fdstatus[pcb.fd]
-				if !ok { // new fd, initial status set
+				if !ok {
+					// poll this new fd
+					_ = w.pfd.Watch(pcb.fd)
+					// initial status set
 					status = canRead | canWrite
 					fdstatus[pcb.fd] = status
 				}
@@ -432,6 +428,7 @@ func (w *Watcher) loop() {
 			}
 			queuedWriters[fd] = queuedWriters[fd][n:]
 		case fd := <-w.chStopWatchNotify:
+			_ = w.pfd.Unwatch(fd)
 			delete(queuedReaders, fd)
 			delete(queuedWriters, fd)
 			delete(fdstatus, fd)

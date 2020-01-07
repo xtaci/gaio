@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	// simply replace net.Listen with reuseport.Listen
+	// by simply replace net.Listen with reuseport.Listen, everything is the same as in push-server
 	ln, err := reuseport.Listen("tcp", "localhost:0")
 	if err != nil {
 		log.Fatal(err)
@@ -23,7 +23,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// chanel
 	ticker := time.NewTicker(time.Second)
 	chFd := make(chan int)
 	chIO := make(chan gaio.OpResult)

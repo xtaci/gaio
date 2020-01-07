@@ -15,18 +15,20 @@ func main() {
 		log.Fatal(err)
 	}
 
-	log.Println("pushing server listening on", ln.Addr())
+	log.Println("pushing server listening on", ln.Addr(), ", use telnet to receive push")
 
+	// create a watcher with 4kb internal buffer
 	w, err := gaio.CreateWatcher(4096)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// chanel
+	// channel
 	ticker := time.NewTicker(time.Second)
 	chFd := make(chan int)
 	chIO := make(chan gaio.OpResult)
 
+	// watcher.WaitIO goroutine
 	go func() {
 		for {
 			res, err := w.WaitIO()
@@ -38,25 +40,27 @@ func main() {
 		}
 	}()
 
+	// main logic loop, like your program core loop.
 	go func() {
 		fds := make(map[int]bool)
 		for {
 			select {
-			case res := <-chIO:
+			case res := <-chIO: // receive IO events from watcher
 				if res.Err != nil {
 					delete(fds, res.Fd)
 				}
-			case t := <-ticker.C:
+			case t := <-ticker.C: // receive ticker events
 				push := []byte(fmt.Sprintf("%s\n", t))
 				for fd := range fds {
 					w.Write(nil, fd, push)
 				}
-			case fd := <-chFd:
+			case fd := <-chFd: // receive new connection events
 				fds[fd] = true
 			}
 		}
 	}()
 
+	// this loop keeps on accepting connections and send to main loop
 	for {
 		conn, err := ln.Accept()
 		if err != nil {

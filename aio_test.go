@@ -274,6 +274,7 @@ func Test8k(t *testing.T) {
 }
 
 func testParallel(t *testing.T, par int) {
+	t.Log("testing concurrent:", par, "connections")
 	ln := echoServer(t, 1024)
 	defer ln.Close()
 
@@ -289,17 +290,17 @@ func testParallel(t *testing.T, par int) {
 		for i := 0; i < par; i++ {
 			conn, err := net.Dial("tcp", ln.Addr().String())
 			if err != nil {
-				t.Fatal(err)
+				log.Fatal(err)
 			}
 
 			fd, err := w.NewConn(conn)
 			if err != nil {
-				t.Fatal(err)
+				log.Fatal(err)
 			}
 			// send
 			err = w.Write(nil, fd, data)
 			if err != nil {
-				t.Fatal(err)
+				log.Fatal(err)
 			}
 		}
 	}()
@@ -331,6 +332,71 @@ func testParallel(t *testing.T, par int) {
 			nbytes += res.Size
 			if nbytes >= ntotal {
 				t.Log("completed:", nbytes)
+				return
+			}
+		}
+	}
+}
+
+func TestDeadline1k(t *testing.T) {
+	testDeadline(t, 1024)
+}
+func TestDeadline2k(t *testing.T) {
+	testDeadline(t, 2048)
+}
+func TestDeadline4k(t *testing.T) {
+	testDeadline(t, 4096)
+}
+func TestDeadline8k(t *testing.T) {
+	testDeadline(t, 8192)
+}
+
+func testDeadline(t *testing.T, par int) {
+	t.Log("testing concurrent:", par, "unresponsive connections")
+	ln := echoServer(t, 1024)
+	defer ln.Close()
+
+	w, err := CreateWatcher(1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	go func() {
+		for i := 0; i < par; i++ {
+			conn, err := net.Dial("tcp", ln.Addr().String())
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			fd, err := w.NewConn(conn)
+			if err != nil {
+				log.Fatal(err)
+			}
+			// send nothing, but submit a read request with timeout
+			err = w.ReadTimeout(nil, fd, nil, time.Now().Add(time.Second))
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+	}()
+
+	nerrs := 0
+	for {
+		res, err := w.WaitIO()
+		if err != nil {
+			t.Log(err)
+			return
+		}
+
+		switch res.Op {
+		case OpRead:
+			if res.Err != ErrDeadline {
+				t.Fatal(err)
+			}
+			nerrs++
+			if nerrs == par {
+				t.Log("all deadline reached")
 				return
 			}
 		}

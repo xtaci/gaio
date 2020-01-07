@@ -33,7 +33,7 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 		for {
 			res, err := w.WaitIO()
 			if err != nil {
-				log.Fatal(err)
+				log.Println(err)
 				return
 			}
 
@@ -92,8 +92,8 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 			// kick off
 			err = w.Read(nil, fd, nil)
 			if err != nil {
-				w.Close()
 				log.Println(err)
+				w.Close()
 				return
 			}
 		}

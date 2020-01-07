@@ -136,6 +136,7 @@ func (w *Watcher) Close() (err error) {
 		w.connsMutex.Lock()
 		for k := range w.conns {
 			w.conns[k].Close()
+			delete(w.conns, k)
 		}
 		w.connsMutex.Unlock()
 	})

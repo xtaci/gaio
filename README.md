@@ -34,50 +34,24 @@ By eliminating **one goroutine per one connection scheme** with **Edge-Triggered
 
 For complete documentation, see the associated [Godoc](https://godoc.org/github.com/xtaci/gaio).
 
-## Benchmark
+## Benchmarks
 
-**Throughput test with 64KB buffer**
+| Test Case | Throughput test with 64KB buffer |
+|:-------------:|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Description | A client keep on sending 64KB bytes to server, server keeps on reading and sending back whatever it received, the client keeps on receiving whatever the server sent back until all bytes received successfully |
+| Command | `go test -v -run=^$ -bench Echo` |
+| Macbook Pro | 743233 ns/op	1410.83 MB/s	    1593 B/op	      32 allocs/op   |
+| Linux AMD64 | 643445 ns/op	1629.63 MB/s	    3108 B/op	      32 allocs/op   |
+| Raspberry Pi4 | 3465074 ns/op  302.61 MB/s       4104 B/op           160 allocs/op |
 
-```
-=== Macbook Pro ===
-BenchmarkEcho-4   	2019/12/24 15:42:16
-    1485	    743233 ns/op	1410.83 MB/s	    1593 B/op	      32 allocs/op
---- BENCH: BenchmarkEcho-4
-    aio_test.go:180: sending 1048576 bytes for 1 times
-    aio_test.go:180: sending 1048576 bytes for 100 times
-    aio_test.go:180: sending 1048576 bytes for 1485 times
+| Test Case | 8K concurrent connection echo test |
+|:-------------:|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+|Description| Start 8192 clients, each client send 1KB data to server, server keeps on reading and sending back whatever it received, the client keeps on receiving whatever the server sent back until all bytes received successfully.|
+| Command | `go test -v -run=8k` |
+| Macbook Pro | 1.09s |
+| Linux AMD64 | 0.94s |
+| Raspberry Pi4 | 2.09s |
 
-=== Raspberry Pi 4===
-BenchmarkEcho-4         2020/01/05 22:15:29
-     500           3465074 ns/op         302.61 MB/s        4104 B/op        160 allocs/op
---- BENCH: BenchmarkEcho-4
-    aio_test.go:288: sending 1048576 bytes for 1 times
-    aio_test.go:288: sending 1048576 bytes for 100 times
-    aio_test.go:288: sending 1048576 bytes for 500 times
-```
-
-**Concurrent echo test, each connection send and receive 1KB data. 8K connections**
-
-```
-=== Macbook Pro ===
-$ go test -v -run 8k
-=== RUN   Test8k
---- PASS: Test8k (1.09s)
-    aio_test.go:325: completed: 8388608
-    aio_test.go:41: watcher closed
-PASS
-ok  	github.com/xtaci/gaio	1.807s
-
-=== Raspberry Pi 4===
-➜  gaio git:(master) go test -v -run 8k
-=== RUN   Test8k
---- PASS: Test8k (2.09s)
-    aio_test.go:325: completed: 8388608
-    aio_test.go:41: watcher closed
-PASS
-ok      github.com/xtaci/gaio   2.481s
-
-```
 
 
 ## Usage

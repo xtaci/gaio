@@ -227,7 +227,7 @@ func TestBidirectionWatcher(t *testing.T) {
 		// send
 		err = w.Write(nil, fd, tx)
 		if err != nil {
-			t.Fatal(err)
+			log.Fatal(err)
 		}
 	}()
 

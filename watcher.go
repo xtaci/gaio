@@ -299,30 +299,30 @@ func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
 		return true
 	}
 
-	if pcb.buffer != nil {
-		nw, ew = syscall.Write(pcb.fd, pcb.buffer[pcb.size:])
-		if ew == syscall.EAGAIN {
-			return false
-		}
+	for pcb.size < len(pcb.buffer) {
+		if pcb.buffer != nil {
+			nw, ew = syscall.Write(pcb.fd, pcb.buffer[pcb.size:])
+			if ew == syscall.EAGAIN {
+				return false
+			}
 
-		// if ew is nil, accumulate bytes written
-		if ew == nil {
-			pcb.size += nw
+			// if ew is nil, accumulate bytes written
+			if ew == nil {
+				pcb.size += nw
+			} else { // break due to error
+				break
+			}
 		}
 	}
 
 	// all bytes written or has error
-	// nil buffer still returns
-	if pcb.size == len(pcb.buffer) || ew != nil {
-		select {
-		case w.chIOCompletion <- OpResult{Op: OpWrite, Fd: pcb.fd, Buffer: pcb.buffer, Size: nw, Err: ew, Context: pcb.ctx}:
-			pcb.hasCompleted = true
-			return true
-		case <-w.die:
-			return false
-		}
+	select {
+	case w.chIOCompletion <- OpResult{Op: OpWrite, Fd: pcb.fd, Buffer: pcb.buffer, Size: nw, Err: ew, Context: pcb.ctx}:
+		pcb.hasCompleted = true
+		return true
+	case <-w.die:
+		return false
 	}
-	return false
 }
 
 func (w *Watcher) tryReadAll(list []*aiocb) int {
@@ -355,7 +355,7 @@ func (w *Watcher) loop() {
 	queuedWriters := make(map[int][]*aiocb)
 	chTimeouts := make(chan *aiocb)
 
-	// track file descriptor status
+	// track file descriptor status to alleviate syscall pressure
 	fdstatus := make(map[int]byte)
 
 	// for copying

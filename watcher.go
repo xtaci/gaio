@@ -355,7 +355,7 @@ func (w *Watcher) loop() {
 	queuedWriters := make(map[int][]*aiocb)
 	chTimeouts := make(chan *aiocb)
 
-	// track EPOLLIN and EPOLLOUT
+	// track file descriptor status
 	fdstatus := make(map[int]byte)
 
 	// for copying
@@ -377,7 +377,7 @@ func (w *Watcher) loop() {
 			for _, pcb := range pending {
 				// load status of fd
 				status, ok := fdstatus[pcb.fd]
-				if !ok { // new fd, init status
+				if !ok { // new fd, initial status set
 					status = canRead | canWrite
 					fdstatus[pcb.fd] = status
 				}
@@ -418,13 +418,13 @@ func (w *Watcher) loop() {
 			pending = pending[:0]
 		case fd := <-w.chReadableNotify:
 			n := w.tryReadAll(queuedReaders[fd])
-			if n == len(queuedReaders[fd]) { // all read complete
+			if n == len(queuedReaders[fd]) { // all read complete, or n==0
 				fdstatus[fd] = fdstatus[fd] | canRead
 			}
 			queuedReaders[fd] = queuedReaders[fd][n:]
 		case fd := <-w.chWritableNotify:
 			n := w.tryWriteAll(queuedWriters[fd])
-			if n == len(queuedWriters[fd]) { // all write complete
+			if n == len(queuedWriters[fd]) {
 				fdstatus[fd] = fdstatus[fd] | canWrite
 			}
 			queuedWriters[fd] = queuedWriters[fd][n:]

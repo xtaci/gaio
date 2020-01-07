@@ -369,34 +369,31 @@ func (w *Watcher) loop() {
 
 			for _, pcb := range pending {
 				// load status of fd
-				status, ok := fdstatus[pcb.fd]
+				_, ok := fdstatus[pcb.fd]
 				if !ok {
 					// poll this new fd
 					_ = w.pfd.Watch(pcb.fd)
 					// initial status set
-					status = canRead | canWrite
-					fdstatus[pcb.fd] = status
+					fdstatus[pcb.fd] = canRead | canWrite
 				}
 
 				switch pcb.op {
 				case OpRead:
-					if len(queuedReaders[pcb.fd]) == 0 && status&canRead != 0 {
+					if len(queuedReaders[pcb.fd]) == 0 && fdstatus[pcb.fd]&canRead != 0 {
 						// empty queue should try IO first
 						if w.tryRead(pcb) {
 							continue
 						} else {
-							status &^= canRead
-							fdstatus[pcb.fd] = status
+							fdstatus[pcb.fd] &^= canRead
 						}
 					}
 					queuedReaders[pcb.fd] = append(queuedReaders[pcb.fd], pcb)
 				case OpWrite:
-					if len(queuedWriters[pcb.fd]) == 0 && status&canWrite != 0 {
+					if len(queuedWriters[pcb.fd]) == 0 && fdstatus[pcb.fd]&canWrite != 0 {
 						if w.tryWrite(pcb) {
 							continue
 						} else {
-							status &^= canWrite
-							fdstatus[pcb.fd] = status
+							fdstatus[pcb.fd] &^= canWrite
 						}
 
 					}
@@ -418,13 +415,13 @@ func (w *Watcher) loop() {
 		case fd := <-w.chReadableNotify:
 			n := w.tryReadAll(queuedReaders[fd])
 			if n == len(queuedReaders[fd]) { // all read complete, or n==0
-				fdstatus[fd] = fdstatus[fd] | canRead
+				fdstatus[fd] |= canRead
 			}
 			queuedReaders[fd] = queuedReaders[fd][n:]
 		case fd := <-w.chWritableNotify:
 			n := w.tryWriteAll(queuedWriters[fd])
 			if n == len(queuedWriters[fd]) {
-				fdstatus[fd] = fdstatus[fd] | canWrite
+				fdstatus[fd] |= canWrite
 			}
 			queuedWriters[fd] = queuedWriters[fd][n:]
 		case fd := <-w.chStopWatchNotify:

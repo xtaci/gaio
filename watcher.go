@@ -21,6 +21,8 @@ var (
 	ErrWatcherClosed = errors.New("watcher closed")
 	// ErrDeadline means the specific operation has exceeded deadline before completion
 	ErrDeadline = errors.New("operation exceeded deadline")
+	// ErrNotWatched means the file descriptor is not being watched
+	ErrNotWatched = errors.New("file descriptor is not being watched")
 )
 
 // OpType defines Operation Type
@@ -178,19 +180,23 @@ func (w *Watcher) NewConn(conn net.Conn) (fd int, err error) {
 func (w *Watcher) CloseConn(fd int) error {
 	// close connection and delete reference
 	w.connsMutex.Lock()
-	if conn, ok := w.conns[fd]; ok {
-		conn.Close()
+	conn, ok := w.conns[fd]
+	if ok {
 		delete(w.conns, fd)
+		conn.Close()
 	}
 	w.connsMutex.Unlock()
 
-	// notify eventloop
-	select {
-	case w.chStopWatchNotify <- fd:
-		return nil
-	case <-w.die:
-		return ErrWatcherClosed
+	// legal file descriptor, notify mainloop
+	if ok {
+		select {
+		case w.chStopWatchNotify <- fd:
+			return nil
+		case <-w.die:
+			return ErrWatcherClosed
+		}
 	}
+	return ErrNotWatched
 }
 
 // notify new operations pending

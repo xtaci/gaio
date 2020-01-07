@@ -144,32 +144,29 @@ func TestDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	die := make(chan struct{})
 	go func() {
-		for {
-			res, err := w.WaitIO()
-			if err != nil {
-				t.Log(err)
-				return
-			}
-
-			switch res.Op {
-			case OpRead:
-				if res.Err != ErrDeadline {
-					t.Fatal(res.Err, "mismatch")
-				}
-				close(die)
-				return
-			}
+		// read with timeout
+		err = w.ReadTimeout(nil, fd, nil, time.Now().Add(time.Second))
+		if err != nil {
+			t.Fatal(err)
 		}
 	}()
 
-	// read with timeout
-	err = w.ReadTimeout(nil, fd, nil, time.Now().Add(time.Second))
-	if err != nil {
-		t.Fatal(err)
+	for {
+		res, err := w.WaitIO()
+		if err != nil {
+			t.Log(err)
+			return
+		}
+
+		switch res.Op {
+		case OpRead:
+			if res.Err != ErrDeadline {
+				t.Fatal(res.Err, "mismatch")
+			}
+			return
+		}
 	}
-	<-die
 }
 
 func TestEchoHuge(t *testing.T) {
@@ -226,41 +223,38 @@ func TestBidirectionWatcher(t *testing.T) {
 	}
 
 	tx := []byte("hello world")
-	die := make(chan struct{})
 	go func() {
-		for {
-			res, err := w.WaitIO()
-			if err != nil {
-				t.Log(err)
-				return
-			}
-
-			switch res.Op {
-			case OpWrite:
-				// recv
-				if res.Err != nil {
-					t.Fatal(res.Err)
-				}
-
-				t.Log("written:", res.Err, res.Size)
-				err := w.Read(nil, fd, nil)
-				if err != nil {
-					t.Fatal(err)
-				}
-			case OpRead:
-				t.Log("read:", res.Err, res.Size)
-				close(die)
-				return
-			}
+		// send
+		err = w.Write(nil, fd, tx)
+		if err != nil {
+			t.Fatal(err)
 		}
 	}()
 
-	// send
-	err = w.Write(nil, fd, tx)
-	if err != nil {
-		t.Fatal(err)
+	for {
+		res, err := w.WaitIO()
+		if err != nil {
+			t.Log(err)
+			return
+		}
+
+		switch res.Op {
+		case OpWrite:
+			// recv
+			if res.Err != nil {
+				t.Fatal(res.Err)
+			}
+
+			t.Log("written:", res.Err, res.Size)
+			err := w.Read(nil, fd, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+		case OpRead:
+			t.Log("read:", res.Err, res.Size)
+			return
+		}
 	}
-	<-die
 }
 
 func Test1k(t *testing.T) {
@@ -289,59 +283,57 @@ func testParallel(t *testing.T, par int) {
 	defer w.Close()
 
 	data := make([]byte, 1024)
-	die := make(chan struct{})
+
 	go func() {
-		nbytes := 0
-		ntotal := len(data) * par
-		for {
-			res, err := w.WaitIO()
+		for i := 0; i < par; i++ {
+			conn, err := net.Dial("tcp", ln.Addr().String())
 			if err != nil {
-				t.Log(err)
-				return
+				t.Fatal(err)
 			}
 
-			switch res.Op {
-			case OpWrite:
-				// recv
-				if res.Err != nil {
-					t.Fatal(res.Err)
-				}
-
-				err := w.Read(nil, res.Fd, nil)
-				if err != nil {
-					t.Fatal(err)
-				}
-			case OpRead:
-				if res.Err != nil {
-					t.Fatal(err)
-				}
-				nbytes += res.Size
-				if nbytes >= ntotal {
-					t.Log("completed:", nbytes)
-					close(die)
-					return
-				}
+			fd, err := w.NewConn(conn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// send
+			err = w.Write(nil, fd, data)
+			if err != nil {
+				t.Fatal(err)
 			}
 		}
 	}()
 
-	for i := 0; i < par; i++ {
-		conn, err := net.Dial("tcp", ln.Addr().String())
+	nbytes := 0
+	ntotal := len(data) * par
+	for {
+		res, err := w.WaitIO()
 		if err != nil {
-			t.Fatal(err)
+			t.Log(err)
+			return
 		}
 
-		fd, err := w.NewConn(conn)
-		if err != nil {
-			t.Fatal(err)
-		}
-		// send
-		err = w.Write(nil, fd, data)
-		if err != nil {
-			t.Fatal(err)
+		switch res.Op {
+		case OpWrite:
+			// recv
+			if res.Err != nil {
+				t.Fatal(res.Err)
+			}
+
+			err := w.Read(nil, res.Fd, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+		case OpRead:
+			if res.Err != nil {
+				t.Fatal(err)
+			}
+			nbytes += res.Size
+			if nbytes >= ntotal {
+				t.Log("completed:", nbytes)
+				return
+			}
 		}
 	}
-	<-die
 }
 
 func BenchmarkEcho(b *testing.B) {

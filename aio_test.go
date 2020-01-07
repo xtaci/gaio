@@ -33,7 +33,7 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 		for {
 			res, err := w.WaitIO()
 			if err != nil {
-				t.Log(err)
+				log.Fatal(err)
 				return
 			}
 

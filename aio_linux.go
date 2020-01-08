@@ -76,7 +76,7 @@ func (p *poller) Watch(conn net.Conn, rawconn syscall.RawConn) (err error) {
 	return p.trigger()
 }
 
-func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net.Conn, chRemovedNotify chan net.Conn, die chan struct{}) error {
+func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net.Conn, chRemovedNotify chan net.Conn, die chan struct{}) {
 	events := make([]syscall.EpollEvent, 64)
 	for {
 		// check for new awaiting
@@ -94,7 +94,7 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 
 		n, err := syscall.EpollWait(p.pfd, events, -1)
 		if err != nil && err != syscall.EINTR {
-			return err
+			return
 		}
 
 		for i := 0; i < n; i++ {
@@ -119,7 +119,7 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 					select {
 					case chReadableNotify <- conn.(net.Conn):
 					case <-die:
-						return nil
+						return
 					}
 
 				}
@@ -127,7 +127,7 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 					select {
 					case chWriteableNotify <- conn.(net.Conn):
 					case <-die:
-						return nil
+						return
 					}
 				}
 
@@ -137,7 +137,7 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 					select {
 					case chRemovedNotify <- conn.(net.Conn):
 					case <-die:
-						return nil
+						return
 					}
 				}
 			}

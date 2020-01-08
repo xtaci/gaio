@@ -191,7 +191,7 @@ func TestEchoHuge(t *testing.T) {
 	}
 	t.Log("pong size:", n)
 
-	if bytes.Compare(tx, rx) != 0 {
+	if !bytes.Equal(tx, rx) {
 		t.Fatal("incorrect receiving")
 	}
 	t.Log("bytes compare successful")

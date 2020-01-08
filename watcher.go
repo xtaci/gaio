@@ -25,9 +25,6 @@ var (
 	ErrNotWatched = errors.New("file descriptor is not being watched")
 )
 
-// conn <--> fd mapping expire
-const cacheExpire = 10 * time.Second
-
 // OpType defines Operation Type
 type OpType int
 
@@ -36,12 +33,6 @@ const (
 	OpRead OpType = iota
 	// OpWrite means the aiocb is a write operation
 	OpWrite
-)
-
-// userspace tracking of fd status
-const (
-	canRead  byte = 1
-	canWrite      = 2
 )
 
 // aiocb contains all info for a request

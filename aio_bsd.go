@@ -66,8 +66,8 @@ func (p *poller) Watch(conn net.Conn, rawconn syscall.RawConn) error {
 
 func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net.Conn, die chan struct{}) error {
 	events := make([]syscall.Kevent_t, 128)
+	var changes []syscall.Kevent_t
 	for {
-		var changes []syscall.Kevent_t
 		p.awaitingMutex.Lock()
 		for _, c := range p.awaiting {
 			c.rawConn.Control(func(fd uintptr) {
@@ -83,10 +83,13 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 		p.awaiting = p.awaiting[:0]
 		p.awaitingMutex.Unlock()
 
+		// apply changes and poll wait
 		n, err := syscall.Kevent(p.fd, changes, events, nil)
 		if err != nil && err != syscall.EINTR {
 			return err
 		}
+		// clear changes
+		changes = changes[:0]
 
 		for i := 0; i < n; i++ {
 			if events[i].Ident != 0 {
@@ -122,6 +125,11 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 
 					if removeFd {
 						delete(p.watching, int(events[i].Ident))
+						// set changes for next kevent
+						changes = append(changes,
+							syscall.Kevent_t{Ident: events[i].Ident, Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_READ},
+							syscall.Kevent_t{Ident: events[i].Ident, Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_WRITE},
+						)
 					}
 				}
 			}

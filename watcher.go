@@ -183,21 +183,9 @@ func (w *Watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 	case <-w.die:
 		return ErrWatcherClosed
 	default:
-		// get file descriptor
-		c, ok := conn.(interface {
-			SyscallConn() (syscall.RawConn, error)
-		})
-		if !ok {
-			return ErrNoRawConn
-		}
-
-		rawconn, err := c.SyscallConn()
-		if err != nil {
-			return err
-		}
 
 		w.pendingMutex.Lock()
-		w.pending = append(w.pending, &aiocb{op: op, ctx: ctx, conn: conn, rawconn: rawconn, buffer: buf, deadline: deadline})
+		w.pending = append(w.pending, &aiocb{op: op, ctx: ctx, conn: conn, rawconn: nil, buffer: buf, deadline: deadline})
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()
@@ -319,6 +307,8 @@ func (w *Watcher) tryWriteAll(list []*aiocb) int {
 
 // the core event loop of this watcher
 func (w *Watcher) loop() {
+	// cached raw conn
+	cachedRawConns := make(map[net.Conn]syscall.RawConn)
 	// net.Conn related operations
 	queuedReaders := make(map[net.Conn][]*aiocb)
 	queuedWriters := make(map[net.Conn][]*aiocb)
@@ -342,7 +332,33 @@ func (w *Watcher) loop() {
 			w.pendingMutex.Unlock()
 
 			for _, pcb := range pending {
+				rawconn, ok := cachedRawConns[pcb.conn]
+				if !ok {
+					// cache raw conn
+					if c, ok := pcb.conn.(interface {
+						SyscallConn() (syscall.RawConn, error)
+					}); ok {
+						rc, err := c.SyscallConn()
+						if err == nil {
+							cachedRawConns[pcb.conn] = rc
+							rawconn = rc
+						}
+					}
+				}
+
+				// conns which cannot get rawconn, send back error
+				if rawconn == nil {
+					select {
+					case w.chIOCompletion <- OpResult{Op: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Err: ErrNoRawConn, Context: pcb.ctx}:
+						pcb.hasCompleted = true
+					case <-w.die:
+						return
+					}
+					continue
+				}
+
 				// operations splitted into different buckets
+				pcb.rawconn = rawconn
 				switch pcb.op {
 				case OpRead:
 					if len(queuedReaders[pcb.conn]) == 0 {

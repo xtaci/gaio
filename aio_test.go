@@ -42,11 +42,13 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 				if res.Err != nil {
 					log.Println("read error:", res.Err, res.Size)
 					delete(wbuffers, res.Conn)
+					res.Conn.Close()
 					continue
 				}
 
 				if res.Size == 0 {
 					delete(wbuffers, res.Conn)
+					res.Conn.Close()
 					continue
 				}
 
@@ -63,6 +65,7 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 				if res.Err != nil {
 					log.Println("write error:", res.Err, res.Size)
 					delete(wbuffers, res.Conn)
+					res.Conn.Close()
 				}
 				// write complete, start read again
 				w.Read(nil, res.Conn, nil)
@@ -234,6 +237,7 @@ func TestBidirectionWatcher(t *testing.T) {
 			}
 		case OpRead:
 			t.Log("read:", res.Err, res.Size)
+			conn.Close()
 			return
 		}
 	}

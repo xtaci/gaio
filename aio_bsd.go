@@ -3,13 +3,15 @@
 package gaio
 
 import (
+	"net"
 	"sync"
 	"syscall"
 )
 
 type poller struct {
-	fd      int
-	changes []syscall.Kevent_t
+	fd       int
+	changes  []syscall.Kevent_t
+	watching sync.Map
 	sync.Mutex
 }
 
@@ -45,7 +47,8 @@ func (p *poller) trigger() error {
 	return err
 }
 
-func (p *poller) Watch(fd int) error {
+func (p *poller) Watch(fd int, conn net.Conn) error {
+	p.watching.Store(fd, conn)
 	p.Lock()
 	p.changes = append(p.changes,
 		syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_READ},
@@ -55,17 +58,7 @@ func (p *poller) Watch(fd int) error {
 	return p.trigger()
 }
 
-func (p *poller) Unwatch(fd int) error {
-	p.Lock()
-	p.changes = append(p.changes,
-		syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_READ},
-		syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_WRITE},
-	)
-	p.Unlock()
-	return p.trigger()
-}
-
-func (p *poller) Wait(chReadableNotify chan int, chWriteableNotify chan int, die chan struct{}) error {
+func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net.Conn, die chan struct{}) error {
 	events := make([]syscall.Kevent_t, 128)
 	for {
 		p.Lock()
@@ -81,19 +74,23 @@ func (p *poller) Wait(chReadableNotify chan int, chWriteableNotify chan int, die
 
 		for i := 0; i < n; i++ {
 			if events[i].Ident != 0 {
-				if events[i].Filter == syscall.EVFILT_READ {
-					select {
-					case chReadableNotify <- int(events[i].Ident):
-					case <-die:
-						return nil
+				if conn, ok := p.watching.Load(int(events[i].Ident)); ok {
+					if events[i].Filter == syscall.EVFILT_READ {
+						select {
+						case chReadableNotify <- conn.(net.Conn):
+						case <-die:
+							return nil
+						}
+					} else if events[i].Filter == syscall.EVFILT_WRITE {
+						select {
+						case chWriteableNotify <- conn.(net.Conn):
+						case <-die:
+							return nil
+						}
 					}
-
-				}
-				if events[i].Filter == syscall.EVFILT_WRITE {
-					select {
-					case chWriteableNotify <- int(events[i].Ident):
-					case <-die:
-						return nil
+					// socket close
+					if events[i].Flags&syscall.EV_EOF != 0 {
+						p.watching.Delete(int(events[i].Ident))
 					}
 				}
 			}

@@ -78,8 +78,8 @@ type Watcher struct {
 	pfd *poller
 
 	// loop
-	chReadableNotify chan int
-	chWritableNotify chan int
+	chReadableNotify chan net.Conn
+	chWritableNotify chan net.Conn
 	chPendingNotify  chan struct{}
 	chIOCompletion   chan OpResult
 
@@ -91,9 +91,6 @@ type Watcher struct {
 	// internal buffer for reading
 	swapBuffer     [][]byte
 	nextSwapBuffer int
-
-	// cache
-	connCache map[int]net.Conn
 
 	die     chan struct{}
 	dieOnce sync.Once
@@ -115,14 +112,11 @@ func CreateWatcher(bufsize int) (*Watcher, error) {
 	}
 
 	// loop related chan
-	w.chReadableNotify = make(chan int)
-	w.chWritableNotify = make(chan int)
+	w.chReadableNotify = make(chan net.Conn)
+	w.chWritableNotify = make(chan net.Conn)
 	w.chPendingNotify = make(chan struct{}, 1)
 	w.chIOCompletion = make(chan OpResult)
 	w.die = make(chan struct{})
-
-	// cached fd for poller
-	w.connCache = make(map[int]net.Conn)
 
 	go w.pfd.Wait(w.chReadableNotify, w.chWritableNotify, w.die)
 	go w.loop()
@@ -228,12 +222,10 @@ func (w *Watcher) tryRead(pcb *aiocb) (complete bool) {
 	var nr int
 	var er error
 	err := pcb.rawconn.Read(func(s uintptr) bool {
-		conn, ok := w.connCache[int(s)]
-		if conn != pcb.conn || !ok {
-			w.connCache[int(s)] = pcb.conn
-			_ = w.pfd.Watch(int(s))
-		}
 		nr, er = syscall.Read(int(s), buf)
+		if er == syscall.EAGAIN {
+			_ = w.pfd.Watch(int(s), pcb.conn)
+		}
 		return true
 	})
 
@@ -271,12 +263,10 @@ func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
 		var nw int
 		var ew error
 		err := pcb.rawconn.Write(func(s uintptr) bool {
-			conn, ok := w.connCache[int(s)]
-			if conn != pcb.conn || !ok {
-				w.connCache[int(s)] = pcb.conn
-				_ = w.pfd.Watch(int(s))
-			}
 			nw, ew = syscall.Write(int(s), pcb.buffer[pcb.size:])
+			if ew == syscall.EAGAIN {
+				_ = w.pfd.Watch(int(s), pcb.conn)
+			}
 			return true
 		})
 
@@ -388,7 +378,7 @@ func (w *Watcher) loop() {
 				}
 			}
 			pending = pending[:0]
-		case fd := <-w.chReadableNotify:
+		case conn := <-w.chReadableNotify:
 			// if fd is closed by conn.Close() from outside after chanrecv,
 			// and a new conn is re-opened with the same handler number(fd).
 			//
@@ -396,20 +386,16 @@ func (w *Watcher) loop() {
 			// tryRead/tryWrite operates on raw connections related to net.Conn,
 			// the following IO operation is impossible to misread or miswrite on
 			// the new same socket fd number inside current process(rawConn.Read/Write will fail).
-			if conn, ok := w.connCache[fd]; ok {
-				n := w.tryReadAll(queuedReaders[conn])
-				queuedReaders[conn] = queuedReaders[conn][n:]
-				if len(queuedReaders[conn]) == 0 { // delete key from map
-					delete(queuedReaders, conn)
-				}
+			n := w.tryReadAll(queuedReaders[conn])
+			queuedReaders[conn] = queuedReaders[conn][n:]
+			if len(queuedReaders[conn]) == 0 { // delete key from map
+				delete(queuedReaders, conn)
 			}
-		case fd := <-w.chWritableNotify:
-			if conn, ok := w.connCache[fd]; ok {
-				n := w.tryWriteAll(queuedWriters[conn])
-				queuedWriters[conn] = queuedWriters[conn][n:]
-				if len(queuedWriters[conn]) == 0 {
-					delete(queuedWriters, conn)
-				}
+		case conn := <-w.chWritableNotify:
+			n := w.tryWriteAll(queuedWriters[conn])
+			queuedWriters[conn] = queuedWriters[conn][n:]
+			if len(queuedWriters[conn]) == 0 {
+				delete(queuedWriters, conn)
 			}
 		case pcb := <-chTimeoutOps:
 			if !pcb.hasCompleted {

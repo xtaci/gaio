@@ -9,10 +9,14 @@ import (
 )
 
 type poller struct {
-	fd            int
-	watching      map[int]net.Conn
+	fd int
+
+	// awaiting for poll
 	awaiting      []connRawConn
 	awaitingMutex sync.Mutex
+
+	// under watching
+	watching map[int]net.Conn
 }
 
 type connRawConn struct {

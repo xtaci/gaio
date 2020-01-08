@@ -223,9 +223,6 @@ func (w *Watcher) tryRead(pcb *aiocb) (complete bool) {
 	var er error
 	err := pcb.rawconn.Read(func(s uintptr) bool {
 		nr, er = syscall.Read(int(s), buf)
-		if er == syscall.EAGAIN {
-			_ = w.pfd.Watch(int(s), pcb.conn)
-		}
 		return true
 	})
 
@@ -264,9 +261,6 @@ func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
 		var ew error
 		err := pcb.rawconn.Write(func(s uintptr) bool {
 			nw, ew = syscall.Write(int(s), pcb.buffer[pcb.size:])
-			if ew == syscall.EAGAIN {
-				_ = w.pfd.Watch(int(s), pcb.conn)
-			}
 			return true
 		})
 
@@ -352,6 +346,7 @@ func (w *Watcher) loop() {
 				switch pcb.op {
 				case OpRead:
 					if len(queuedReaders[pcb.conn]) == 0 {
+						_ = w.pfd.Watch(pcb.conn, pcb.rawconn)
 						if w.tryRead(pcb) {
 							continue
 						}
@@ -359,6 +354,7 @@ func (w *Watcher) loop() {
 					queuedReaders[pcb.conn] = append(queuedReaders[pcb.conn], pcb)
 				case OpWrite:
 					if len(queuedWriters[pcb.conn]) == 0 {
+						_ = w.pfd.Watch(pcb.conn, pcb.rawconn)
 						if w.tryWrite(pcb) {
 							continue
 						}

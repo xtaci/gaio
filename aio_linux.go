@@ -13,7 +13,8 @@ const EPOLLET = 0x80000000
 
 type poller struct {
 	pfd      int // epoll fd
-	watching sync.Map
+	watching map[int]net.Conn
+	sync.Mutex
 }
 
 func openPoll() (*poller, error) {
@@ -29,11 +30,16 @@ func openPoll() (*poller, error) {
 
 func (p *poller) Close() error { return syscall.Close(p.pfd) }
 
-func (p *poller) Watch(fd int, conn net.Conn) error {
-	if _, loaded := p.watching.LoadOrStore(fd, conn); !loaded {
-		return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, fd, &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN | syscall.EPOLLOUT | EPOLLET})
-	}
-	return nil
+func (p *poller) Watch(conn net.Conn, rawconn syscall.RawConn) (err error) {
+	p.Lock()
+	rawconn.Control(func(fd uintptr) {
+		if _, ok := p.watching[int(fd)]; !ok {
+			p.watching[int(fd)] = conn
+			syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN | syscall.EPOLLOUT | EPOLLET})
+		}
+	})
+	p.Unlock()
+	return
 }
 
 func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net.Conn, die chan struct{}) error {
@@ -44,8 +50,9 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 			return err
 		}
 
+		p.Lock()
 		for i := 0; i < n; i++ {
-			if conn, ok := p.watching.Load(int(events[i].Fd)); ok {
+			if conn, ok := p.watching[int(events[i].Fd)]; ok {
 				var notifyRead, notifyWrite, removeFd bool
 
 				if events[i].Events&syscall.EPOLLERR > 0 {
@@ -77,9 +84,10 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 				}
 
 				if removeFd {
-					p.watching.Delete(int(events[i].Fd))
+					delete(p.watching, int(events[i].Fd))
 				}
 			}
 		}
+		p.Unlock()
 	}
 }

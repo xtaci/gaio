@@ -10,9 +10,14 @@ import (
 
 type poller struct {
 	fd       int
-	changes  []syscall.Kevent_t
-	watching sync.Map
+	watching map[int]net.Conn
+	awaiting []connRawConn
 	sync.Mutex
+}
+
+type connRawConn struct {
+	conn    net.Conn
+	rawConn syscall.RawConn
 }
 
 func openPoll() (*poller, error) {
@@ -33,6 +38,7 @@ func openPoll() (*poller, error) {
 
 	p := new(poller)
 	p.fd = fd
+	p.watching = make(map[int]net.Conn)
 	return p, nil
 }
 
@@ -47,26 +53,30 @@ func (p *poller) trigger() error {
 	return err
 }
 
-func (p *poller) Watch(fd int, conn net.Conn) error {
-	if _, loaded := p.watching.LoadOrStore(fd, conn); !loaded {
-		p.Lock()
-		p.changes = append(p.changes,
-			syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_READ},
-			syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_WRITE},
-		)
-		p.Unlock()
-		return p.trigger()
-	}
-	return nil
+func (p *poller) Watch(conn net.Conn, rawconn syscall.RawConn) error {
+	p.Lock()
+	p.awaiting = append(p.awaiting, connRawConn{conn, rawconn})
+	p.Unlock()
+	return p.trigger()
 }
 
 func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net.Conn, die chan struct{}) error {
 	events := make([]syscall.Kevent_t, 128)
 	for {
+		var changes []syscall.Kevent_t
 		p.Lock()
-		changes := make([]syscall.Kevent_t, len(p.changes))
-		copy(changes, p.changes)
-		p.changes = p.changes[:0]
+		for _, c := range p.awaiting {
+			c.rawConn.Control(func(fd uintptr) {
+				if _, ok := p.watching[int(fd)]; !ok {
+					p.watching[int(fd)] = c.conn
+					changes = append(changes,
+						syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_READ},
+						syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_WRITE},
+					)
+				}
+			})
+		}
+		p.awaiting = nil
 		p.Unlock()
 
 		n, err := syscall.Kevent(p.fd, changes, events, nil)
@@ -76,7 +86,7 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 
 		for i := 0; i < n; i++ {
 			if events[i].Ident != 0 {
-				if conn, ok := p.watching.Load(int(events[i].Ident)); ok {
+				if conn, ok := p.watching[int(events[i].Ident)]; ok {
 					var notifyRead, notifyWrite, removeFd bool
 
 					if events[i].Flags&syscall.EV_EOF != 0 {
@@ -107,7 +117,7 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 					}
 
 					if removeFd {
-						p.watching.Delete(int(events[i].Ident))
+						delete(p.watching, int(events[i].Ident))
 					}
 				}
 			}

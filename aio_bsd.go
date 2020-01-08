@@ -9,10 +9,10 @@ import (
 )
 
 type poller struct {
-	fd       int
-	watching map[int]net.Conn
-	awaiting []connRawConn
-	sync.Mutex
+	fd            int
+	watching      map[int]net.Conn
+	awaiting      []connRawConn
+	awaitingMutex sync.Mutex
 }
 
 type connRawConn struct {
@@ -54,9 +54,9 @@ func (p *poller) trigger() error {
 }
 
 func (p *poller) Watch(conn net.Conn, rawconn syscall.RawConn) error {
-	p.Lock()
+	p.awaitingMutex.Lock()
 	p.awaiting = append(p.awaiting, connRawConn{conn, rawconn})
-	p.Unlock()
+	p.awaitingMutex.Unlock()
 	return p.trigger()
 }
 
@@ -64,7 +64,7 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 	events := make([]syscall.Kevent_t, 128)
 	for {
 		var changes []syscall.Kevent_t
-		p.Lock()
+		p.awaitingMutex.Lock()
 		for _, c := range p.awaiting {
 			c.rawConn.Control(func(fd uintptr) {
 				if _, ok := p.watching[int(fd)]; !ok {
@@ -77,7 +77,7 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 			})
 		}
 		p.awaiting = nil
-		p.Unlock()
+		p.awaitingMutex.Unlock()
 
 		n, err := syscall.Kevent(p.fd, changes, events, nil)
 		if err != nil && err != syscall.EINTR {

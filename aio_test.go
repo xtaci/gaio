@@ -283,13 +283,13 @@ func testParallel(t *testing.T, par int) {
 			if err != nil {
 				log.Fatal(err)
 			}
+			defer conn.Close()
 
 			// send
 			err = w.Write(nil, conn, data)
 			if err != nil {
 				log.Fatal(err)
 			}
-			defer conn.Close()
 		}
 		<-die
 	}()
@@ -366,13 +366,13 @@ func testDeadline(t *testing.T, par int) {
 			if err != nil {
 				log.Fatal(err)
 			}
+			defer conn.Close()
 
 			// send nothing, but submit a read request with timeout
 			err = w.ReadTimeout(nil, conn, nil, time.Now().Add(time.Second))
 			if err != nil {
 				log.Fatal(err)
 			}
-			defer conn.Close()
 		}
 		<-die
 	}()
@@ -388,6 +388,7 @@ func testDeadline(t *testing.T, par int) {
 		switch res.Op {
 		case OpRead:
 			if res.Err == ErrDeadline {
+				res.Conn.Close()
 				nerrs++
 				if nerrs == par {
 					t.Log("all deadline reached")

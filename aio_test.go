@@ -66,6 +66,7 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 					log.Println("write error:", res.Err, res.Size)
 					delete(wbuffers, res.Conn)
 					res.Conn.Close()
+					continue
 				}
 				// write complete, start read again
 				w.Read(nil, res.Conn, nil)
@@ -275,6 +276,7 @@ func testParallel(t *testing.T, par int) {
 
 	data := make([]byte, 1024)
 
+	die := make(chan struct{})
 	go func() {
 		for i := 0; i < par; i++ {
 			conn, err := net.Dial("tcp", ln.Addr().String())
@@ -287,7 +289,9 @@ func testParallel(t *testing.T, par int) {
 			if err != nil {
 				log.Fatal(err)
 			}
+			defer conn.Close()
 		}
+		<-die
 	}()
 
 	nbytes := 0
@@ -304,6 +308,7 @@ func testParallel(t *testing.T, par int) {
 			// recv
 			if res.Err != nil {
 				res.Conn.Close()
+				continue
 			}
 
 			err := w.Read(nil, res.Conn, nil)
@@ -317,10 +322,13 @@ func testParallel(t *testing.T, par int) {
 			}
 			if res.Size == 0 {
 				res.Conn.Close()
+				continue
 			}
+
 			nbytes += res.Size
 			if nbytes >= ntotal {
 				t.Log("completed:", nbytes)
+				close(die)
 				return
 			}
 		}
@@ -351,6 +359,7 @@ func testDeadline(t *testing.T, par int) {
 	}
 	defer w.Close()
 
+	die := make(chan struct{})
 	go func() {
 		for i := 0; i < par; i++ {
 			conn, err := net.Dial("tcp", ln.Addr().String())
@@ -363,7 +372,9 @@ func testDeadline(t *testing.T, par int) {
 			if err != nil {
 				log.Fatal(err)
 			}
+			defer conn.Close()
 		}
+		<-die
 	}()
 
 	nerrs := 0
@@ -388,6 +399,7 @@ func testDeadline(t *testing.T, par int) {
 			nerrs++
 			if nerrs == par {
 				t.Log("all deadline reached")
+				close(die)
 				return
 			}
 		}

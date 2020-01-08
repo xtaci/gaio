@@ -342,23 +342,23 @@ func (w *Watcher) loop() {
 			w.pendingMutex.Unlock()
 
 			for _, pcb := range pending {
-				// operations distributed into different buckets
+				// operations splitted into different buckets
 				switch pcb.op {
 				case OpRead:
 					if len(queuedReaders[pcb.conn]) == 0 {
-						_ = w.pfd.Watch(pcb.conn, pcb.rawconn)
 						if w.tryRead(pcb) {
 							continue
 						}
 					}
+					_ = w.pfd.Watch(pcb.conn, pcb.rawconn)
 					queuedReaders[pcb.conn] = append(queuedReaders[pcb.conn], pcb)
 				case OpWrite:
 					if len(queuedWriters[pcb.conn]) == 0 {
-						_ = w.pfd.Watch(pcb.conn, pcb.rawconn)
 						if w.tryWrite(pcb) {
 							continue
 						}
 					}
+					_ = w.pfd.Watch(pcb.conn, pcb.rawconn)
 					queuedWriters[pcb.conn] = append(queuedWriters[pcb.conn], pcb)
 				}
 

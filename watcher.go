@@ -77,11 +77,16 @@ type Watcher struct {
 	// poll fd
 	pfd *poller
 
-	// loop
+	// events from poller
 	chReadableNotify chan net.Conn
 	chWritableNotify chan net.Conn
-	chPendingNotify  chan struct{}
-	chIOCompletion   chan OpResult
+	chRemovedNotify  chan net.Conn
+
+	// events from user
+	chPendingNotify chan struct{}
+
+	// IO-completion events to user
+	chIOCompletion chan OpResult
 
 	// lock for pending io operations
 	// aiocb is associated to fd
@@ -114,11 +119,12 @@ func NewWatcher(bufsize int) (*Watcher, error) {
 	// loop related chan
 	w.chReadableNotify = make(chan net.Conn)
 	w.chWritableNotify = make(chan net.Conn)
+	w.chRemovedNotify = make(chan net.Conn)
 	w.chPendingNotify = make(chan struct{}, 1)
 	w.chIOCompletion = make(chan OpResult)
 	w.die = make(chan struct{})
 
-	go w.pfd.Wait(w.chReadableNotify, w.chWritableNotify, w.die)
+	go w.pfd.Wait(w.chReadableNotify, w.chWritableNotify, w.chRemovedNotify, w.die)
 	go w.loop()
 	return w, nil
 }
@@ -391,7 +397,7 @@ func (w *Watcher) loop() {
 			}
 			pending = pending[:0]
 		case conn := <-w.chReadableNotify:
-			// if fd is closed by conn.Close() from outside after chanrecv,
+			// if fd(s) being polled is closed by conn.Close() from outside after chanrecv,
 			// and a new conn is re-opened with the same handler number(fd).
 			//
 			// Note poller will removed closed fd automatically epoll(7), kqueue(2),
@@ -409,6 +415,10 @@ func (w *Watcher) loop() {
 			if len(queuedWriters[conn]) == 0 {
 				delete(queuedWriters, conn)
 			}
+		case conn := <-w.chRemovedNotify:
+			delete(queuedWriters, conn)
+			delete(queuedReaders, conn)
+			delete(cachedRawConns, conn)
 		case pcb := <-chTimeoutOps:
 			if !pcb.hasCompleted {
 				// ErrDeadline

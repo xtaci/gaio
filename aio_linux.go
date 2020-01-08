@@ -30,8 +30,10 @@ func openPoll() (*poller, error) {
 func (p *poller) Close() error { return syscall.Close(p.pfd) }
 
 func (p *poller) Watch(fd int, conn net.Conn) error {
-	p.watching.Store(fd, conn)
-	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, fd, &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN | syscall.EPOLLOUT | EPOLLET})
+	if _, loaded := p.watching.LoadOrStore(fd, conn); !loaded {
+		return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, fd, &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN | syscall.EPOLLOUT | EPOLLET})
+	}
+	return nil
 }
 
 func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net.Conn, die chan struct{}) error {

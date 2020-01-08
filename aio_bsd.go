@@ -48,14 +48,16 @@ func (p *poller) trigger() error {
 }
 
 func (p *poller) Watch(fd int, conn net.Conn) error {
-	p.watching.Store(fd, conn)
-	p.Lock()
-	p.changes = append(p.changes,
-		syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_READ},
-		syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_WRITE},
-	)
-	p.Unlock()
-	return p.trigger()
+	if _, loaded := p.watching.LoadOrStore(fd, conn); !loaded {
+		p.Lock()
+		p.changes = append(p.changes,
+			syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_READ},
+			syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_WRITE},
+		)
+		p.Unlock()
+		return p.trigger()
+	}
+	return nil
 }
 
 func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net.Conn, die chan struct{}) error {

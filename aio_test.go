@@ -127,6 +127,7 @@ func TestDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer conn.Close()
 
 	w, err := CreateWatcher(1024)
 	if err != nil {
@@ -152,6 +153,7 @@ func TestDeadline(t *testing.T) {
 		case OpRead:
 			if res.Err != ErrDeadline {
 				t.Fatal(res.Err, "mismatch")
+				conn.Close()
 			}
 			return
 		}
@@ -165,6 +167,8 @@ func TestEchoHuge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer conn.Close()
+
 	tx := make([]byte, 100*1024*1024)
 	n, err := io.ReadFull(rand.Reader, tx)
 	if err != nil {
@@ -299,7 +303,7 @@ func testParallel(t *testing.T, par int) {
 		case OpWrite:
 			// recv
 			if res.Err != nil {
-				t.Fatal(res.Err)
+				res.Conn.Close()
 			}
 
 			err := w.Read(nil, res.Conn, nil)
@@ -308,7 +312,11 @@ func testParallel(t *testing.T, par int) {
 			}
 		case OpRead:
 			if res.Err != nil {
-				t.Fatal(err)
+				res.Conn.Close()
+				continue
+			}
+			if res.Size == 0 {
+				res.Conn.Close()
 			}
 			nbytes += res.Size
 			if nbytes >= ntotal {
@@ -369,8 +377,14 @@ func testDeadline(t *testing.T, par int) {
 		switch res.Op {
 		case OpRead:
 			if res.Err != ErrDeadline {
+				res.Conn.Close()
 				t.Fatal(err)
 			}
+
+			if res.Size == 0 {
+				res.Conn.Close()
+			}
+
 			nerrs++
 			if nerrs == par {
 				t.Log("all deadline reached")
@@ -411,6 +425,7 @@ func benchmarkEcho(b *testing.B, bufsize int) {
 		b.Fatal(err)
 		return
 	}
+	defer conn.Close()
 
 	b.Log("sending", len(tx), "bytes for", b.N, "times", "with buffer size:", bufsize)
 	b.ReportAllocs()
@@ -436,5 +451,4 @@ func benchmarkEcho(b *testing.B, bufsize int) {
 			break
 		}
 	}
-	conn.Close()
 }

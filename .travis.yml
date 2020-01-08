@@ -5,9 +5,6 @@ os:
 go:
     - 1.13.x
 
-before_script:
-    - ulimit -n 30000
-
 before_install:
     - go get -t -v ./...
 

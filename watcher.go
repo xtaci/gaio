@@ -25,6 +25,9 @@ var (
 	ErrNotWatched = errors.New("file descriptor is not being watched")
 )
 
+// conn <--> fd mapping expire
+const cacheExpire = 10 * time.Second
+
 // OpType defines Operation Type
 type OpType int
 
@@ -43,10 +46,11 @@ const (
 
 // aiocb contains all info for a request
 type aiocb struct {
-	ctx          interface{} // user context associated with this request
-	op           OpType      // read or write
-	fd           int
-	size         int // size received or sent
+	ctx          interface{}     // user context associated with this request
+	op           OpType          // read or write
+	conn         net.Conn        // associated net.Conn
+	rawconn      syscall.RawConn // associated raw connection for nonblocking-io
+	size         int             // size received or sent
 	buffer       []byte
 	hasCompleted bool // mark this aiocb has completed
 	deadline     time.Time
@@ -58,8 +62,8 @@ type OpResult struct {
 	Op OpType
 	// User context associated with this requests
 	Context interface{}
-	// Related file descriptor to this result
-	Fd int
+	// Related net.Conn to this result
+	Conn net.Conn
 	// Buffer points to user's supplied buffer or watcher's internal swap buffer
 	Buffer []byte
 	// Number of bytes sent or received, Buffer[:Size] is the content sent or received.
@@ -74,11 +78,10 @@ type Watcher struct {
 	pfd *poller
 
 	// loop
-	chReadableNotify  chan int
-	chWritableNotify  chan int
-	chStopWatchNotify chan int
-	chPendingNotify   chan struct{}
-	chIOCompletion    chan OpResult
+	chReadableNotify chan int
+	chWritableNotify chan int
+	chPendingNotify  chan struct{}
+	chIOCompletion   chan OpResult
 
 	// lock for pending io operations
 	// aiocb is associated to fd
@@ -89,12 +92,11 @@ type Watcher struct {
 	swapBuffer     [][]byte
 	nextSwapBuffer int
 
+	// cache
+	connCache map[int]net.Conn
+
 	die     chan struct{}
 	dieOnce sync.Once
-
-	// hold net.Conn to avoid GC
-	conns      map[int]net.Conn
-	connsMutex sync.Mutex
 }
 
 // CreateWatcher creates a management object for monitoring file descriptors
@@ -115,13 +117,12 @@ func CreateWatcher(bufsize int) (*Watcher, error) {
 	// loop related chan
 	w.chReadableNotify = make(chan int)
 	w.chWritableNotify = make(chan int)
-	w.chStopWatchNotify = make(chan int)
 	w.chPendingNotify = make(chan struct{}, 1)
 	w.chIOCompletion = make(chan OpResult)
-
-	// hold net.Conn only
-	w.conns = make(map[int]net.Conn)
 	w.die = make(chan struct{})
+
+	// cached fd for poller
+	w.connCache = make(map[int]net.Conn)
 
 	go w.pfd.Wait(w.chReadableNotify, w.chWritableNotify, w.die)
 	go w.loop()
@@ -133,71 +134,8 @@ func (w *Watcher) Close() (err error) {
 	w.dieOnce.Do(func() {
 		close(w.die)
 		err = w.pfd.Close()
-		w.connsMutex.Lock()
-		for k := range w.conns {
-			w.conns[k].Close()
-			delete(w.conns, k)
-		}
-		w.connsMutex.Unlock()
 	})
 	return err
-}
-
-// NewConn starts monitoring events on `conn`, and returns a file descriptor
-// for following IO operations.
-func (w *Watcher) NewConn(conn net.Conn) (fd int, err error) {
-	// get file descriptor
-	c, ok := conn.(interface {
-		SyscallConn() (syscall.RawConn, error)
-	})
-
-	if !ok {
-		return 0, ErrNoRawConn
-	}
-
-	rawconn, err := c.SyscallConn()
-	if err != nil {
-		return 0, err
-	}
-
-	var operr error
-	if err := rawconn.Control(func(s uintptr) {
-		fd = int(s)
-	}); err != nil {
-		return 0, err
-	}
-	if operr != nil {
-		return 0, operr
-	}
-
-	// avoid GC of conn
-	w.connsMutex.Lock()
-	w.conns[fd] = conn
-	w.connsMutex.Unlock()
-	return fd, nil
-}
-
-// CloseConn stops event monitoring on fd, and close the related net.Conn
-func (w *Watcher) CloseConn(fd int) error {
-	// close connection and delete reference
-	w.connsMutex.Lock()
-	conn, ok := w.conns[fd]
-	if ok {
-		delete(w.conns, fd)
-		conn.Close()
-	}
-	w.connsMutex.Unlock()
-
-	// legal file descriptor, notify mainloop
-	if ok {
-		select {
-		case w.chStopWatchNotify <- fd:
-			return nil
-		case <-w.die:
-			return ErrWatcherClosed
-		}
-	}
-	return ErrNotWatched
 }
 
 // notify new operations pending
@@ -219,40 +157,53 @@ func (w *Watcher) WaitIO() (r OpResult, err error) {
 }
 
 // ReadInternal submits an async read request on 'fd' with context 'ctx', reusing internal buffer
-func (w *Watcher) ReadInternal(ctx interface{}, fd int) error {
-	return w.aioCreate(ctx, OpRead, fd, nil, time.Time{})
+func (w *Watcher) ReadInternal(ctx interface{}, conn net.Conn) error {
+	return w.aioCreate(ctx, OpRead, conn, nil, time.Time{})
 }
 
 // Read submits an async read request on 'fd' with context 'ctx', using buffer 'buf'
-func (w *Watcher) Read(ctx interface{}, fd int, buf []byte) error {
-	return w.aioCreate(ctx, OpRead, fd, buf, time.Time{})
+func (w *Watcher) Read(ctx interface{}, conn net.Conn, buf []byte) error {
+	return w.aioCreate(ctx, OpRead, conn, buf, time.Time{})
 }
 
 // ReadTimeout submits an async read request on 'fd' with context 'ctx', using buffer 'buf', and
 // expected to be completed before 'deadline'
-func (w *Watcher) ReadTimeout(ctx interface{}, fd int, buf []byte, deadline time.Time) error {
-	return w.aioCreate(ctx, OpRead, fd, buf, deadline)
+func (w *Watcher) ReadTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
+	return w.aioCreate(ctx, OpRead, conn, buf, deadline)
 }
 
 // Write submits an async write request on 'fd' with context 'ctx', using buffer 'buf'
-func (w *Watcher) Write(ctx interface{}, fd int, buf []byte) error {
-	return w.aioCreate(ctx, OpWrite, fd, buf, time.Time{})
+func (w *Watcher) Write(ctx interface{}, conn net.Conn, buf []byte) error {
+	return w.aioCreate(ctx, OpWrite, conn, buf, time.Time{})
 }
 
 // WriteTimeout submits an async write request on 'fd' with context 'ctx', using buffer 'buf', and
 // expected to be completed before 'deadline'
-func (w *Watcher) WriteTimeout(ctx interface{}, fd int, buf []byte, deadline time.Time) error {
-	return w.aioCreate(ctx, OpWrite, fd, buf, deadline)
+func (w *Watcher) WriteTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
+	return w.aioCreate(ctx, OpWrite, conn, buf, deadline)
 }
 
 // core async-io creation
-func (w *Watcher) aioCreate(ctx interface{}, op OpType, fd int, buf []byte, deadline time.Time) error {
+func (w *Watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byte, deadline time.Time) error {
 	select {
 	case <-w.die:
 		return ErrWatcherClosed
 	default:
+		// get file descriptor
+		c, ok := conn.(interface {
+			SyscallConn() (syscall.RawConn, error)
+		})
+		if !ok {
+			return ErrNoRawConn
+		}
+
+		rawconn, err := c.SyscallConn()
+		if err != nil {
+			return err
+		}
+
 		w.pendingMutex.Lock()
-		w.pending = append(w.pending, &aiocb{op: op, ctx: ctx, fd: fd, buffer: buf, deadline: deadline})
+		w.pending = append(w.pending, &aiocb{op: op, ctx: ctx, conn: conn, rawconn: rawconn, buffer: buf, deadline: deadline})
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()
@@ -274,12 +225,29 @@ func (w *Watcher) tryRead(pcb *aiocb) (complete bool) {
 		useSwap = true
 	}
 
-	nr, er := syscall.Read(pcb.fd, buf)
+	var nr int
+	var er error
+	err := pcb.rawconn.Read(func(s uintptr) bool {
+		conn, ok := w.connCache[int(s)]
+		if conn != pcb.conn || !ok {
+			w.connCache[int(s)] = pcb.conn
+			_ = w.pfd.Watch(int(s))
+		}
+		nr, er = syscall.Read(int(s), buf)
+		return true
+	})
+
 	if er == syscall.EAGAIN {
 		return false
 	}
+
+	// rawconn error
+	if err != nil {
+		er = err
+	}
+
 	select {
-	case w.chIOCompletion <- OpResult{Op: OpRead, Fd: pcb.fd, Buffer: buf, Size: nr, Err: er, Context: pcb.ctx}:
+	case w.chIOCompletion <- OpResult{Op: OpRead, Conn: pcb.conn, Buffer: buf, Size: nr, Err: er, Context: pcb.ctx}:
 		// swap buffer if IO successful
 		if useSwap {
 			w.nextSwapBuffer = (w.nextSwapBuffer + 1) % len(w.swapBuffer)
@@ -300,9 +268,25 @@ func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
 	}
 
 	if pcb.buffer != nil {
-		nw, ew = syscall.Write(pcb.fd, pcb.buffer[pcb.size:])
+		var nw int
+		var ew error
+		err := pcb.rawconn.Write(func(s uintptr) bool {
+			conn, ok := w.connCache[int(s)]
+			if conn != pcb.conn || !ok {
+				w.connCache[int(s)] = pcb.conn
+				_ = w.pfd.Watch(int(s))
+			}
+			nw, ew = syscall.Write(int(s), pcb.buffer[pcb.size:])
+			return true
+		})
+
 		if ew == syscall.EAGAIN {
 			return false
+		}
+
+		// rawconn error
+		if err != nil {
+			ew = err
 		}
 
 		// if ew is nil, accumulate bytes written
@@ -315,7 +299,7 @@ func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
 	// nil buffer still returns
 	if pcb.size == len(pcb.buffer) || ew != nil {
 		select {
-		case w.chIOCompletion <- OpResult{Op: OpWrite, Fd: pcb.fd, Buffer: pcb.buffer, Size: nw, Err: ew, Context: pcb.ctx}:
+		case w.chIOCompletion <- OpResult{Op: OpWrite, Conn: pcb.conn, Buffer: pcb.buffer, Size: nw, Err: ew, Context: pcb.ctx}:
 			pcb.hasCompleted = true
 			return true
 		case <-w.die:
@@ -351,12 +335,11 @@ func (w *Watcher) tryWriteAll(list []*aiocb) int {
 
 // the core event loop of this watcher
 func (w *Watcher) loop() {
-	queuedReaders := make(map[int][]*aiocb)
-	queuedWriters := make(map[int][]*aiocb)
-	chTimeouts := make(chan *aiocb)
-
-	// track file descriptor status to alleviate syscall pressure
-	fdstatus := make(map[int]byte)
+	// net.Conn related operations
+	queuedReaders := make(map[net.Conn][]*aiocb)
+	queuedWriters := make(map[net.Conn][]*aiocb)
+	// for timeout operations
+	chTimeoutOps := make(chan *aiocb)
 
 	// for copying
 	var pending []*aiocb
@@ -375,36 +358,22 @@ func (w *Watcher) loop() {
 			w.pendingMutex.Unlock()
 
 			for _, pcb := range pending {
-				// load status of fd
-				_, ok := fdstatus[pcb.fd]
-				if !ok {
-					// poll this new fd
-					_ = w.pfd.Watch(pcb.fd)
-					// initial status set
-					fdstatus[pcb.fd] = canRead | canWrite
-				}
-
+				// operations distributed into different buckets
 				switch pcb.op {
 				case OpRead:
-					if len(queuedReaders[pcb.fd]) == 0 && fdstatus[pcb.fd]&canRead != 0 {
-						// empty queue should try IO first
+					if len(queuedReaders[pcb.conn]) == 0 {
 						if w.tryRead(pcb) {
 							continue
-						} else {
-							fdstatus[pcb.fd] &^= canRead
 						}
 					}
-					queuedReaders[pcb.fd] = append(queuedReaders[pcb.fd], pcb)
+					queuedReaders[pcb.conn] = append(queuedReaders[pcb.conn], pcb)
 				case OpWrite:
-					if len(queuedWriters[pcb.fd]) == 0 && fdstatus[pcb.fd]&canWrite != 0 {
+					if len(queuedWriters[pcb.conn]) == 0 {
 						if w.tryWrite(pcb) {
 							continue
-						} else {
-							fdstatus[pcb.fd] &^= canWrite
 						}
-
 					}
-					queuedWriters[pcb.fd] = append(queuedWriters[pcb.fd], pcb)
+					queuedWriters[pcb.conn] = append(queuedWriters[pcb.conn], pcb)
 				}
 
 				// timer
@@ -412,7 +381,7 @@ func (w *Watcher) loop() {
 					timedpcb := pcb
 					internal.SystemTimedSched.Put(func() {
 						select {
-						case chTimeouts <- timedpcb:
+						case chTimeoutOps <- timedpcb:
 						case <-w.die:
 						}
 					}, timedpcb.deadline)
@@ -420,27 +389,33 @@ func (w *Watcher) loop() {
 			}
 			pending = pending[:0]
 		case fd := <-w.chReadableNotify:
-			n := w.tryReadAll(queuedReaders[fd])
-			if n == len(queuedReaders[fd]) { // all read complete, or n==0
-				fdstatus[fd] |= canRead
+			// if fd is closed by conn.Close() from outside after chanrecv,
+			// and a new conn is re-opened with the same handler number(fd).
+			//
+			// Note poller will removed closed fd automatically epoll(7), kqueue(2),
+			// tryRead/tryWrite operates on raw connections related to net.Conn,
+			// the following IO operation is impossible to misread or miswrite on
+			// the new same socket fd number inside current process(rawConn.Read/Write will fail).
+			if conn, ok := w.connCache[fd]; ok {
+				n := w.tryReadAll(queuedReaders[conn])
+				queuedReaders[conn] = queuedReaders[conn][n:]
+				if len(queuedReaders[conn]) == 0 { // delete key from map
+					delete(queuedReaders, conn)
+				}
 			}
-			queuedReaders[fd] = queuedReaders[fd][n:]
 		case fd := <-w.chWritableNotify:
-			n := w.tryWriteAll(queuedWriters[fd])
-			if n == len(queuedWriters[fd]) {
-				fdstatus[fd] |= canWrite
+			if conn, ok := w.connCache[fd]; ok {
+				n := w.tryWriteAll(queuedWriters[conn])
+				queuedWriters[conn] = queuedWriters[conn][n:]
+				if len(queuedWriters[conn]) == 0 {
+					delete(queuedWriters, conn)
+				}
 			}
-			queuedWriters[fd] = queuedWriters[fd][n:]
-		case fd := <-w.chStopWatchNotify:
-			_ = w.pfd.Unwatch(fd)
-			delete(queuedReaders, fd)
-			delete(queuedWriters, fd)
-			delete(fdstatus, fd)
-		case pcb := <-chTimeouts:
+		case pcb := <-chTimeoutOps:
 			if !pcb.hasCompleted {
 				// ErrDeadline
 				select {
-				case w.chIOCompletion <- OpResult{Op: pcb.op, Fd: pcb.fd, Buffer: pcb.buffer, Size: pcb.size, Err: ErrDeadline, Context: pcb.ctx}:
+				case w.chIOCompletion <- OpResult{Op: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Err: ErrDeadline, Context: pcb.ctx}:
 					pcb.hasCompleted = true
 				case <-w.die:
 					return

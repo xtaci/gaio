@@ -29,7 +29,7 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 
 	// ping-pong scheme echo server
 	go func() {
-		wbuffers := make(map[int][]byte)
+		wbuffers := make(map[net.Conn][]byte)
 		for {
 			res, err := w.WaitIO()
 			if err != nil {
@@ -41,34 +41,31 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 			case OpRead:
 				if res.Err != nil {
 					log.Println("read error:", res.Err, res.Size)
-					delete(wbuffers, res.Fd)
-					w.CloseConn(res.Fd)
+					delete(wbuffers, res.Conn)
 					continue
 				}
 
 				if res.Size == 0 {
-					delete(wbuffers, res.Fd)
-					w.CloseConn(res.Fd)
+					delete(wbuffers, res.Conn)
 					continue
 				}
 
 				// write the data, we won't start to read again until write completes.
 				// so we only need at most 1 write buffer for a connection
-				buf, ok := wbuffers[res.Fd]
+				buf, ok := wbuffers[res.Conn]
 				if !ok {
 					buf = make([]byte, bufsize)
-					wbuffers[res.Fd] = buf
+					wbuffers[res.Conn] = buf
 				}
 				copy(buf, res.Buffer[:res.Size])
-				w.Write(nil, res.Fd, buf[:res.Size])
+				w.Write(nil, res.Conn, buf[:res.Size])
 			case OpWrite:
 				if res.Err != nil {
 					log.Println("write error:", res.Err, res.Size)
-					delete(wbuffers, res.Fd)
-					w.CloseConn(res.Fd)
+					delete(wbuffers, res.Conn)
 				}
 				// write complete, start read again
-				w.Read(nil, res.Fd, nil)
+				w.Read(nil, res.Conn, nil)
 			}
 		}
 	}()
@@ -81,16 +78,10 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 				return
 			}
 
-			fd, err := w.NewConn(conn)
-			if err != nil {
-				w.Close()
-				return
-			}
-
 			//log.Println("watching", conn.RemoteAddr(), "fd:", fd)
 
 			// kick off
-			err = w.Read(nil, fd, nil)
+			err = w.Read(nil, conn, nil)
 			if err != nil {
 				log.Println(err)
 				w.Close()
@@ -139,14 +130,9 @@ func TestDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fd, err := w.NewConn(conn)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	go func() {
 		// read with timeout
-		err = w.ReadTimeout(nil, fd, nil, time.Now().Add(time.Second))
+		err = w.ReadTimeout(nil, conn, nil, time.Now().Add(time.Second))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -218,15 +204,10 @@ func TestBidirectionWatcher(t *testing.T) {
 	}
 	defer w.Close()
 
-	fd, err := w.NewConn(conn)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	tx := []byte("hello world")
 	go func() {
 		// send
-		err = w.Write(nil, fd, tx)
+		err = w.Write(nil, conn, tx)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -247,7 +228,7 @@ func TestBidirectionWatcher(t *testing.T) {
 			}
 
 			t.Log("written:", res.Err, res.Size)
-			err := w.Read(nil, fd, nil)
+			err := w.Read(nil, conn, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -293,12 +274,8 @@ func testParallel(t *testing.T, par int) {
 				log.Fatal(err)
 			}
 
-			fd, err := w.NewConn(conn)
-			if err != nil {
-				log.Fatal(err)
-			}
 			// send
-			err = w.Write(nil, fd, data)
+			err = w.Write(nil, conn, data)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -321,7 +298,7 @@ func testParallel(t *testing.T, par int) {
 				t.Fatal(res.Err)
 			}
 
-			err := w.Read(nil, res.Fd, nil)
+			err := w.Read(nil, res.Conn, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -369,12 +346,8 @@ func testDeadline(t *testing.T, par int) {
 				log.Fatal(err)
 			}
 
-			fd, err := w.NewConn(conn)
-			if err != nil {
-				log.Fatal(err)
-			}
 			// send nothing, but submit a read request with timeout
-			err = w.ReadTimeout(nil, fd, nil, time.Now().Add(time.Second))
+			err = w.ReadTimeout(nil, conn, nil, time.Now().Add(time.Second))
 			if err != nil {
 				log.Fatal(err)
 			}

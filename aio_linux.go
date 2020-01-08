@@ -28,10 +28,6 @@ func (p *poller) Watch(fd int) error {
 	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, fd, &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN | syscall.EPOLLOUT | EPOLLET})
 }
 
-func (p *poller) Unwatch(fd int) error {
-	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_DEL, fd, &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN | syscall.EPOLLOUT | EPOLLET})
-}
-
 func (p *poller) Wait(chReadableNotify chan int, chWriteableNotify chan int, die chan struct{}) error {
 	events := make([]syscall.EpollEvent, 64)
 	for {

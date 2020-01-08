@@ -75,21 +75,36 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 		for i := 0; i < n; i++ {
 			if events[i].Ident != 0 {
 				if conn, ok := p.watching.Load(int(events[i].Ident)); ok {
+					var notifyRead, notifyWrite, removeFd bool
+
+					if events[i].Flags&syscall.EV_EOF != 0 {
+						notifyRead = true
+						notifyWrite = true
+						removeFd = true
+					}
 					if events[i].Filter == syscall.EVFILT_READ {
+						notifyRead = true
+					} else if events[i].Filter == syscall.EVFILT_WRITE {
+						notifyWrite = true
+					}
+
+					if notifyRead {
 						select {
 						case chReadableNotify <- conn.(net.Conn):
 						case <-die:
 							return nil
 						}
-					} else if events[i].Filter == syscall.EVFILT_WRITE {
+
+					}
+					if notifyWrite {
 						select {
 						case chWriteableNotify <- conn.(net.Conn):
 						case <-die:
 							return nil
 						}
 					}
-					// socket close
-					if events[i].Flags&syscall.EV_EOF != 0 {
+
+					if removeFd {
 						p.watching.Delete(int(events[i].Ident))
 					}
 				}

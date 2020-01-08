@@ -248,6 +248,48 @@ func TestBidirectionWatcher(t *testing.T) {
 	}
 }
 
+func TestWriteOnClosedConn(t *testing.T) {
+	ln := echoServer(t, 65536)
+	defer ln.Close()
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+
+	w, err := NewWatcher(65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	tx := []byte("hello world")
+	go func() {
+		// send
+		err = w.Write(nil, conn, tx)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	for {
+		res, err := w.WaitIO()
+		if err != nil {
+			t.Log(err)
+			return
+		}
+
+		switch res.Op {
+		case OpWrite:
+			// recv
+			if res.Err != nil {
+				conn.Close()
+				return
+			}
+		}
+	}
+}
+
 func Test1k(t *testing.T) {
 	testParallel(t, 1024)
 }
@@ -344,9 +386,12 @@ func TestDeadline2k(t *testing.T) {
 func TestDeadline4k(t *testing.T) {
 	testDeadline(t, 4096)
 }
+
+/* travis cannot authorize enough fd
 func TestDeadline8k(t *testing.T) {
 	testDeadline(t, 8192)
 }
+*/
 
 func testDeadline(t *testing.T, par int) {
 	t.Log("testing concurrent:", par, "unresponsive connections")

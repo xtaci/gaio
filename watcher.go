@@ -236,15 +236,14 @@ func (w *Watcher) tryRead(pcb *aiocb) (complete bool) {
 func (w *Watcher) tryWrite(pcb *aiocb) (complete bool) {
 	var nw int
 	var ew error
+	var err error
 
 	if pcb.hasCompleted {
 		return true
 	}
 
 	if pcb.buffer != nil {
-		var nw int
-		var ew error
-		err := pcb.rawconn.Write(func(s uintptr) bool {
+		err = pcb.rawconn.Write(func(s uintptr) bool {
 			nw, ew = syscall.Write(int(s), pcb.buffer[pcb.size:])
 			return true
 		})

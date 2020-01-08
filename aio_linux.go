@@ -89,6 +89,7 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 				}
 			})
 		}
+		p.awaiting = nil
 		p.awaitingMutex.Unlock()
 
 		n, err := syscall.EpollWait(p.pfd, events, -1)

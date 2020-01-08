@@ -35,31 +35,28 @@ func main() {
 				// handle unexpected read error
 				if res.Err != nil {
 					log.Println("read error")
-					w.CloseConn(res.Fd)
 					continue
 				}
 
 				// handle connection close
 				if res.Size == 0 {
 					log.Println("client closed")
-					w.CloseConn(res.Fd)
 					continue
 				}
 
 				// send back everything, we won't start to read again until write completes.
 				buf := make([]byte, res.Size)
 				copy(buf, res.Buffer[:res.Size])
-				w.Write(nil, res.Fd, buf)
+				w.Write(nil, res.Conn, buf)
 
 			case gaio.OpWrite: // write completion event
 				// handle unexpected write error
 				if res.Err != nil {
 					log.Println("write error")
-					w.CloseConn(res.Fd)
 					continue
 				}
 				// since write has completed, let's start read on this 'fd' again
-				w.Read(nil, res.Fd, nil)
+				w.Read(nil, res.Conn, nil)
 			}
 		}
 	}()
@@ -70,17 +67,10 @@ func main() {
 			log.Println(err)
 			return
 		}
-
-		// this conn will be monitored by Watcher
-		fd, err := w.NewConn(conn)
-		if err != nil {
-			log.Println(err)
-			return
-		}
 		log.Println("new client", conn.RemoteAddr())
 
 		// submit the first async read IO request
-		err = w.Read(nil, fd, nil)
+		err = w.Read(nil, conn, nil)
 		if err != nil {
 			log.Println(err)
 			return

@@ -64,7 +64,7 @@ func (p *poller) Watch(conn net.Conn, rawconn syscall.RawConn) error {
 	return p.trigger()
 }
 
-func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net.Conn, die chan struct{}) error {
+func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net.Conn, chRemovedNotify chan net.Conn, die chan struct{}) error {
 	events := make([]syscall.Kevent_t, 128)
 	var changes []syscall.Kevent_t
 	for {
@@ -125,11 +125,23 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 
 					if removeFd {
 						delete(p.watching, int(events[i].Ident))
-						// set changes for next kevent
+						// apply changes immediately
 						changes = append(changes,
 							syscall.Kevent_t{Ident: events[i].Ident, Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_READ},
 							syscall.Kevent_t{Ident: events[i].Ident, Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_WRITE},
 						)
+						_, err := syscall.Kevent(p.fd, changes, nil, nil)
+						if err != nil && err != syscall.EINTR {
+							return err
+						}
+						changes = changes[:0]
+
+						// notify listener
+						select {
+						case chRemovedNotify <- conn.(net.Conn):
+						case <-die:
+							return nil
+						}
 					}
 				}
 			}

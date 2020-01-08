@@ -80,7 +80,7 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 				}
 			})
 		}
-		p.awaiting = nil
+		p.awaiting = p.awaiting[:0]
 		p.awaitingMutex.Unlock()
 
 		n, err := syscall.Kevent(p.fd, changes, events, nil)

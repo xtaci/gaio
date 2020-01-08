@@ -387,20 +387,21 @@ func testDeadline(t *testing.T, par int) {
 
 		switch res.Op {
 		case OpRead:
-			if res.Err != ErrDeadline {
+			if res.Err == ErrDeadline {
+				nerrs++
+				if nerrs == par {
+					t.Log("all deadline reached")
+					close(die)
+					return
+				}
+			}
+
+			if res.Err != nil {
 				res.Conn.Close()
-				t.Fatal(err)
 			}
 
 			if res.Size == 0 {
 				res.Conn.Close()
-			}
-
-			nerrs++
-			if nerrs == par {
-				t.Log("all deadline reached")
-				close(die)
-				return
 			}
 		}
 	}

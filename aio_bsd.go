@@ -3,7 +3,6 @@
 package gaio
 
 import (
-	"log"
 	"net"
 	"sync"
 	"syscall"
@@ -85,7 +84,6 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 			if err != nil {
 				select {
 				case chRemovedNotify <- c.conn:
-					log.Println("removed")
 				case <-die:
 					return
 				}

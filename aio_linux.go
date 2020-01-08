@@ -24,6 +24,7 @@ func openPoll() (*poller, error) {
 	}
 	p := new(poller)
 	p.pfd = fd
+	p.watching = make(map[int]net.Conn)
 
 	return p, err
 }

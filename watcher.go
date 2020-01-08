@@ -96,8 +96,8 @@ type Watcher struct {
 	dieOnce sync.Once
 }
 
-// CreateWatcher creates a management object for monitoring file descriptors
-func CreateWatcher(bufsize int) (*Watcher, error) {
+// NewWatcher creates a management object for monitoring file descriptors
+func NewWatcher(bufsize int) (*Watcher, error) {
 	w := new(Watcher)
 	pfd, err := openPoll()
 	if err != nil {

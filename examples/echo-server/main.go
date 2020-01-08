@@ -15,7 +15,7 @@ func main() {
 
 	log.Println("echo server listening on", ln.Addr())
 
-	w, err := gaio.CreateWatcher(4096)
+	w, err := gaio.NewWatcher(4096)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -20,7 +20,7 @@ func main() {
 	log.Println("pushing server listening on", ln.Addr(), ", use telnet to receive push")
 
 	// create a watcher with 4kb internal buffer
-	w, err := gaio.CreateWatcher(4096)
+	w, err := gaio.NewWatcher(4096)
 	if err != nil {
 		log.Fatal(err)
 	}

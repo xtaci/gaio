@@ -22,7 +22,7 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 		t.Fatal(err)
 	}
 
-	w, err := CreateWatcher(bufsize)
+	w, err := NewWatcher(bufsize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestDeadline(t *testing.T) {
 	}
 	defer conn.Close()
 
-	w, err := CreateWatcher(1024)
+	w, err := NewWatcher(1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestBidirectionWatcher(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w, err := CreateWatcher(65536)
+	w, err := NewWatcher(65536)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func testParallel(t *testing.T, par int) {
 	ln := echoServer(t, 1024)
 	defer ln.Close()
 
-	w, err := CreateWatcher(1024)
+	w, err := NewWatcher(1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +353,7 @@ func testDeadline(t *testing.T, par int) {
 	ln := echoServer(t, 1024)
 	defer ln.Close()
 
-	w, err := CreateWatcher(1024)
+	w, err := NewWatcher(1024)
 	if err != nil {
 		t.Fatal(err)
 	}

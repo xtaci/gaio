@@ -338,6 +338,7 @@ func (w *Watcher) loop() {
 						rc, err := c.SyscallConn()
 						if err == nil {
 							cachedRawConns[pcb.conn] = rc
+							_ = w.pfd.Watch(pcb.conn, rc)
 							rawconn = rc
 						}
 					}
@@ -363,7 +364,6 @@ func (w *Watcher) loop() {
 							continue
 						}
 					}
-					_ = w.pfd.Watch(pcb.conn, pcb.rawconn)
 					queuedReaders[pcb.conn] = append(queuedReaders[pcb.conn], pcb)
 				case OpWrite:
 					if len(queuedWriters[pcb.conn]) == 0 {
@@ -371,7 +371,6 @@ func (w *Watcher) loop() {
 							continue
 						}
 					}
-					_ = w.pfd.Watch(pcb.conn, pcb.rawconn)
 					queuedWriters[pcb.conn] = append(queuedWriters[pcb.conn], pcb)
 				}
 

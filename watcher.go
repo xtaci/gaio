@@ -338,7 +338,7 @@ func (w *Watcher) loop() {
 						rc, err := c.SyscallConn()
 						if err == nil {
 							cachedRawConns[pcb.conn] = rc
-							_ = w.pfd.Watch(pcb.conn, rc)
+							w.pfd.Watch(pcb.conn, rc)
 							rawconn = rc
 						}
 					}
@@ -406,6 +406,7 @@ func (w *Watcher) loop() {
 				delete(queuedWriters, conn)
 			}
 		case conn := <-w.chRemovedNotify:
+			// remove should also be idempotent operations
 			delete(queuedWriters, conn)
 			delete(queuedReaders, conn)
 			delete(cachedRawConns, conn)

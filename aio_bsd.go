@@ -57,11 +57,11 @@ func (p *poller) trigger() error {
 	return err
 }
 
-func (p *poller) Watch(conn net.Conn, rawconn syscall.RawConn) error {
+func (p *poller) Watch(conn net.Conn, rawconn syscall.RawConn) {
 	p.awaitingMutex.Lock()
 	p.awaiting = append(p.awaiting, connRawConn{conn, rawconn})
 	p.awaitingMutex.Unlock()
-	return p.trigger()
+	p.trigger()
 }
 
 func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net.Conn, chRemovedNotify chan net.Conn, die chan struct{}) {
@@ -70,7 +70,7 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 	for {
 		p.awaitingMutex.Lock()
 		for _, c := range p.awaiting {
-			c.rawConn.Control(func(fd uintptr) {
+			err := c.rawConn.Control(func(fd uintptr) {
 				if _, ok := p.watching[int(fd)]; !ok {
 					p.watching[int(fd)] = c.conn
 					changes = append(changes,
@@ -79,6 +79,15 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 					)
 				}
 			})
+
+			// if cannot control rawsocket
+			if err != nil {
+				select {
+				case chRemovedNotify <- c.conn:
+				case <-die:
+					return
+				}
+			}
 		}
 		p.awaiting = p.awaiting[:0]
 		p.awaitingMutex.Unlock()

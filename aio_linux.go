@@ -60,7 +60,10 @@ func openPoll() (*poller, error) {
 	return p, err
 }
 
-func (p *poller) Close() error { return syscall.Close(p.pfd) }
+func (p *poller) Close() error {
+	syscall.Close(p.efd)
+	return syscall.Close(p.pfd)
+}
 
 func (p *poller) trigger() error {
 	var x uint64 = 1
@@ -68,12 +71,11 @@ func (p *poller) trigger() error {
 	return err
 }
 
-func (p *poller) Watch(conn net.Conn, rawconn syscall.RawConn) (err error) {
+func (p *poller) Watch(conn net.Conn, rawconn syscall.RawConn) {
 	p.awaitingMutex.Lock()
 	p.awaiting = append(p.awaiting, connRawConn{conn, rawconn})
 	p.awaitingMutex.Unlock()
-
-	return p.trigger()
+	p.trigger()
 }
 
 func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net.Conn, chRemovedNotify chan net.Conn, die chan struct{}) {
@@ -82,12 +84,20 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 		// check for new awaiting
 		p.awaitingMutex.Lock()
 		for _, c := range p.awaiting {
-			c.rawConn.Control(func(fd uintptr) {
+			err := c.rawConn.Control(func(fd uintptr) {
 				if _, ok := p.watching[int(fd)]; !ok {
 					p.watching[int(fd)] = c.conn
 					syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN | syscall.EPOLLOUT | EPOLLET})
 				}
 			})
+			// if cannot control rawsocket
+			if err != nil {
+				select {
+				case chRemovedNotify <- c.conn:
+				case <-die:
+					return
+				}
+			}
 		}
 		p.awaiting = p.awaiting[:0]
 		p.awaitingMutex.Unlock()

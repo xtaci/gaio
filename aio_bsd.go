@@ -12,7 +12,7 @@ type poller struct {
 	fd    int
 	seqid int32
 	// awaiting for poll
-	awaiting      []idconn
+	awaiting      []identConn
 	awaitingMutex sync.Mutex
 }
 
@@ -50,7 +50,7 @@ func (p *poller) trigger() error {
 
 func (p *poller) Watch(ident int32, rawconn syscall.RawConn) {
 	p.awaitingMutex.Lock()
-	p.awaiting = append(p.awaiting, idconn{ident, rawconn})
+	p.awaiting = append(p.awaiting, identConn{ident, rawconn})
 	p.awaitingMutex.Unlock()
 	p.trigger()
 }

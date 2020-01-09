@@ -11,7 +11,7 @@ type event struct {
 }
 
 // id associated connection
-type idconn struct {
+type identConn struct {
 	ident   int32
 	rawconn syscall.RawConn
 }

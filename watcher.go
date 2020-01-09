@@ -283,7 +283,8 @@ func (w *Watcher) loop() {
 	// the maps belove is consistent at any give time.
 	queuedReaders := make(map[net.Conn][]*aiocb)
 	queuedWriters := make(map[net.Conn][]*aiocb)
-	cachedRawConns := make(map[net.Conn]syscall.RawConn)
+	connRawConns := make(map[net.Conn]syscall.RawConn)
+	connIdents := make(map[net.Conn]int32)
 	idents := make(map[int32]net.Conn)
 
 	// for timeout operations
@@ -291,11 +292,13 @@ func (w *Watcher) loop() {
 	// for copying
 	var pending []*aiocb
 
-	release := func(conn net.Conn) {
+	releaseConn := func(ident int32) {
+		conn := idents[ident]
 		delete(queuedWriters, conn)
 		delete(queuedReaders, conn)
-		delete(cachedRawConns, conn)
-		// TODO : release cachedFds
+		delete(connRawConns, conn)
+		delete(connIdents, conn)
+		delete(idents, ident)
 	}
 
 	// a timer for cleaning closed net.Conn
@@ -315,10 +318,10 @@ func (w *Watcher) loop() {
 			w.pendingMutex.Unlock()
 
 			for _, pcb := range pending {
-				rawconn, ok := cachedRawConns[pcb.conn]
+				rawconn, ok := connRawConns[pcb.conn]
+				ident := connIdents[pcb.conn]
 				if !ok {
 					// get unique 32-bit id for this conn
-					var ident int32
 					for {
 						ident = w.pfd.NextId()
 						if _, ok := idents[ident]; !ok {
@@ -332,10 +335,11 @@ func (w *Watcher) loop() {
 					}); ok {
 						rc, err := c.SyscallConn()
 						if err == nil {
-							cachedRawConns[pcb.conn] = rc
-							idents[ident] = pcb.conn // unique ID
-							w.pfd.Watch(ident, rc)
 							rawconn = rc
+							connRawConns[pcb.conn] = rawconn
+							idents[ident] = pcb.conn // unique ID
+							connIdents[pcb.conn] = ident
+							w.pfd.Watch(ident, rawconn)
 						}
 					}
 				}
@@ -358,7 +362,7 @@ func (w *Watcher) loop() {
 					if len(queuedReaders[pcb.conn]) == 0 {
 						w.tryRead(pcb)
 						if pcb.err != nil {
-							release(pcb.conn)
+							releaseConn(ident)
 							continue
 						} else if pcb.hasCompleted {
 							continue
@@ -369,7 +373,7 @@ func (w *Watcher) loop() {
 					if len(queuedWriters[pcb.conn]) == 0 {
 						w.tryWrite(pcb)
 						if pcb.err != nil {
-							release(pcb.conn)
+							releaseConn(ident)
 							continue
 						} else if pcb.hasCompleted {
 							continue
@@ -406,7 +410,7 @@ func (w *Watcher) loop() {
 					for _, pcb := range queuedReaders[conn] {
 						w.tryRead(pcb)
 						if pcb.err != nil {
-							release(conn)
+							releaseConn(e.ident)
 							closed = true
 							break
 						} else if pcb.hasCompleted {
@@ -426,7 +430,7 @@ func (w *Watcher) loop() {
 					for _, pcb := range queuedWriters[conn] {
 						w.tryWrite(pcb)
 						if pcb.err != nil {
-							release(conn)
+							releaseConn(e.ident)
 							closed = true
 							break
 						} else if pcb.hasCompleted {
@@ -443,7 +447,7 @@ func (w *Watcher) loop() {
 				}
 
 				if e.err != nil {
-					release(conn)
+					releaseConn(e.ident)
 				}
 			}
 		case pcb := <-chTimeoutOps:
@@ -458,10 +462,9 @@ func (w *Watcher) loop() {
 			}
 		case <-ticker.C: // to GC closed net.Conn object
 			for ident, conn := range idents {
-				rawconn := cachedRawConns[conn]
+				rawconn := connRawConns[conn]
 				if rawconn.Control(func(fd uintptr) {}) != nil {
-					release(conn)
-					delete(idents, ident)
+					releaseConn(ident)
 				}
 			}
 		case <-w.die:

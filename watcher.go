@@ -147,11 +147,6 @@ func (w *Watcher) WaitIO() (r OpResult, err error) {
 	}
 }
 
-// ReadInternal submits an async read request on 'fd' with context 'ctx', reusing internal buffer
-func (w *Watcher) ReadInternal(ctx interface{}, conn net.Conn) error {
-	return w.aioCreate(ctx, OpRead, conn, nil, time.Time{})
-}
-
 // Read submits an async read request on 'fd' with context 'ctx', using buffer 'buf'
 func (w *Watcher) Read(ctx interface{}, conn net.Conn, buf []byte) error {
 	return w.aioCreate(ctx, OpRead, conn, buf, time.Time{})

@@ -87,7 +87,7 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 			err := c.rawConn.Control(func(fd uintptr) {
 				if _, ok := p.watching[int(fd)]; !ok {
 					p.watching[int(fd)] = c.conn
-					syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLIN | syscall.EPOLLOUT | EPOLLET})
+					syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | EPOLLET})
 				}
 			})
 			// if cannot control rawsocket
@@ -113,7 +113,12 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 			} else if conn, ok := p.watching[int(events[i].Fd)]; ok {
 				var notifyRead, notifyWrite, removeFd bool
 
-				if events[i].Events&syscall.EPOLLERR > 0 {
+				// EPOLLRDHUP (since Linux 2.6.17)
+				// Stream socket peer closed connection, or shut down writing
+				// half of connection.  (This flag is especially useful for writ-
+				// ing simple code to detect peer shutdown when using Edge Trig-
+				// gered monitoring.)
+				if events[i].Events&syscall.EPOLLERR > 0 || events[i].Events&syscall.EPOLLRDHUP > 0 {
 					notifyRead = true
 					notifyWrite = true
 					removeFd = true

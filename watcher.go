@@ -25,6 +25,10 @@ var (
 	ErrNotWatched = errors.New("file descriptor is not being watched")
 )
 
+const (
+	recycleInterval = 10 * time.Second
+)
+
 // OpType defines Operation Type
 type OpType int
 
@@ -276,12 +280,11 @@ func (w *Watcher) tryWrite(pcb *aiocb) {
 
 // the core event loop of this watcher
 func (w *Watcher) loop() {
-
+	// the maps belove is consistent at any give time.
 	queuedReaders := make(map[net.Conn][]*aiocb)
 	queuedWriters := make(map[net.Conn][]*aiocb)
 	cachedRawConns := make(map[net.Conn]syscall.RawConn)
-	cachedFds := make(map[int32]net.Conn)
-	// the maps above is consistent at any give time.
+	idents := make(map[int32]net.Conn)
 
 	// for timeout operations
 	chTimeoutOps := make(chan *aiocb)
@@ -295,7 +298,8 @@ func (w *Watcher) loop() {
 		// TODO : release cachedFds
 	}
 
-	ticker := time.NewTicker(10 * time.Second)
+	// a timer for cleaning closed net.Conn
+	ticker := time.NewTicker(recycleInterval)
 
 	for {
 		select {
@@ -317,7 +321,7 @@ func (w *Watcher) loop() {
 					var ident int32
 					for {
 						ident = w.pfd.NextId()
-						if _, ok := cachedFds[ident]; !ok {
+						if _, ok := idents[ident]; !ok {
 							break
 						}
 					}
@@ -329,7 +333,7 @@ func (w *Watcher) loop() {
 						rc, err := c.SyscallConn()
 						if err == nil {
 							cachedRawConns[pcb.conn] = rc
-							cachedFds[ident] = pcb.conn // unique ID
+							idents[ident] = pcb.conn // unique ID
 							w.pfd.Watch(ident, rc)
 							rawconn = rc
 						}
@@ -391,10 +395,10 @@ func (w *Watcher) loop() {
 			// and a new conn is re-opened with the same handler number(fd).
 			//
 			// Note poller will remove closed fd automatically epoll(7), kqueue(2) and silently,
-			// tryRead/tryWrite operates on raw connections related to net.Conn,
-			// the following IO operation is impossible to misread or miswrite on
+			// tryRead/tryWrite operates on raw connections related to net.Conn, which uniquely
+			// identified by 'e.ident',then the following IO operation is impossible to misread or miswrite on
 			// the new same socket fd number inside current process(rawConn.Read/Write will fail).
-			if conn, ok := cachedFds[e.ident]; ok {
+			if conn, ok := idents[e.ident]; ok {
 				//log.Println(e)
 				if e.r {
 					count := 0
@@ -452,16 +456,14 @@ func (w *Watcher) loop() {
 					return
 				}
 			}
-		case <-ticker.C:
-			/*
-				for fd, conn := range cachedFds {
-					rawconn := cachedRawConns[conn]
-					if rawconn.Control(func(fd uintptr) {}) != nil {
-						release(conn)
-						delete(cachedFds, fd)
-					}
+		case <-ticker.C: // to GC closed net.Conn object
+			for ident, conn := range idents {
+				rawconn := cachedRawConns[conn]
+				if rawconn.Control(func(fd uintptr) {}) != nil {
+					release(conn)
+					delete(idents, ident)
 				}
-			*/
+			}
 		case <-w.die:
 			return
 		}

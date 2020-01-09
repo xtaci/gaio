@@ -103,19 +103,35 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 		}
 
 		for i := 0; i < n; i++ {
-			if events[i].Ident != 0 {
-				if conn, ok := p.watching[int(events[i].Ident)]; ok {
+			ev := &events[i]
+			if ev.Ident != 0 {
+				if conn, ok := p.watching[int(ev.Ident)]; ok {
 					var notifyRead, notifyWrite, removeFd bool
 
-					if events[i].Flags&syscall.EV_EOF != 0 {
+					if ev.Filter == syscall.EVFILT_READ {
+						notifyRead = true
+						// https://golang.org/src/runtime/netpoll_kqueue.go
+						// On some systems when the read end of a pipe
+						// is closed the write end will not get a
+						// _EVFILT_WRITE event, but will get a
+						// _EVFILT_READ event with EV_EOF set.
+						// Note that setting 'w' here just means that we
+						// will wake up a goroutine waiting to write;
+						// that goroutine will try the write again,
+						// and the appropriate thing will happen based
+						// on what that write returns (success, EPIPE, EAGAIN).
+						if ev.Flags&syscall.EV_EOF != 0 {
+							notifyWrite = true
+						}
+					} else if ev.Filter == syscall.EVFILT_WRITE {
+						notifyWrite = true
+					}
+
+					//  error
+					if ev.Flags&(syscall.EV_ERROR|syscall.EV_EOF) != 0 {
 						notifyRead = true
 						notifyWrite = true
 						removeFd = true
-					}
-					if events[i].Filter == syscall.EVFILT_READ {
-						notifyRead = true
-					} else if events[i].Filter == syscall.EVFILT_WRITE {
-						notifyWrite = true
 					}
 
 					if notifyRead {
@@ -135,11 +151,11 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 					}
 
 					if removeFd {
-						delete(p.watching, int(events[i].Ident))
+						delete(p.watching, int(ev.Ident))
 						// apply changes immediately
 						changes = append(changes,
-							syscall.Kevent_t{Ident: events[i].Ident, Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_READ},
-							syscall.Kevent_t{Ident: events[i].Ident, Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_WRITE},
+							syscall.Kevent_t{Ident: ev.Ident, Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_READ},
+							syscall.Kevent_t{Ident: ev.Ident, Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_WRITE},
 						)
 						// if the socket called close(), kevent will return error
 						// just ignore this error

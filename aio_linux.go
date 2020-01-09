@@ -108,9 +108,10 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 		}
 
 		for i := 0; i < n; i++ {
-			if int(events[i].Fd) == p.efd {
+			ev := &events[i]
+			if int(ev.Fd) == p.efd {
 				syscall.Read(p.efd, p.efdbuf) // simply consume
-			} else if conn, ok := p.watching[int(events[i].Fd)]; ok {
+			} else if conn, ok := p.watching[int(ev.Fd)]; ok {
 				var notifyRead, notifyWrite, removeFd bool
 
 				// EPOLLRDHUP (since Linux 2.6.17)
@@ -118,15 +119,15 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 				// half of connection.  (This flag is especially useful for writ-
 				// ing simple code to detect peer shutdown when using Edge Trig-
 				// gered monitoring.)
-				if events[i].Events&(syscall.EPOLLERR|syscall.EPOLLHUP|syscall.EPOLLRDHUP) != 0 {
+				if ev.Events&(syscall.EPOLLERR|syscall.EPOLLHUP|syscall.EPOLLRDHUP) != 0 {
 					notifyRead = true
 					notifyWrite = true
 					removeFd = true
 				}
-				if events[i].Events&syscall.EPOLLIN != 0 {
+				if ev.Events&syscall.EPOLLIN != 0 {
 					notifyRead = true
 				}
-				if events[i].Events&syscall.EPOLLOUT != 0 {
+				if ev.Events&syscall.EPOLLOUT != 0 {
 					notifyWrite = true
 				}
 
@@ -147,8 +148,8 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 				}
 
 				if removeFd {
-					delete(p.watching, int(events[i].Fd))
-					syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_DEL, int(events[i].Fd), &syscall.EpollEvent{Fd: int32(events[i].Fd), Events: syscall.EPOLLIN | syscall.EPOLLOUT | EPOLLET})
+					delete(p.watching, int(ev.Fd))
+					syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_DEL, int(ev.Fd), &syscall.EpollEvent{Fd: int32(ev.Fd), Events: syscall.EPOLLIN | syscall.EPOLLOUT | EPOLLET})
 					select {
 					case chRemovedNotify <- conn.(net.Conn):
 					case <-die:

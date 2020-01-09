@@ -211,7 +211,7 @@ func TestBidirectionWatcher(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Close()
-	defer time.Sleep(time.Second)
+	defer time.Sleep(2 * time.Second)
 
 	tx := []byte("hello world")
 	go func() {

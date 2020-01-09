@@ -3,7 +3,6 @@
 package gaio
 
 import (
-	"errors"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -102,7 +101,6 @@ func (p *poller) Wait(chEventNotify chan event, die chan struct{}) {
 				if ev.Events&(syscall.EPOLLERR|syscall.EPOLLHUP|syscall.EPOLLRDHUP) != 0 {
 					e.r = true
 					e.w = true
-					e.err = errors.New("error")
 				}
 
 				if ev.Events&syscall.EPOLLIN != 0 {

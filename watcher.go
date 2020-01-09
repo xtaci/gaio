@@ -37,10 +37,9 @@ const (
 
 // event represent a file descriptor event
 type event struct {
-	fd  int
-	r   bool  // fd is readable
-	w   bool  // fd is writable
-	err error // fd has error
+	fd int
+	r  bool // fd is readable
+	w  bool // fd is writable
 }
 
 // aiocb contains all info for a request
@@ -285,13 +284,11 @@ func (w *Watcher) tryWrite(pcb *aiocb) {
 
 // the core event loop of this watcher
 func (w *Watcher) loop() {
-	// cached fds for poller callback
-	cachedFds := make(map[int]net.Conn)
-
-	// net.Conn related operations
 	queuedReaders := make(map[net.Conn][]*aiocb)
 	queuedWriters := make(map[net.Conn][]*aiocb)
 	cachedRawConns := make(map[net.Conn]syscall.RawConn)
+	cachedFds := make(map[int]net.Conn)
+	// the maps above is consistent at any give time.
 
 	// for timeout operations
 	chTimeoutOps := make(chan *aiocb)
@@ -302,9 +299,10 @@ func (w *Watcher) loop() {
 		delete(queuedWriters, conn)
 		delete(queuedReaders, conn)
 		delete(cachedRawConns, conn)
-
 		// TODO : release cachedFds
 	}
+
+	ticker := time.NewTicker(10 * time.Second)
 
 	for {
 		select {
@@ -330,6 +328,10 @@ func (w *Watcher) loop() {
 						if err == nil {
 							rc.Control(func(s uintptr) {
 								cachedRawConns[pcb.conn] = rc
+								// same fd, replace all related previous conn
+								if oldconn, ok := cachedFds[int(s)]; ok {
+									release(oldconn)
+								}
 								cachedFds[int(s)] = pcb.conn
 								w.pfd.Watch(rc)
 								rawconn = rc
@@ -389,10 +391,10 @@ func (w *Watcher) loop() {
 			}
 			pending = pending[:0]
 		case e := <-w.chEventNotify:
-			// if fd(s) being polled is closed by conn.Close() from outside after chanrecv,
+			// suppose fd(s) being polled is closed by conn.Close() from outside after chanrecv,
 			// and a new conn is re-opened with the same handler number(fd).
 			//
-			// Note poller will removed closed fd automatically epoll(7), kqueue(2),
+			// Note poller will remove closed fd automatically epoll(7), kqueue(2) and silently,
 			// tryRead/tryWrite operates on raw connections related to net.Conn,
 			// the following IO operation is impossible to misread or miswrite on
 			// the new same socket fd number inside current process(rawConn.Read/Write will fail).
@@ -438,9 +440,6 @@ func (w *Watcher) loop() {
 						queuedWriters[conn] = queuedWriters[conn][count:]
 					}
 				}
-				if e.err != nil {
-					release(conn)
-				}
 			}
 		case pcb := <-chTimeoutOps:
 			if !pcb.hasCompleted {
@@ -450,6 +449,14 @@ func (w *Watcher) loop() {
 					pcb.hasCompleted = true
 				case <-w.die:
 					return
+				}
+			}
+		case <-ticker.C:
+			for fd, conn := range cachedFds {
+				rawconn := cachedRawConns[conn]
+				if rawconn.Control(func(fd uintptr) {}) != nil {
+					release(conn)
+					delete(cachedFds, fd)
 				}
 			}
 		case <-w.die:

@@ -70,6 +70,7 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 	for {
 		p.awaitingMutex.Lock()
 		for _, c := range p.awaiting {
+			var operr error
 			err := c.rawConn.Control(func(fd uintptr) {
 				if _, ok := p.watching[int(fd)]; !ok {
 					p.watching[int(fd)] = c.conn
@@ -77,11 +78,14 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 						syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_READ},
 						syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_WRITE},
 					)
+					// apply changes one by one to notify caller
+					_, operr = syscall.Kevent(p.fd, changes, nil, nil)
+					changes = changes[:0]
 				}
 			})
 
-			// if cannot control rawsocket
-			if err != nil {
+			// if cannot control rawsocket or kevent failed
+			if err != nil || operr != nil {
 				select {
 				case chRemovedNotify <- c.conn:
 				case <-die:
@@ -92,13 +96,11 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 		p.awaiting = p.awaiting[:0]
 		p.awaitingMutex.Unlock()
 
-		// apply changes and poll wait
-		n, err := syscall.Kevent(p.fd, changes, events, nil)
+		// poll
+		n, err := syscall.Kevent(p.fd, nil, events, nil)
 		if err != nil && err != syscall.EINTR {
 			return
 		}
-		// clear changes
-		changes = changes[:0]
 
 		for i := 0; i < n; i++ {
 			if events[i].Ident != 0 {
@@ -139,10 +141,9 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 							syscall.Kevent_t{Ident: events[i].Ident, Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_READ},
 							syscall.Kevent_t{Ident: events[i].Ident, Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_WRITE},
 						)
-						_, err := syscall.Kevent(p.fd, changes, nil, nil)
-						if err != nil && err != syscall.EINTR {
-							return
-						}
+						// if the socket called close(), kevent will return error
+						// just ignore this error
+						_, _ = syscall.Kevent(p.fd, changes, nil, nil)
 						changes = changes[:0]
 
 						// notify listener

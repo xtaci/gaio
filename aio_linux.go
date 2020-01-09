@@ -3,6 +3,7 @@
 package gaio
 
 import (
+	"io"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -16,8 +17,11 @@ type poller struct {
 	efd    int // eventfd
 	efdbuf []byte
 
+	// sequence id for unique identification of objects
+	seqid int32
+
 	// awaiting for poll
-	awaiting      []syscall.RawConn
+	awaiting      []idconn
 	awaitingMutex sync.Mutex
 }
 
@@ -61,11 +65,19 @@ func (p *poller) trigger() error {
 	return err
 }
 
-func (p *poller) Watch(rawconn syscall.RawConn) {
+func (p *poller) Watch(ident int32, rawconn syscall.RawConn) {
 	p.awaitingMutex.Lock()
-	p.awaiting = append(p.awaiting, rawconn)
+	p.awaiting = append(p.awaiting, idconn{ident, rawconn})
 	p.awaitingMutex.Unlock()
 	p.trigger()
+}
+
+func (p *poller) NextId() int32 {
+	p.seqid++
+	if p.seqid == int32(p.efd) { // special one
+		p.seqid++
+	}
+	return p.seqid
 }
 
 func (p *poller) Wait(chEventNotify chan event, die chan struct{}) {
@@ -73,9 +85,9 @@ func (p *poller) Wait(chEventNotify chan event, die chan struct{}) {
 	for {
 		// check for new awaiting
 		p.awaitingMutex.Lock()
-		for _, rawconn := range p.awaiting {
-			rawconn.Control(func(fd uintptr) {
-				syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | EPOLLET})
+		for _, c := range p.awaiting {
+			c.rawconn.Control(func(fd uintptr) {
+				syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: c.ident, Events: syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | EPOLLET})
 			})
 		}
 		p.awaiting = p.awaiting[:0]
@@ -91,7 +103,7 @@ func (p *poller) Wait(chEventNotify chan event, die chan struct{}) {
 			if int(ev.Fd) == p.efd {
 				syscall.Read(p.efd, p.efdbuf) // simply consume
 			} else {
-				e := event{fd: int(ev.Fd)}
+				e := event{ident: ev.Fd}
 
 				// EPOLLRDHUP (since Linux 2.6.17)
 				// Stream socket peer closed connection, or shut down writing
@@ -101,6 +113,7 @@ func (p *poller) Wait(chEventNotify chan event, die chan struct{}) {
 				if ev.Events&(syscall.EPOLLERR|syscall.EPOLLHUP|syscall.EPOLLRDHUP) != 0 {
 					e.r = true
 					e.w = true
+					e.err = io.ErrClosedPipe
 				}
 
 				if ev.Events&syscall.EPOLLIN != 0 {
@@ -110,6 +123,7 @@ func (p *poller) Wait(chEventNotify chan event, die chan struct{}) {
 					e.w = true
 				}
 
+				//log.Println(e)
 				select {
 				case chEventNotify <- e:
 				case <-die:

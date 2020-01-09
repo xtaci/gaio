@@ -6,7 +6,6 @@ package gaio
 
 import (
 	"errors"
-	"log"
 	"net"
 	"sync"
 	"syscall"
@@ -87,9 +86,6 @@ type Watcher struct {
 	// internal buffer for reading
 	swapBuffer     [][]byte
 	nextSwapBuffer int
-
-	// sequence id for next.Conn object
-	seqid int32
 
 	die     chan struct{}
 	dieOnce sync.Once
@@ -279,14 +275,6 @@ func (w *Watcher) tryWrite(pcb *aiocb) {
 	return
 }
 
-func (w *Watcher) nextId() int32 {
-	w.seqid++
-	if w.seqid == 0 {
-		w.seqid++
-	}
-	return w.seqid
-}
-
 // the core event loop of this watcher
 func (w *Watcher) loop() {
 
@@ -329,7 +317,7 @@ func (w *Watcher) loop() {
 					// get unique 32-bit id for this conn
 					var ident int32
 					for {
-						ident = w.nextId()
+						ident = w.pfd.NextId()
 						if _, ok := cachedFds[ident]; !ok {
 							break
 						}
@@ -408,6 +396,7 @@ func (w *Watcher) loop() {
 			// the following IO operation is impossible to misread or miswrite on
 			// the new same socket fd number inside current process(rawConn.Read/Write will fail).
 			if conn, ok := cachedFds[e.ident]; ok {
+				//log.Println(e)
 				if e.r {
 					count := 0
 					closed := false
@@ -451,7 +440,6 @@ func (w *Watcher) loop() {
 				}
 
 				if e.err != nil {
-					log.Println(e.err)
 					release(conn)
 				}
 			}

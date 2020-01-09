@@ -390,15 +390,9 @@ func (w *Watcher) loop() {
 			// the new same socket fd number inside current process(rawConn.Read/Write will fail).
 			n := w.tryReadAll(queuedReaders[conn])
 			queuedReaders[conn] = queuedReaders[conn][n:]
-			if len(queuedReaders[conn]) == 0 { // delete key from map
-				delete(queuedReaders, conn)
-			}
 		case conn := <-w.chWritableNotify:
 			n := w.tryWriteAll(queuedWriters[conn])
 			queuedWriters[conn] = queuedWriters[conn][n:]
-			if len(queuedWriters[conn]) == 0 {
-				delete(queuedWriters, conn)
-			}
 		case conn := <-w.chRemovedNotify:
 			// remove should also be idempotent operations
 			delete(queuedWriters, conn)

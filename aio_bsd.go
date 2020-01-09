@@ -5,12 +5,13 @@ package gaio
 import (
 	"sync"
 	"syscall"
+	"unsafe"
 )
 
 type poller struct {
 	fd int
 	// awaiting for poll
-	awaiting      []syscall.RawConn
+	awaiting      []idconn
 	awaitingMutex sync.Mutex
 }
 
@@ -46,9 +47,9 @@ func (p *poller) trigger() error {
 	return err
 }
 
-func (p *poller) Watch(rawconn syscall.RawConn) {
+func (p *poller) Watch(ident int32, rawconn syscall.RawConn) {
 	p.awaitingMutex.Lock()
-	p.awaiting = append(p.awaiting, rawconn)
+	p.awaiting = append(p.awaiting, idconn{ident, rawconn})
 	p.awaitingMutex.Unlock()
 	p.trigger()
 }
@@ -58,11 +59,12 @@ func (p *poller) Wait(chEventNotify chan event, die chan struct{}) {
 	var changes []syscall.Kevent_t
 	for {
 		p.awaitingMutex.Lock()
-		for _, rawconn := range p.awaiting {
-			rawconn.Control(func(fd uintptr) {
+		for _, c := range p.awaiting {
+			c.rawconn.Control(func(fd uintptr) {
+				ident := (*byte)(unsafe.Pointer(uintptr(c.ident)))
 				changes = append(changes,
-					syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_READ},
-					syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_WRITE},
+					syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_READ, Udata: ident},
+					syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_WRITE, Udata: ident},
 				)
 				// apply changes one by one to notify caller
 				syscall.Kevent(p.fd, changes, nil, nil)
@@ -81,7 +83,7 @@ func (p *poller) Wait(chEventNotify chan event, die chan struct{}) {
 		for i := 0; i < n; i++ {
 			ev := &events[i]
 			if ev.Ident != 0 {
-				e := event{fd: int(ev.Ident)}
+				e := event{ident: int32(uintptr(unsafe.Pointer(ev.Udata)))}
 				if ev.Filter == syscall.EVFILT_READ {
 					e.r = true
 					// https://golang.org/src/runtime/netpoll_kqueue.go
@@ -105,6 +107,7 @@ func (p *poller) Wait(chEventNotify chan event, die chan struct{}) {
 				if ev.Flags&(syscall.EV_ERROR) != 0 {
 					e.r = true
 					e.w = true
+					e.err = syscall.Errno(ev.Data)
 				}
 
 				select {

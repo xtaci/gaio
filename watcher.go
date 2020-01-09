@@ -6,6 +6,7 @@ package gaio
 
 import (
 	"errors"
+	"log"
 	"net"
 	"sync"
 	"syscall"
@@ -34,13 +35,6 @@ const (
 	// OpWrite means the aiocb is a write operation
 	OpWrite
 )
-
-// event represent a file descriptor event
-type event struct {
-	fd int
-	r  bool // fd is readable
-	w  bool // fd is writable
-}
 
 // aiocb contains all info for a request
 type aiocb struct {
@@ -93,6 +87,9 @@ type Watcher struct {
 	// internal buffer for reading
 	swapBuffer     [][]byte
 	nextSwapBuffer int
+
+	// sequence id for next.Conn object
+	seqid int32
 
 	die     chan struct{}
 	dieOnce sync.Once
@@ -282,12 +279,21 @@ func (w *Watcher) tryWrite(pcb *aiocb) {
 	return
 }
 
+func (w *Watcher) nextId() int32 {
+	w.seqid++
+	if w.seqid == 0 {
+		w.seqid++
+	}
+	return w.seqid
+}
+
 // the core event loop of this watcher
 func (w *Watcher) loop() {
+
 	queuedReaders := make(map[net.Conn][]*aiocb)
 	queuedWriters := make(map[net.Conn][]*aiocb)
 	cachedRawConns := make(map[net.Conn]syscall.RawConn)
-	cachedFds := make(map[int]net.Conn)
+	cachedFds := make(map[int32]net.Conn)
 	// the maps above is consistent at any give time.
 
 	// for timeout operations
@@ -320,22 +326,25 @@ func (w *Watcher) loop() {
 			for _, pcb := range pending {
 				rawconn, ok := cachedRawConns[pcb.conn]
 				if !ok {
+					// get unique 32-bit id for this conn
+					var ident int32
+					for {
+						ident = w.nextId()
+						if _, ok := cachedFds[ident]; !ok {
+							break
+						}
+					}
+
 					// cache raw conn
 					if c, ok := pcb.conn.(interface {
 						SyscallConn() (syscall.RawConn, error)
 					}); ok {
 						rc, err := c.SyscallConn()
 						if err == nil {
-							rc.Control(func(s uintptr) {
-								cachedRawConns[pcb.conn] = rc
-								// same fd, replace all related previous conn
-								if oldconn, ok := cachedFds[int(s)]; ok {
-									release(oldconn)
-								}
-								cachedFds[int(s)] = pcb.conn
-								w.pfd.Watch(rc)
-								rawconn = rc
-							})
+							cachedRawConns[pcb.conn] = rc
+							cachedFds[ident] = pcb.conn // unique ID
+							w.pfd.Watch(ident, rc)
+							rawconn = rc
 						}
 					}
 				}
@@ -398,7 +407,7 @@ func (w *Watcher) loop() {
 			// tryRead/tryWrite operates on raw connections related to net.Conn,
 			// the following IO operation is impossible to misread or miswrite on
 			// the new same socket fd number inside current process(rawConn.Read/Write will fail).
-			if conn, ok := cachedFds[e.fd]; ok {
+			if conn, ok := cachedFds[e.ident]; ok {
 				if e.r {
 					count := 0
 					closed := false
@@ -440,6 +449,11 @@ func (w *Watcher) loop() {
 						queuedWriters[conn] = queuedWriters[conn][count:]
 					}
 				}
+
+				if e.err != nil {
+					log.Println(e.err)
+					release(conn)
+				}
 			}
 		case pcb := <-chTimeoutOps:
 			if !pcb.hasCompleted {
@@ -452,13 +466,15 @@ func (w *Watcher) loop() {
 				}
 			}
 		case <-ticker.C:
-			for fd, conn := range cachedFds {
-				rawconn := cachedRawConns[conn]
-				if rawconn.Control(func(fd uintptr) {}) != nil {
-					release(conn)
-					delete(cachedFds, fd)
+			/*
+				for fd, conn := range cachedFds {
+					rawconn := cachedRawConns[conn]
+					if rawconn.Control(func(fd uintptr) {}) != nil {
+						release(conn)
+						delete(cachedFds, fd)
+					}
 				}
-			}
+			*/
 		case <-w.die:
 			return
 		}

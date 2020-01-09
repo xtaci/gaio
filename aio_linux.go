@@ -118,15 +118,15 @@ func (p *poller) Wait(chReadableNotify chan net.Conn, chWriteableNotify chan net
 				// half of connection.  (This flag is especially useful for writ-
 				// ing simple code to detect peer shutdown when using Edge Trig-
 				// gered monitoring.)
-				if events[i].Events&syscall.EPOLLERR > 0 || events[i].Events&syscall.EPOLLRDHUP > 0 {
+				if events[i].Events&(syscall.EPOLLERR|syscall.EPOLLHUP|syscall.EPOLLRDHUP) != 0 {
 					notifyRead = true
 					notifyWrite = true
 					removeFd = true
 				}
-				if events[i].Events&syscall.EPOLLIN > 0 {
+				if events[i].Events&syscall.EPOLLIN != 0 {
 					notifyRead = true
 				}
-				if events[i].Events&syscall.EPOLLOUT > 0 {
+				if events[i].Events&syscall.EPOLLOUT != 0 {
 					notifyWrite = true
 				}
 

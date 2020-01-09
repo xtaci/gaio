@@ -9,7 +9,8 @@ import (
 )
 
 type poller struct {
-	fd int
+	fd    int
+	seqid int32
 	// awaiting for poll
 	awaiting      []idconn
 	awaitingMutex sync.Mutex
@@ -52,6 +53,14 @@ func (p *poller) Watch(ident int32, rawconn syscall.RawConn) {
 	p.awaiting = append(p.awaiting, idconn{ident, rawconn})
 	p.awaitingMutex.Unlock()
 	p.trigger()
+}
+
+func (p *poller) NextId() int32 {
+	p.seqid++
+	if p.seqid == 0 { // special one for kqueue wakeup
+		p.seqid++
+	}
+	return p.seqid
 }
 
 func (p *poller) Wait(chEventNotify chan event, die chan struct{}) {

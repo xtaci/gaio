@@ -272,7 +272,6 @@ func (w *Watcher) tryWrite(pcb *aiocb) {
 			return
 		}
 	}
-	return
 }
 
 // the core event loop of this watcher

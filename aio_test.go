@@ -139,7 +139,7 @@ func TestDeadline(t *testing.T) {
 		// read with timeout
 		err = w.ReadTimeout(nil, conn, nil, time.Now().Add(time.Second))
 		if err != nil {
-			t.Fatal(err)
+			log.Fatal(err)
 		}
 	}()
 
@@ -179,9 +179,9 @@ func TestEchoHuge(t *testing.T) {
 	go func() {
 		n, err := conn.Write(tx)
 		if err != nil {
-			t.Fatal(err)
+			log.Fatal(err)
 		}
-		t.Log("ping size", n)
+		log.Println("ping size", n)
 	}()
 
 	rx := make([]byte, len(tx))
@@ -495,7 +495,7 @@ func benchmarkEcho(b *testing.B, bufsize int) {
 		for i := 0; i < numLoops; i++ {
 			_, err := conn.Write(tx)
 			if err != nil {
-				b.Fatal(err)
+				log.Fatal(err)
 			}
 		}
 	}()

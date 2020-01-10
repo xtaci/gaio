@@ -304,11 +304,12 @@ func (w *Watcher) loop() {
 
 	releaseConn := func(ident int) {
 		//log.Println("release", ident)
-		ptr := idents[ident]
-		delete(queuedReaders, ident)
-		delete(queuedWriters, ident)
-		delete(idents, ident)
-		delete(connIdents, ptr)
+		if ptr, ok := idents[ident]; ok {
+			delete(queuedReaders, ident)
+			delete(queuedWriters, ident)
+			delete(idents, ident)
+			delete(connIdents, ptr)
+		}
 		//log.Println("released", ident)
 	}
 
@@ -367,9 +368,6 @@ func (w *Watcher) loop() {
 					if len(queuedReaders[ident]) == 0 {
 						w.tryRead(pcb)
 						if pcb.hasCompleted {
-							if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
-								releaseConn(ident)
-							}
 							continue
 						}
 					}
@@ -378,9 +376,6 @@ func (w *Watcher) loop() {
 					if len(queuedWriters[ident]) == 0 {
 						w.tryWrite(pcb)
 						if pcb.hasCompleted {
-							if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
-								releaseConn(ident)
-							}
 							continue
 						}
 					}
@@ -414,6 +409,7 @@ func (w *Watcher) loop() {
 				for _, pcb := range queuedReaders[e.ident] {
 					w.tryRead(pcb)
 					if pcb.hasCompleted {
+						count++
 						if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
 							releaseConn(e.ident)
 							closed = true
@@ -422,7 +418,6 @@ func (w *Watcher) loop() {
 					} else {
 						break
 					}
-					count++
 				}
 				if !closed {
 					queuedReaders[e.ident] = queuedReaders[e.ident][count:]
@@ -434,7 +429,8 @@ func (w *Watcher) loop() {
 				for _, pcb := range queuedWriters[e.ident] {
 					w.tryWrite(pcb)
 					if pcb.hasCompleted {
-						if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
+						count++
+						if pcb.err != nil {
 							releaseConn(e.ident)
 							closed = true
 							break

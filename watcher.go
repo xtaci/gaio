@@ -6,6 +6,7 @@ package gaio
 
 import (
 	"errors"
+	"log"
 	"net"
 	"sync"
 	"syscall"
@@ -284,21 +285,22 @@ func (w *Watcher) loop() {
 	queuedReaders := make(map[net.Conn][]*aiocb)
 	queuedWriters := make(map[net.Conn][]*aiocb)
 	connRawConns := make(map[net.Conn]syscall.RawConn)
-	connIdents := make(map[net.Conn]int32)
-	idents := make(map[int32]net.Conn)
+	connIdents := make(map[net.Conn]int)
+	idents := make(map[int]net.Conn)
 
 	// for timeout operations
 	chTimeoutOps := make(chan *aiocb)
 	// for copying
 	var pending []*aiocb
 
-	releaseConn := func(ident int32) {
+	releaseConn := func(ident int) {
 		conn := idents[ident]
 		delete(queuedWriters, conn)
 		delete(queuedReaders, conn)
 		delete(connRawConns, conn)
 		delete(connIdents, conn)
 		delete(idents, ident)
+		log.Println("released", ident)
 	}
 
 	// a timer for cleaning closed net.Conn
@@ -321,25 +323,22 @@ func (w *Watcher) loop() {
 				rawconn, ok := connRawConns[pcb.conn]
 				ident := connIdents[pcb.conn]
 				if !ok {
-					// get unique 32-bit id for this conn
-					for {
-						ident = w.pfd.NextId()
-						if _, ok := idents[ident]; !ok {
-							break
-						}
-					}
-
-					// cache raw conn
+					// new conn
 					if c, ok := pcb.conn.(interface {
 						SyscallConn() (syscall.RawConn, error)
 					}); ok {
 						rc, err := c.SyscallConn()
 						if err == nil {
-							rawconn = rc
-							connRawConns[pcb.conn] = rawconn
-							idents[ident] = pcb.conn // unique ID
-							connIdents[pcb.conn] = ident
-							w.pfd.Watch(ident, rawconn)
+							// duplicated socket file descriptor
+							dupfd, err := w.pfd.Dup(rc)
+							if err == nil {
+								ident = dupfd
+								rawconn = rc
+								connRawConns[pcb.conn] = rawconn
+								idents[ident] = pcb.conn // unique ID
+								connIdents[pcb.conn] = ident
+								w.pfd.Watch(ident)
+							}
 						}
 					}
 				}

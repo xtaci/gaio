@@ -5,14 +5,13 @@ package gaio
 import (
 	"sync"
 	"syscall"
-	"unsafe"
 )
 
 type poller struct {
 	fd    int
 	seqid int32
 	// awaiting for poll
-	awaiting      []identConn
+	awaiting      []int
 	awaitingMutex sync.Mutex
 }
 
@@ -48,19 +47,23 @@ func (p *poller) trigger() error {
 	return err
 }
 
-func (p *poller) Watch(ident int32, rawconn syscall.RawConn) {
+func (p *poller) Watch(fd int) {
 	p.awaitingMutex.Lock()
-	p.awaiting = append(p.awaiting, identConn{ident, rawconn})
+	p.awaiting = append(p.awaiting, fd)
 	p.awaitingMutex.Unlock()
 	p.trigger()
 }
 
-func (p *poller) NextId() int32 {
-	p.seqid++
-	if p.seqid == 0 { // special one for kqueue wakeup
-		p.seqid++
+func (p *poller) Dup(rawconn syscall.RawConn) (newfd int, err error) {
+	ec := rawconn.Control(func(fd uintptr) {
+		newfd, err = syscall.Dup(int(fd))
+		return
+	})
+
+	if ec != nil {
+		return -1, ec
 	}
-	return p.seqid
+	return
 }
 
 func (p *poller) Wait(chEventNotify chan event, die chan struct{}) {
@@ -68,17 +71,14 @@ func (p *poller) Wait(chEventNotify chan event, die chan struct{}) {
 	var changes []syscall.Kevent_t
 	for {
 		p.awaitingMutex.Lock()
-		for _, c := range p.awaiting {
-			c.rawconn.Control(func(fd uintptr) {
-				ident := (*byte)(unsafe.Pointer(uintptr(c.ident)))
-				changes = append(changes,
-					syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_READ, Udata: ident},
-					syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_WRITE, Udata: ident},
-				)
-				// apply changes one by one to notify caller
-				syscall.Kevent(p.fd, changes, nil, nil)
-				changes = changes[:0]
-			})
+		for _, fd := range p.awaiting {
+			changes = append(changes,
+				syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_READ},
+				syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_WRITE},
+			)
+			// apply changes one by one to notify caller
+			syscall.Kevent(p.fd, changes, nil, nil)
+			changes = changes[:0]
 		}
 		p.awaiting = p.awaiting[:0]
 		p.awaitingMutex.Unlock()
@@ -92,7 +92,7 @@ func (p *poller) Wait(chEventNotify chan event, die chan struct{}) {
 		for i := 0; i < n; i++ {
 			ev := &events[i]
 			if ev.Ident != 0 {
-				e := event{ident: int32(uintptr(unsafe.Pointer(ev.Udata)))}
+				e := event{ident: int(ev.Ident)}
 				if ev.Filter == syscall.EVFILT_READ {
 					e.r = true
 					// https://golang.org/src/runtime/netpoll_kqueue.go

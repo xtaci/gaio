@@ -273,7 +273,7 @@ func (w *Watcher) loop() {
 	chTimeoutOps := make(chan *aiocb)
 
 	releaseConn := func(ident int) {
-		log.Println("release", ident)
+		//log.Println("release", ident)
 		ptr := idents[ident]
 		delete(queuedReaders, ident)
 		delete(queuedWriters, ident)
@@ -390,11 +390,13 @@ func (w *Watcher) loop() {
 						releaseConn(e.ident)
 						closed = true
 						break
+					} else if pcb.size == 0 && pcb.err == nil { // EOF
+						releaseConn(e.ident)
+						break
 					} else if !pcb.hasCompleted {
 						break
-					} else {
-						count++
 					}
+					count++
 				}
 				if !closed {
 					queuedReaders[e.ident] = queuedReaders[e.ident][count:]

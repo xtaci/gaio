@@ -28,8 +28,7 @@ By eliminating **one goroutine per one connection scheme** with **Edge-Triggered
 1. Only a fixed number of goroutines will be created per **Watcher**(the core object of this library).
 2. The IO-completion notification on a **Watcher** is sequential, that means buffer can be reused in some pattern.
 3. Non-intrusive design, this library works with `net.Listener` and `net.Conn`. (with `syscall.RawConn` support)
-4. Each independent `net.Conn` will be generated an *unique* identifier internally at first async submit, [kqueue](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/kqueue.2.html) coded this identifier in `kevent.udata` field, and [epoll](http://man7.org/linux/man-pages/man2/epoll_ctl.2.html) stored this identifier in `epoll_event.fd`.
-5. Support for Linux, BSD.
+4. Support for Linux, BSD.
 
 ## Documentation
 

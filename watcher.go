@@ -6,7 +6,6 @@ package gaio
 
 import (
 	"errors"
-	"log"
 	"net"
 	"reflect"
 	"sync"
@@ -309,6 +308,8 @@ func (w *Watcher) loop() {
 			delete(queuedWriters, ident)
 			delete(idents, ident)
 			delete(connIdents, ptr)
+			// close file descriptor
+			syscall.Close(ident)
 		}
 		//log.Println("released", ident)
 	}
@@ -334,7 +335,6 @@ func (w *Watcher) loop() {
 				} else {
 					select {
 					case w.chIOCompletion <- OpResult{Op: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Err: ErrUnsupported, Context: pcb.ctx}:
-						log.Println("ptr:", ErrUnsupported)
 						continue
 					case <-w.die:
 						return
@@ -344,8 +344,7 @@ func (w *Watcher) loop() {
 				ident, ok := connIdents[ptr]
 				if !ok {
 					// new conn
-					if dupfd, err := w.pfd.Dup(pcb.conn); err != nil {
-						log.Println("dupfailed:", err)
+					if dupfd, err := dupconn(pcb.conn); err != nil {
 						select {
 						case w.chIOCompletion <- OpResult{Op: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Err: err, Context: pcb.ctx}:
 							continue

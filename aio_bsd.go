@@ -3,7 +3,6 @@
 package gaio
 
 import (
-	"net"
 	"sync"
 	"syscall"
 )
@@ -53,28 +52,6 @@ func (p *poller) Watch(fd int) {
 	p.awaiting = append(p.awaiting, fd)
 	p.awaitingMutex.Unlock()
 	p.trigger()
-}
-
-func (p *poller) Dup(conn net.Conn) (newfd int, err error) {
-	sc, ok := conn.(interface {
-		SyscallConn() (syscall.RawConn, error)
-	})
-	if !ok {
-		return -1, ErrUnsupported
-	}
-	rc, err := sc.SyscallConn()
-	if err != nil {
-		return -1, ErrUnsupported
-	}
-	ec := rc.Control(func(fd uintptr) {
-		newfd, err = syscall.Dup(int(fd))
-		return
-	})
-
-	if ec != nil {
-		return -1, ec
-	}
-	return
 }
 
 func (p *poller) Wait(chEventNotify chan event, die chan struct{}) {

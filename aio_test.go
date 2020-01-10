@@ -298,10 +298,11 @@ func Test2k(t *testing.T) {
 	testParallel(t, 2048)
 }
 
-/*
 func Test4k(t *testing.T) {
 	testParallel(t, 4096)
 }
+
+/*
 func Test8k(t *testing.T) {
 	testParallel(t, 8192)
 }

@@ -383,6 +383,8 @@ func testParallel(t *testing.T, par int) {
 func TestDeadline1k(t *testing.T) {
 	testDeadline(t, 1024)
 }
+
+/* travis cannot authorize enough fd
 func TestDeadline2k(t *testing.T) {
 	testDeadline(t, 2048)
 }
@@ -390,7 +392,6 @@ func TestDeadline4k(t *testing.T) {
 	testDeadline(t, 4096)
 }
 
-/* travis cannot authorize enough fd
 func TestDeadline8k(t *testing.T) {
 	testDeadline(t, 8192)
 }

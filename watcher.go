@@ -30,8 +30,41 @@ var (
 )
 
 const (
-	recycleInterval = 10 * time.Second
+	defaultInternalBufferSize = 65536
 )
+
+// library default watcher API
+var defaultWatcher *Watcher
+
+func init() {
+	w, err := NewWatcher(defaultInternalBufferSize)
+	if err != nil {
+		panic(err)
+	}
+	defaultWatcher = w
+}
+
+// Read submits an async read request on 'fd' with context 'ctx', using buffer 'buf'
+func Read(ctx interface{}, conn net.Conn, buf []byte) error {
+	return defaultWatcher.Read(ctx, conn, buf)
+}
+
+// ReadTimeout submits an async read request on 'fd' with context 'ctx', using buffer 'buf', and
+// expected to be completed before 'deadline'
+func ReadTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
+	return defaultWatcher.ReadTimeout(ctx, conn, buf, deadline)
+}
+
+// Write submits an async write request on 'fd' with context 'ctx', using buffer 'buf'
+func Write(ctx interface{}, conn net.Conn, buf []byte) error {
+	return defaultWatcher.Write(ctx, conn, buf)
+}
+
+// WriteTimeout submits an async write request on 'fd' with context 'ctx', using buffer 'buf', and
+// expected to be completed before 'deadline'
+func WriteTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
+	return defaultWatcher.WriteTimeout(ctx, conn, buf, deadline)
+}
 
 // OpType defines Operation Type
 type OpType int

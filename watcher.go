@@ -235,16 +235,14 @@ func (w *Watcher) tryRead(pcb *aiocb) {
 		useSwap = true
 	}
 
-	var nr int
-	var er error
-	nr, er = syscall.Read(pcb.fd, buf)
-	pcb.err = er
-	if er == syscall.EAGAIN {
+	// return values are stored in pcb
+	pcb.size, pcb.err = syscall.Read(pcb.fd, buf)
+	if pcb.err == syscall.EAGAIN {
 		return
 	}
 
 	select {
-	case w.chIOCompletion <- OpResult{Op: OpRead, Conn: pcb.conn, Buffer: buf, Size: nr, Err: er, Context: pcb.ctx}:
+	case w.chIOCompletion <- OpResult{Op: OpRead, Conn: pcb.conn, Buffer: buf, Size: pcb.size, Err: pcb.err, Context: pcb.ctx}:
 		// swap buffer if IO successful
 		if useSwap {
 			w.nextSwapBuffer = (w.nextSwapBuffer + 1) % len(w.swapBuffer)
@@ -367,6 +365,9 @@ func (w *Watcher) loop() {
 					if len(queuedReaders[ident]) == 0 {
 						w.tryRead(pcb)
 						if pcb.hasCompleted {
+							if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
+								releaseConn(ident)
+							}
 							continue
 						}
 					}
@@ -375,6 +376,9 @@ func (w *Watcher) loop() {
 					if len(queuedWriters[ident]) == 0 {
 						w.tryWrite(pcb)
 						if pcb.hasCompleted {
+							if pcb.err != nil {
+								releaseConn(ident)
+							}
 							continue
 						}
 					}

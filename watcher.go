@@ -11,11 +11,14 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/xtaci/gaio/internal"
 )
 
 var (
+	// ErrUnsupported means the watcher cannot support this type of connection
+	ErrUnsupported = errors.New("unsupported connection")
 	// ErrNoRawConn means the connection has not implemented SyscallConn
 	ErrNoRawConn = errors.New("net.Conn does implement net.RawConn")
 	// ErrWatcherClosed means the watcher is closed
@@ -42,12 +45,12 @@ const (
 
 // aiocb contains all info for a request
 type aiocb struct {
-	ctx          interface{}     // user context associated with this request
-	op           OpType          // read or write
-	conn         net.Conn        // associated net.Conn
-	rawconn      syscall.RawConn // associated raw connection for nonblocking-io
-	err          error           // error for last operation
-	size         int             // size received or sent
+	ctx          interface{} // user context associated with this request
+	op           OpType      // read or write
+	fd           int         // associated file descriptor for nonblocking-io
+	conn         net.Conn    // associated connection for nonblocking-io
+	err          error       // error for last operation
+	size         int         // size received or sent
 	buffer       []byte
 	hasCompleted bool // mark this aiocb has completed
 	deadline     time.Time
@@ -177,9 +180,8 @@ func (w *Watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 	case <-w.die:
 		return ErrWatcherClosed
 	default:
-
 		w.pendingMutex.Lock()
-		w.pending = append(w.pending, &aiocb{op: op, ctx: ctx, conn: conn, rawconn: nil, buffer: buf, deadline: deadline})
+		w.pending = append(w.pending, &aiocb{op: op, ctx: ctx, conn: conn, buffer: buf, deadline: deadline})
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()
@@ -203,20 +205,10 @@ func (w *Watcher) tryRead(pcb *aiocb) {
 
 	var nr int
 	var er error
-	err := pcb.rawconn.Read(func(s uintptr) bool {
-		nr, er = syscall.Read(int(s), buf)
-		return true
-	})
-
+	nr, er = syscall.Read(pcb.fd, buf)
 	if er == syscall.EAGAIN {
 		return
 	}
-
-	// rawconn error
-	if err != nil {
-		er = err
-	}
-
 	// set error
 	pcb.err = er
 
@@ -236,25 +228,15 @@ func (w *Watcher) tryRead(pcb *aiocb) {
 func (w *Watcher) tryWrite(pcb *aiocb) {
 	var nw int
 	var ew error
-	var err error
 
 	if pcb.hasCompleted {
 		return
 	}
 
 	if pcb.buffer != nil {
-		err = pcb.rawconn.Write(func(s uintptr) bool {
-			nw, ew = syscall.Write(int(s), pcb.buffer[pcb.size:])
-			return true
-		})
-
+		nw, ew = syscall.Write(pcb.fd, pcb.buffer[pcb.size:])
 		if ew == syscall.EAGAIN {
 			return
-		}
-
-		// rawconn error
-		if err != nil {
-			ew = err
 		}
 
 		// if ew is nil, accumulate bytes written
@@ -282,30 +264,25 @@ func (w *Watcher) tryWrite(pcb *aiocb) {
 // the core event loop of this watcher
 func (w *Watcher) loop() {
 	// the maps belove is consistent at any give time.
-	queuedReaders := make(map[net.Conn][]*aiocb)
-	queuedWriters := make(map[net.Conn][]*aiocb)
-	connRawConns := make(map[net.Conn]syscall.RawConn)
-	connIdents := make(map[net.Conn]int)
-	idents := make(map[int]net.Conn)
+	queuedReaders := make(map[int][]*aiocb) // ident -> aiocb
+	queuedWriters := make(map[int][]*aiocb)
+	connIdents := make(map[uintptr]int)
+	idents := make(map[int]uintptr) // fd->net.conn
 
 	// for timeout operations
 	chTimeoutOps := make(chan *aiocb)
-	// for copying
-	var pending []*aiocb
 
 	releaseConn := func(ident int) {
-		conn := idents[ident]
-		delete(queuedWriters, conn)
-		delete(queuedReaders, conn)
-		delete(connRawConns, conn)
-		delete(connIdents, conn)
+		log.Println("release", ident)
+		ptr := idents[ident]
+		delete(queuedReaders, ident)
+		delete(queuedWriters, ident)
 		delete(idents, ident)
-		log.Println("released", ident)
+		delete(connIdents, ptr)
+		//log.Println("released", ident)
 	}
 
-	// a timer for cleaning closed net.Conn
-	ticker := time.NewTicker(recycleInterval)
-
+	var pending []*aiocb
 	for {
 		select {
 		case <-w.chPendingNotify:
@@ -320,45 +297,47 @@ func (w *Watcher) loop() {
 			w.pendingMutex.Unlock()
 
 			for _, pcb := range pending {
-				rawconn, ok := connRawConns[pcb.conn]
-				ident := connIdents[pcb.conn]
-				if !ok {
-					// new conn
-					if c, ok := pcb.conn.(interface {
-						SyscallConn() (syscall.RawConn, error)
-					}); ok {
-						rc, err := c.SyscallConn()
-						if err == nil {
-							// duplicated socket file descriptor
-							dupfd, err := w.pfd.Dup(rc)
-							if err == nil {
-								ident = dupfd
-								rawconn = rc
-								connRawConns[pcb.conn] = rawconn
-								idents[ident] = pcb.conn // unique ID
-								connIdents[pcb.conn] = ident
-								w.pfd.Watch(ident)
-							}
-						}
-					}
-				}
-
-				// conns which cannot get rawconn, send back error
-				if rawconn == nil {
+				var ptr uintptr
+				switch v := pcb.conn.(type) {
+				case *net.TCPConn:
+					ptr = uintptr(unsafe.Pointer(v))
+				case *net.UDPConn:
+					ptr = uintptr(unsafe.Pointer(v))
+				default:
 					select {
-					case w.chIOCompletion <- OpResult{Op: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Err: ErrNoRawConn, Context: pcb.ctx}:
-						pcb.hasCompleted = true
+					case w.chIOCompletion <- OpResult{Op: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Err: ErrUnsupported, Context: pcb.ctx}:
+						log.Println("ptr:", ErrUnsupported)
+						continue
 					case <-w.die:
 						return
 					}
-					continue
 				}
 
+				ident, ok := connIdents[ptr]
+				if !ok {
+					// new conn
+					if dupfd, err := w.pfd.Dup(pcb.conn); err != nil {
+						log.Println("dupfailed:", err)
+						select {
+						case w.chIOCompletion <- OpResult{Op: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Err: err, Context: pcb.ctx}:
+							continue
+						case <-w.die:
+							return
+						}
+					} else {
+						ident = dupfd
+						idents[ident] = ptr
+						connIdents[ptr] = ident
+						w.pfd.Watch(ident)
+					}
+				}
+				//log.Println("idents:", ident, ptr)
+				pcb.fd = ident
+
 				// operations splitted into different buckets
-				pcb.rawconn = rawconn
 				switch pcb.op {
 				case OpRead:
-					if len(queuedReaders[pcb.conn]) == 0 {
+					if len(queuedReaders[ident]) == 0 {
 						w.tryRead(pcb)
 						if pcb.err != nil {
 							releaseConn(ident)
@@ -367,9 +346,9 @@ func (w *Watcher) loop() {
 							continue
 						}
 					}
-					queuedReaders[pcb.conn] = append(queuedReaders[pcb.conn], pcb)
+					queuedReaders[ident] = append(queuedReaders[ident], pcb)
 				case OpWrite:
-					if len(queuedWriters[pcb.conn]) == 0 {
+					if len(queuedWriters[ident]) == 0 {
 						w.tryWrite(pcb)
 						if pcb.err != nil {
 							releaseConn(ident)
@@ -378,7 +357,7 @@ func (w *Watcher) loop() {
 							continue
 						}
 					}
-					queuedWriters[pcb.conn] = append(queuedWriters[pcb.conn], pcb)
+					queuedWriters[ident] = append(queuedWriters[ident], pcb)
 				}
 
 				// timer
@@ -398,56 +377,52 @@ func (w *Watcher) loop() {
 			// and a new conn is re-opened with the same handler number(fd).
 			//
 			// Note poller will remove closed fd automatically epoll(7), kqueue(2) and silently,
-			// tryRead/tryWrite operates on raw connections related to net.Conn, which uniquely
-			// identified by 'e.ident',then the following IO operation is impossible to misread or miswrite on
-			// the new same socket fd number inside current process(rawConn.Read/Write will fail).
-			if conn, ok := idents[e.ident]; ok {
-				//log.Println(e)
-				if e.r {
-					count := 0
-					closed := false
-					for _, pcb := range queuedReaders[conn] {
-						w.tryRead(pcb)
-						if pcb.err != nil {
-							releaseConn(e.ident)
-							closed = true
-							break
-						} else if pcb.hasCompleted {
-							count++
-							continue
-						} else {
-							break
-						}
-					}
-					if !closed {
-						queuedReaders[conn] = queuedReaders[conn][count:]
+			// watcher will dup() a new fd related to net.Conn, which uniquely identified by 'e.ident'
+			// then the following IO operation is impossible to misread or miswrite on
+			// the new same socket fd number as in net.Conn.
+			//log.Println(e)
+			if e.r {
+				count := 0
+				closed := false
+				for _, pcb := range queuedReaders[e.ident] {
+					w.tryRead(pcb)
+					if pcb.err != nil {
+						releaseConn(e.ident)
+						closed = true
+						break
+					} else if !pcb.hasCompleted {
+						break
+					} else {
+						count++
 					}
 				}
-				if e.w {
-					count := 0
-					closed := false
-					for _, pcb := range queuedWriters[conn] {
-						w.tryWrite(pcb)
-						if pcb.err != nil {
-							releaseConn(e.ident)
-							closed = true
-							break
-						} else if pcb.hasCompleted {
-							count++
-							continue
-						} else {
-							break
-						}
-					}
-
-					if !closed {
-						queuedWriters[conn] = queuedWriters[conn][count:]
+				if !closed {
+					queuedReaders[e.ident] = queuedReaders[e.ident][count:]
+				}
+			}
+			if e.w {
+				count := 0
+				closed := false
+				for _, pcb := range queuedWriters[e.ident] {
+					w.tryWrite(pcb)
+					if pcb.err != nil {
+						releaseConn(e.ident)
+						closed = true
+						break
+					} else if !pcb.hasCompleted {
+						break
+					} else {
+						count++
 					}
 				}
 
-				if e.err != nil {
-					releaseConn(e.ident)
+				if !closed {
+					queuedWriters[e.ident] = queuedWriters[e.ident][count:]
 				}
+			}
+
+			if e.err != nil {
+				releaseConn(e.ident)
 			}
 		case pcb := <-chTimeoutOps:
 			if !pcb.hasCompleted {
@@ -457,13 +432,6 @@ func (w *Watcher) loop() {
 					pcb.hasCompleted = true
 				case <-w.die:
 					return
-				}
-			}
-		case <-ticker.C: // to GC closed net.Conn object
-			for ident, conn := range idents {
-				rawconn := connRawConns[conn]
-				if rawconn.Control(func(fd uintptr) {}) != nil {
-					releaseConn(ident)
 				}
 			}
 		case <-w.die:

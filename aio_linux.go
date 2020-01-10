@@ -4,6 +4,7 @@ package gaio
 
 import (
 	"io"
+	"net"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -69,8 +70,18 @@ func (p *poller) Watch(fd int) {
 	p.trigger()
 }
 
-func (p *poller) Dup(rawconn syscall.RawConn) (newfd int, err error) {
-	ec := rawconn.Control(func(fd uintptr) {
+func (p *poller) Dup(conn net.Conn) (newfd int, err error) {
+	sc, ok := conn.(interface {
+		SyscallConn() (syscall.RawConn, error)
+	})
+	if !ok {
+		return -1, ErrUnsupported
+	}
+	rc, err := sc.SyscallConn()
+	if err != nil {
+		return -1, ErrUnsupported
+	}
+	ec := rc.Control(func(fd uintptr) {
 		newfd, err = syscall.Dup(int(fd))
 		return
 	})

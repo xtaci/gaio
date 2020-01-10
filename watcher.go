@@ -8,17 +8,17 @@ import (
 	"errors"
 	"log"
 	"net"
+	"reflect"
 	"sync"
 	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/xtaci/gaio/internal"
 )
 
 var (
 	// ErrUnsupported means the watcher cannot support this type of connection
-	ErrUnsupported = errors.New("unsupported connection")
+	ErrUnsupported = errors.New("unsupported connection, must be pointer")
 	// ErrNoRawConn means the connection has not implemented SyscallConn
 	ErrNoRawConn = errors.New("net.Conn does implement net.RawConn")
 	// ErrWatcherClosed means the watcher is closed
@@ -239,11 +239,10 @@ func (w *Watcher) tryRead(pcb *aiocb) {
 	var nr int
 	var er error
 	nr, er = syscall.Read(pcb.fd, buf)
+	pcb.err = er
 	if er == syscall.EAGAIN {
 		return
 	}
-	// set error
-	pcb.err = er
 
 	select {
 	case w.chIOCompletion <- OpResult{Op: OpRead, Conn: pcb.conn, Buffer: buf, Size: nr, Err: er, Context: pcb.ctx}:
@@ -268,6 +267,7 @@ func (w *Watcher) tryWrite(pcb *aiocb) {
 
 	if pcb.buffer != nil {
 		nw, ew = syscall.Write(pcb.fd, pcb.buffer[pcb.size:])
+		pcb.err = ew
 		if ew == syscall.EAGAIN {
 			return
 		}
@@ -277,9 +277,6 @@ func (w *Watcher) tryWrite(pcb *aiocb) {
 			pcb.size += nw
 		}
 	}
-
-	// set error
-	pcb.err = ew
 
 	// all bytes written or has error
 	// nil buffer still returns
@@ -331,12 +328,9 @@ func (w *Watcher) loop() {
 
 			for _, pcb := range pending {
 				var ptr uintptr
-				switch v := pcb.conn.(type) {
-				case *net.TCPConn:
-					ptr = uintptr(unsafe.Pointer(v))
-				case *net.UDPConn:
-					ptr = uintptr(unsafe.Pointer(v))
-				default:
+				if reflect.TypeOf(pcb.conn).Kind() == reflect.Ptr {
+					ptr = reflect.ValueOf(pcb.conn).Pointer()
+				} else {
 					select {
 					case w.chIOCompletion <- OpResult{Op: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Err: ErrUnsupported, Context: pcb.ctx}:
 						log.Println("ptr:", ErrUnsupported)
@@ -372,10 +366,10 @@ func (w *Watcher) loop() {
 				case OpRead:
 					if len(queuedReaders[ident]) == 0 {
 						w.tryRead(pcb)
-						if pcb.err != nil {
-							releaseConn(ident)
-							continue
-						} else if pcb.hasCompleted {
+						if pcb.hasCompleted {
+							if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
+								releaseConn(ident)
+							}
 							continue
 						}
 					}
@@ -383,10 +377,10 @@ func (w *Watcher) loop() {
 				case OpWrite:
 					if len(queuedWriters[ident]) == 0 {
 						w.tryWrite(pcb)
-						if pcb.err != nil {
-							releaseConn(ident)
-							continue
-						} else if pcb.hasCompleted {
+						if pcb.hasCompleted {
+							if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
+								releaseConn(ident)
+							}
 							continue
 						}
 					}
@@ -419,14 +413,13 @@ func (w *Watcher) loop() {
 				closed := false
 				for _, pcb := range queuedReaders[e.ident] {
 					w.tryRead(pcb)
-					if pcb.err != nil {
-						releaseConn(e.ident)
-						closed = true
-						break
-					} else if pcb.size == 0 && pcb.err == nil { // EOF
-						releaseConn(e.ident)
-						break
-					} else if !pcb.hasCompleted {
+					if pcb.hasCompleted {
+						if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
+							releaseConn(e.ident)
+							closed = true
+							break
+						}
+					} else {
 						break
 					}
 					count++
@@ -440,14 +433,14 @@ func (w *Watcher) loop() {
 				closed := false
 				for _, pcb := range queuedWriters[e.ident] {
 					w.tryWrite(pcb)
-					if pcb.err != nil {
-						releaseConn(e.ident)
-						closed = true
-						break
-					} else if !pcb.hasCompleted {
-						break
+					if pcb.hasCompleted {
+						if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
+							releaseConn(e.ident)
+							closed = true
+							break
+						}
 					} else {
-						count++
+						break
 					}
 				}
 

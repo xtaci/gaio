@@ -6,8 +6,10 @@ package gaio
 
 import (
 	"errors"
+	"log"
 	"net"
 	"reflect"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -65,6 +67,11 @@ func WriteTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time
 	return defaultWatcher.WriteTimeout(ctx, conn, buf, deadline)
 }
 
+// Release let the watcher to release resources related to this conn immediately, like file descriptors
+func Release(conn net.Conn) error {
+	return defaultWatcher.Release(conn)
+}
+
 // OpType defines Operation Type
 type OpType int
 
@@ -73,6 +80,8 @@ const (
 	OpRead OpType = iota
 	// OpWrite means the aiocb is a write operation
 	OpWrite
+	// internal operation to delete an related resource
+	opDelete
 )
 
 // aiocb contains all info for a request
@@ -152,6 +161,11 @@ func NewWatcher(bufsize int) (*Watcher, error) {
 	w.chIOCompletion = make(chan OpResult)
 	w.die = make(chan struct{})
 
+	// finalizer for system resources
+	runtime.SetFinalizer(w, func(w *Watcher) {
+		w.Close()
+	})
+
 	go w.pfd.Wait(w.chEventNotify, w.die)
 	go w.loop()
 	return w, nil
@@ -162,6 +176,7 @@ func (w *Watcher) Close() (err error) {
 	w.dieOnce.Do(func() {
 		close(w.die)
 		err = w.pfd.Close()
+		runtime.SetFinalizer(w, nil)
 	})
 	return err
 }
@@ -204,6 +219,11 @@ func (w *Watcher) Write(ctx interface{}, conn net.Conn, buf []byte) error {
 // expected to be completed before 'deadline'
 func (w *Watcher) WriteTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
 	return w.aioCreate(ctx, OpWrite, conn, buf, deadline)
+}
+
+// Release let the watcher to release resources related to this conn immediately, like file descriptors
+func (w *Watcher) Release(conn net.Conn) error {
+	return w.aioCreate(nil, opDelete, conn, nil, time.Time{})
 }
 
 // core async-io creation
@@ -295,6 +315,7 @@ func (w *Watcher) loop() {
 	queuedWriters := make(map[int][]*aiocb)
 	connIdents := make(map[uintptr]int)
 	idents := make(map[int]uintptr) // fd->net.conn
+	gc := make(chan uintptr)
 
 	// for timeout operations
 	chTimeoutOps := make(chan *aiocb)
@@ -313,7 +334,6 @@ func (w *Watcher) loop() {
 	}
 
 	var pending []*aiocb
-	tmp := make([]byte, 1)
 	for {
 		select {
 		case <-w.chPendingNotify:
@@ -341,8 +361,16 @@ func (w *Watcher) loop() {
 				}
 
 				ident, ok := connIdents[ptr]
+				// resource release
+				if pcb.op == opDelete {
+					if ok { // omit if already deleted
+						releaseConn(ident)
+						continue
+					}
+				}
+
+				// new conn
 				if !ok {
-					// new conn
 					if dupfd, err := dupconn(pcb.conn); err != nil {
 						select {
 						case w.chIOCompletion <- OpResult{Op: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Err: err, Context: pcb.ctx}:
@@ -355,6 +383,18 @@ func (w *Watcher) loop() {
 						idents[ident] = ptr
 						connIdents[ptr] = ident
 						w.pfd.Watch(ident)
+						// as we duplicated succesfuly, we're safe to
+						// close the original connection
+						pcb.conn.Close()
+
+						// the conn is still useful for GC finalizer
+						runtime.SetFinalizer(pcb.conn, func(conn net.Conn) {
+							select {
+							case gc <- ptr:
+							case <-w.die:
+								return
+							}
+						})
 					}
 				}
 				//log.Println("idents:", ident, ptr)
@@ -409,61 +449,44 @@ func (w *Watcher) loop() {
 			//log.Println(e)
 			for _, e := range pe.events {
 				if e.r {
-					if len(queuedReaders[e.ident]) == 0 {
-						// empty pending requests should try MSG_PEEK to detect EOF
-						n, _, _, _, err := syscall.Recvmsg(e.ident, tmp, nil, syscall.MSG_PEEK)
-						if n == 0 && err == nil {
-							releaseConn(e.ident)
-							continue
-						}
-					} else {
-						count := 0
-						closed := false
-						for _, pcb := range queuedReaders[e.ident] {
-							w.tryRead(pcb)
-							if pcb.hasCompleted {
-								count++
-								if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
-									releaseConn(e.ident)
-									closed = true
-									break
-								}
-							} else {
+					count := 0
+					closed := false
+					for _, pcb := range queuedReaders[e.ident] {
+						w.tryRead(pcb)
+						if pcb.hasCompleted {
+							count++
+							if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
+								releaseConn(e.ident)
+								closed = true
 								break
 							}
+						} else {
+							break
 						}
-						if !closed {
-							queuedReaders[e.ident] = queuedReaders[e.ident][count:]
-						}
+					}
+					if !closed {
+						queuedReaders[e.ident] = queuedReaders[e.ident][count:]
 					}
 				}
 				if e.w {
 					count := 0
 					closed := false
-					if len(queuedWriters[e.ident]) == 0 {
-						n, _, _, _, err := syscall.Recvmsg(e.ident, tmp, nil, syscall.MSG_PEEK)
-						if n == 0 && err == nil {
-							releaseConn(e.ident)
-							continue
-						}
-					} else {
-						for _, pcb := range queuedWriters[e.ident] {
-							w.tryWrite(pcb)
-							if pcb.hasCompleted {
-								count++
-								if pcb.err != nil {
-									releaseConn(e.ident)
-									closed = true
-									break
-								}
-							} else {
+					for _, pcb := range queuedWriters[e.ident] {
+						w.tryWrite(pcb)
+						if pcb.hasCompleted {
+							count++
+							if pcb.err != nil {
+								releaseConn(e.ident)
+								closed = true
 								break
 							}
+						} else {
+							break
 						}
+					}
 
-						if !closed {
-							queuedWriters[e.ident] = queuedWriters[e.ident][count:]
-						}
+					if !closed {
+						queuedWriters[e.ident] = queuedWriters[e.ident][count:]
 					}
 				}
 			}
@@ -477,6 +500,11 @@ func (w *Watcher) loop() {
 				case <-w.die:
 					return
 				}
+			}
+		case ptr := <-gc: // gc recycled net.Conn
+			if ident, ok := connIdents[ptr]; ok {
+				releaseConn(ident)
+				log.Println("GC", ident)
 			}
 		case <-w.die:
 			return

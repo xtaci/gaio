@@ -353,11 +353,9 @@ func Test4k(t *testing.T) {
 	testParallel(t, 4096)
 }
 
-/*
 func Test8k(t *testing.T) {
 	testParallel(t, 8192)
 }
-*/
 
 func testParallel(t *testing.T, par int) {
 	t.Log("testing concurrent:", par, "connections")
@@ -435,7 +433,6 @@ func TestDeadline1k(t *testing.T) {
 	testDeadline(t, 1024)
 }
 
-/* travis cannot authorize enough fd
 func TestDeadline2k(t *testing.T) {
 	testDeadline(t, 2048)
 }
@@ -446,7 +443,6 @@ func TestDeadline4k(t *testing.T) {
 func TestDeadline8k(t *testing.T) {
 	testDeadline(t, 8192)
 }
-*/
 
 func testDeadline(t *testing.T, par int) {
 	t.Log("testing concurrent:", par, "unresponsive connections")

@@ -110,7 +110,7 @@ type Watcher struct {
 	pfd *poller
 
 	// netpoll events
-	chEventNotify chan event
+	chEventNotify chan pollerEvents
 
 	// events from user
 	chPendingNotify chan struct{}
@@ -147,7 +147,7 @@ func NewWatcher(bufsize int) (*Watcher, error) {
 	}
 
 	// loop related chan
-	w.chEventNotify = make(chan event)
+	w.chEventNotify = make(chan pollerEvents)
 	w.chPendingNotify = make(chan struct{}, 1)
 	w.chIOCompletion = make(chan OpResult)
 	w.die = make(chan struct{})
@@ -397,7 +397,7 @@ func (w *Watcher) loop() {
 				}
 			}
 			pending = pending[:0]
-		case e := <-w.chEventNotify:
+		case pe := <-w.chEventNotify:
 			// suppose fd(s) being polled is closed by conn.Close() from outside after chanrecv,
 			// and a new conn is re-opened with the same handler number(fd).
 			//
@@ -406,51 +406,54 @@ func (w *Watcher) loop() {
 			// then the following IO operation is impossible to misread or miswrite on
 			// the new same socket fd number as in net.Conn.
 			//log.Println(e)
-			if e.r {
-				count := 0
-				closed := false
-				for _, pcb := range queuedReaders[e.ident] {
-					w.tryRead(pcb)
-					if pcb.hasCompleted {
-						count++
-						if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
-							releaseConn(e.ident)
-							closed = true
+			for _, e := range pe.events {
+				if e.r {
+					count := 0
+					closed := false
+					for _, pcb := range queuedReaders[e.ident] {
+						w.tryRead(pcb)
+						if pcb.hasCompleted {
+							count++
+							if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
+								releaseConn(e.ident)
+								closed = true
+								break
+							}
+						} else {
 							break
 						}
-					} else {
-						break
+					}
+					if !closed {
+						queuedReaders[e.ident] = queuedReaders[e.ident][count:]
 					}
 				}
-				if !closed {
-					queuedReaders[e.ident] = queuedReaders[e.ident][count:]
-				}
-			}
-			if e.w {
-				count := 0
-				closed := false
-				for _, pcb := range queuedWriters[e.ident] {
-					w.tryWrite(pcb)
-					if pcb.hasCompleted {
-						count++
-						if pcb.err != nil {
-							releaseConn(e.ident)
-							closed = true
+				if e.w {
+					count := 0
+					closed := false
+					for _, pcb := range queuedWriters[e.ident] {
+						w.tryWrite(pcb)
+						if pcb.hasCompleted {
+							count++
+							if pcb.err != nil {
+								releaseConn(e.ident)
+								closed = true
+								break
+							}
+						} else {
 							break
 						}
-					} else {
-						break
+					}
+
+					if !closed {
+						queuedWriters[e.ident] = queuedWriters[e.ident][count:]
 					}
 				}
 
-				if !closed {
-					queuedWriters[e.ident] = queuedWriters[e.ident][count:]
+				if e.err != nil {
+					releaseConn(e.ident)
 				}
 			}
-
-			if e.err != nil {
-				releaseConn(e.ident)
-			}
+			close(pe.done)
 		case pcb := <-chTimeoutOps:
 			if !pcb.hasCompleted {
 				// ErrDeadline
@@ -464,5 +467,6 @@ func (w *Watcher) loop() {
 		case <-w.die:
 			return
 		}
+
 	}
 }

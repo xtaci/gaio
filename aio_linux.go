@@ -69,7 +69,7 @@ func (p *poller) Watch(fd int) {
 	p.trigger()
 }
 
-func (p *poller) Wait(chEventNotify chan event, die chan struct{}) {
+func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 	events := make([]syscall.EpollEvent, 64)
 	for {
 		// check for new awaiting
@@ -84,6 +84,10 @@ func (p *poller) Wait(chEventNotify chan event, die chan struct{}) {
 		if err != nil && err != syscall.EINTR {
 			return
 		}
+
+		var pe pollerEvents
+		pe.events = make([]event, 0, n)
+		pe.done = make(chan struct{})
 
 		for i := 0; i < n; i++ {
 			ev := &events[i]
@@ -110,13 +114,20 @@ func (p *poller) Wait(chEventNotify chan event, die chan struct{}) {
 					e.w = true
 				}
 
-				//log.Println(e)
-				select {
-				case chEventNotify <- e:
-				case <-die:
-					return
-				}
+				pe.events = append(pe.events, e)
 			}
+		}
+
+		select {
+		case chEventNotify <- pe:
+		case <-die:
+			return
+		}
+
+		select {
+		case <-pe.done:
+		case <-die:
+			return
 		}
 	}
 }

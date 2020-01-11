@@ -313,6 +313,7 @@ func (w *Watcher) loop() {
 	}
 
 	var pending []*aiocb
+	tmp := make([]byte, 1)
 	for {
 		select {
 		case <-w.chPendingNotify:
@@ -408,49 +409,62 @@ func (w *Watcher) loop() {
 			//log.Println(e)
 			for _, e := range pe.events {
 				if e.r {
-					count := 0
-					closed := false
-					for _, pcb := range queuedReaders[e.ident] {
-						w.tryRead(pcb)
-						if pcb.hasCompleted {
-							count++
-							if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
-								releaseConn(e.ident)
-								closed = true
+					if len(queuedReaders[e.ident]) == 0 {
+						// empty pending requests should try MSG_PEEK to detect socket close
+						_, _, _, _, err := syscall.Recvmsg(e.ident, tmp, nil, syscall.MSG_PEEK)
+						if err != nil {
+							releaseConn(e.ident)
+							continue
+						}
+					} else {
+						count := 0
+						closed := false
+						for _, pcb := range queuedReaders[e.ident] {
+							w.tryRead(pcb)
+							if pcb.hasCompleted {
+								count++
+								if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
+									releaseConn(e.ident)
+									closed = true
+									break
+								}
+							} else {
 								break
 							}
-						} else {
-							break
 						}
-					}
-					if !closed {
-						queuedReaders[e.ident] = queuedReaders[e.ident][count:]
+						if !closed {
+							queuedReaders[e.ident] = queuedReaders[e.ident][count:]
+						}
 					}
 				}
 				if e.w {
 					count := 0
 					closed := false
-					for _, pcb := range queuedWriters[e.ident] {
-						w.tryWrite(pcb)
-						if pcb.hasCompleted {
-							count++
-							if pcb.err != nil {
-								releaseConn(e.ident)
-								closed = true
+					if len(queuedWriters[e.ident]) == 0 {
+						_, _, _, _, err := syscall.Recvmsg(e.ident, tmp, nil, syscall.MSG_PEEK)
+						if err != nil {
+							releaseConn(e.ident)
+							continue
+						}
+					} else {
+						for _, pcb := range queuedWriters[e.ident] {
+							w.tryWrite(pcb)
+							if pcb.hasCompleted {
+								count++
+								if pcb.err != nil {
+									releaseConn(e.ident)
+									closed = true
+									break
+								}
+							} else {
 								break
 							}
-						} else {
-							break
+						}
+
+						if !closed {
+							queuedWriters[e.ident] = queuedWriters[e.ident][count:]
 						}
 					}
-
-					if !closed {
-						queuedWriters[e.ident] = queuedWriters[e.ident][count:]
-					}
-				}
-
-				if e.err != nil {
-					releaseConn(e.ident)
 				}
 			}
 			close(pe.done)

@@ -7,10 +7,9 @@ import (
 
 // event represent a file descriptor event
 type event struct {
-	ident int   // identifier of this event, usually file descriptor
-	r     bool  // readable
-	w     bool  // writable
-	err   error // error
+	ident int  // identifier of this event, usually file descriptor
+	r     bool // readable
+	w     bool // writable
 }
 
 // events from epoll_wait passing to loop,should be in batch for atomicity

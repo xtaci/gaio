@@ -61,8 +61,8 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 		p.awaitingMutex.Lock()
 		for _, fd := range p.awaiting {
 			changes = append(changes,
-				syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_READ},
-				syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_WRITE},
+				syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR | syscall.EV_EOF, Filter: syscall.EVFILT_READ},
+				syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR | syscall.EV_EOF, Filter: syscall.EVFILT_WRITE},
 			)
 			// apply changes one by one to notify caller
 			syscall.Kevent(p.fd, changes, nil, nil)
@@ -108,7 +108,6 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 				if ev.Flags&(syscall.EV_ERROR) != 0 {
 					e.r = true
 					e.w = true
-					e.err = syscall.Errno(ev.Data)
 				}
 				pe.events = append(pe.events, e)
 			}

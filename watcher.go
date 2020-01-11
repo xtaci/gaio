@@ -412,7 +412,7 @@ func (w *Watcher) loop() {
 					if len(queuedReaders[e.ident]) == 0 {
 						// empty pending requests should try MSG_PEEK to detect socket close
 						_, _, _, _, err := syscall.Recvmsg(e.ident, tmp, nil, syscall.MSG_PEEK)
-						if err != nil {
+						if err != nil && err != syscall.EAGAIN {
 							releaseConn(e.ident)
 							continue
 						}
@@ -442,7 +442,7 @@ func (w *Watcher) loop() {
 					closed := false
 					if len(queuedWriters[e.ident]) == 0 {
 						_, _, _, _, err := syscall.Recvmsg(e.ident, tmp, nil, syscall.MSG_PEEK)
-						if err != nil {
+						if err != nil && err != syscall.EAGAIN {
 							releaseConn(e.ident)
 							continue
 						}

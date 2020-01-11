@@ -37,5 +37,9 @@ func dupconn(conn net.Conn) (newfd int, err error) {
 	if ec != nil {
 		return -1, ec
 	}
+
+	// as we duplicated succesfuly, we're safe to
+	// close the original connection
+	conn.Close()
 	return
 }

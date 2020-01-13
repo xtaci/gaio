@@ -22,7 +22,7 @@ type poller struct {
 }
 
 func openPoll() (*poller, error) {
-	fd, err := syscall.EpollCreate1(0)
+	fd, err := syscall.EpollCreate1(syscall.EPOLL_CLOEXEC)
 	if err != nil {
 		return nil, err
 	}

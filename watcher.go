@@ -259,10 +259,19 @@ func (w *Watcher) tryRead(pcb *aiocb) {
 		useSwap = true
 	}
 
-	// return values are stored in pcb
-	pcb.size, pcb.err = syscall.Read(pcb.fd, buf)
-	if pcb.err == syscall.EAGAIN {
-		return
+	for {
+		// return values are stored in pcb
+		pcb.size, pcb.err = syscall.Read(pcb.fd, buf)
+		if pcb.err == syscall.EAGAIN {
+			return
+		}
+
+		// On MacOS we can see EINTR here if the user
+		// pressed ^Z.
+		if pcb.err == syscall.EINTR {
+			continue
+		}
+		break
 	}
 
 	select {

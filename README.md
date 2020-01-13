@@ -36,6 +36,73 @@ By eliminating **one goroutine per one connection scheme** with **Edge-Triggered
 2. If you decide not to use this connection anymore, you could call `gaio.Free(net.Conn)` to close socket and free related resources immediately.
 3. If you forgot to call `gaio.Free(net.Conn`, golang runtime garbage collection will do that for you. You don't have to worry about this.
 
+## TL;DR
+
+```go
+package main
+
+import (
+        "log"
+        "net"
+
+        "github.com/xtaci/gaio"
+)
+
+// this goroutine will wait for all io events, and sents back everything it received
+// in async way
+func echoServer() {
+        for {
+                // loop wait for any IO events
+                res, err := gaio.WaitIO()
+                if err != nil {
+                        log.Println(err)
+                        return
+                }
+
+                switch res.Operation {
+                case gaio.OpRead: // read completion event
+                        if res.Error == nil {
+                                // send back everything, we won't start to read again until write completes.
+                                buf := make([]byte, res.Size)
+                                copy(buf, res.Buffer[:res.Size])
+                                // submit an async write request
+                                gaio.Write(nil, res.Conn, buf)
+                        }
+                case gaio.OpWrite: // write completion event
+                        if res.Error == nil {
+                                // since write has completed, let's start read on this conn again
+                                gaio.Read(nil, res.Conn, nil)
+                        }
+                }
+        }
+}
+
+func main() {
+        go echoServer()
+        
+        ln, err := net.Listen("tcp", "localhost:0")
+        if err != nil {
+                log.Fatal(err)
+        }
+
+        for {
+                conn, err := ln.Accept()
+                if err != nil {
+                        log.Println(err)
+                        return
+                }
+
+                // submit the first async read IO request
+                err = gaio.Read(nil, conn, nil)
+                if err != nil {
+                        log.Println(err)
+                        return
+                }
+        }
+}
+
+```
+
 ## Documentation
 
 For complete documentation, see the associated [Godoc](https://godoc.org/github.com/xtaci/gaio).

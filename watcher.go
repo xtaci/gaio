@@ -319,7 +319,7 @@ func (w *Watcher) loop() {
 	queuedWriters := make(map[int][]*aiocb)
 	connIdents := make(map[uintptr]int)
 	idents := make(map[int]uintptr) // fd->net.conn
-	gc := make(chan int)
+	gc := make(chan uintptr)
 
 	// for timeout operations
 	chTimeoutOps := make(chan *aiocb)
@@ -422,9 +422,9 @@ func (w *Watcher) loop() {
 						pcb.conn.Close()
 
 						// the conn is still useful for GC finalizer
-						runtime.SetFinalizer(pcb.conn, func(conn net.Conn) {
+						runtime.SetFinalizer(pcb.conn, func(c net.Conn) {
 							select {
-							case gc <- ident:
+							case gc <- reflect.ValueOf(c).Pointer():
 							case <-w.die:
 								return
 							}
@@ -535,8 +535,12 @@ func (w *Watcher) loop() {
 					return
 				}
 			}
-		case ident := <-gc: // gc recycled net.Conn
-			releaseConn(ident)
+		case ptr := <-gc: // gc recycled net.Conn
+			if ident, ok := connIdents[ptr]; ok {
+				// since it's gc-ed, queue is impossible to hold net.Conn
+				// just release here
+				releaseConn(ident)
+			}
 		case <-w.die:
 			return
 		}

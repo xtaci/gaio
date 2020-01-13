@@ -24,10 +24,10 @@ func main() {
 				return
 			}
 
-			switch res.Op {
+			switch res.Operation {
 			case gaio.OpRead: // read completion event
 				// handle unexpected read error
-				if res.Err != nil {
+				if res.Error != nil {
 					log.Println("read error")
 					continue
 				}
@@ -45,7 +45,7 @@ func main() {
 
 			case gaio.OpWrite: // write completion event
 				// handle unexpected write error
-				if res.Err != nil {
+				if res.Error != nil {
 					log.Println("write error")
 					continue
 				}

@@ -37,10 +37,10 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 				return
 			}
 
-			switch res.Op {
+			switch res.Operation {
 			case OpRead:
-				if res.Err != nil {
-					log.Println("read error:", res.Err, res.Size)
+				if res.Error != nil {
+					log.Println("read error:", res.Error, res.Size)
 					delete(wbuffers, res.Conn)
 
 					continue
@@ -62,8 +62,8 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 				copy(buf, res.Buffer[:res.Size])
 				w.Write(nil, res.Conn, buf[:res.Size])
 			case OpWrite:
-				if res.Err != nil {
-					log.Println("write error:", res.Err, res.Size)
+				if res.Error != nil {
+					log.Println("write error:", res.Error, res.Size)
 					delete(wbuffers, res.Conn)
 
 					continue
@@ -149,10 +149,10 @@ func TestDeadline(t *testing.T) {
 			return
 		}
 
-		switch res.Op {
+		switch res.Operation {
 		case OpRead:
-			if res.Err != ErrDeadline {
-				t.Fatal(res.Err, "mismatch")
+			if res.Error != ErrDeadline {
+				t.Fatal(res.Error, "mismatch")
 			}
 			return
 		}
@@ -221,20 +221,20 @@ func TestBidirectionWatcher(t *testing.T) {
 			return
 		}
 
-		switch res.Op {
+		switch res.Operation {
 		case OpWrite:
 			// recv
-			if res.Err != nil {
-				t.Fatal(res.Err)
+			if res.Error != nil {
+				t.Fatal(res.Error)
 			}
 
-			t.Log("written:", res.Err, res.Size)
+			t.Log("written:", res.Error, res.Size)
 			err := w.Read(nil, conn, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
 		case OpRead:
-			t.Log("read:", res.Err, res.Size)
+			t.Log("read:", res.Error, res.Size)
 			return
 		}
 	}
@@ -268,16 +268,16 @@ func TestSocketClose(t *testing.T) {
 			return
 		}
 
-		switch res.Op {
+		switch res.Operation {
 		case OpWrite:
 			w.Read(nil, conn, nil)
 			w.Release(conn)
 		case OpRead:
-			if res.Err == nil {
-				log.Println(res.Size, res.Err)
+			if res.Error == nil {
+				log.Println(res.Size, res.Error)
 				t.Fatal("socket close not successful")
 			} else {
-				t.Log(res.Err)
+				t.Log(res.Error)
 				return
 			}
 		}
@@ -315,10 +315,10 @@ func TestWriteOnClosedConn(t *testing.T) {
 			return
 		}
 
-		switch res.Op {
+		switch res.Operation {
 		case OpWrite:
 			// recv
-			if res.Err != nil {
+			if res.Error != nil {
 				conn.Close()
 				return
 			}
@@ -382,10 +382,10 @@ func testParallel(t *testing.T, par int) {
 			return
 		}
 
-		switch res.Op {
+		switch res.Operation {
 		case OpWrite:
 			// recv
-			if res.Err != nil {
+			if res.Error != nil {
 				continue
 			}
 
@@ -394,7 +394,7 @@ func testParallel(t *testing.T, par int) {
 				t.Fatal(err)
 			}
 		case OpRead:
-			if res.Err != nil {
+			if res.Error != nil {
 				continue
 			}
 			if res.Size == 0 {
@@ -464,9 +464,9 @@ func testDeadline(t *testing.T, par int) {
 			return
 		}
 
-		switch res.Op {
+		switch res.Operation {
 		case OpRead:
-			if res.Err == ErrDeadline {
+			if res.Error == ErrDeadline {
 				nerrs++
 				if nerrs == par {
 					t.Log("all deadline reached")

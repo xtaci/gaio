@@ -104,7 +104,7 @@ type aiocb struct {
 // OpResult is the result of an aysnc-io
 type OpResult struct {
 	// Operation Type
-	Op OpType
+	Operation OpType
 	// User context associated with this requests
 	Context interface{}
 	// Related net.Conn to this result
@@ -114,7 +114,7 @@ type OpResult struct {
 	// Number of bytes sent or received, Buffer[:Size] is the content sent or received.
 	Size int
 	// IO error,timeout error
-	Err error
+	Error error
 }
 
 // Watcher will monitor events and process async-io request(s),
@@ -266,7 +266,7 @@ func (w *Watcher) tryRead(pcb *aiocb) {
 	}
 
 	select {
-	case w.chIOCompletion <- OpResult{Op: OpRead, Conn: pcb.conn, Buffer: buf, Size: pcb.size, Err: pcb.err, Context: pcb.ctx}:
+	case w.chIOCompletion <- OpResult{Operation: OpRead, Conn: pcb.conn, Buffer: buf, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}:
 		// swap buffer if IO successful
 		if useSwap {
 			w.nextSwapBuffer = (w.nextSwapBuffer + 1) % len(w.swapBuffer)
@@ -303,7 +303,7 @@ func (w *Watcher) tryWrite(pcb *aiocb) {
 	// nil buffer still returns
 	if pcb.size == len(pcb.buffer) || ew != nil {
 		select {
-		case w.chIOCompletion <- OpResult{Op: OpWrite, Conn: pcb.conn, Buffer: pcb.buffer, Size: nw, Err: ew, Context: pcb.ctx}:
+		case w.chIOCompletion <- OpResult{Operation: OpWrite, Conn: pcb.conn, Buffer: pcb.buffer, Size: nw, Error: ew, Context: pcb.ctx}:
 			pcb.hasCompleted = true
 			return
 		case <-w.die:
@@ -356,7 +356,7 @@ func (w *Watcher) loop() {
 					ptr = reflect.ValueOf(pcb.conn).Pointer()
 				} else {
 					select {
-					case w.chIOCompletion <- OpResult{Op: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Err: ErrUnsupported, Context: pcb.ctx}:
+					case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: ErrUnsupported, Context: pcb.ctx}:
 						continue
 					case <-w.die:
 						return
@@ -371,7 +371,7 @@ func (w *Watcher) loop() {
 						// before resource releases.
 						for _, pcb := range queuedReaders[ident] {
 							select {
-							case w.chIOCompletion <- OpResult{Op: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Err: ErrConnClosed, Context: pcb.ctx}:
+							case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrConnClosed, Context: pcb.ctx}:
 								continue
 							case <-w.die:
 								return
@@ -379,7 +379,7 @@ func (w *Watcher) loop() {
 						}
 						for _, pcb := range queuedWriters[ident] {
 							select {
-							case w.chIOCompletion <- OpResult{Op: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Err: ErrConnClosed, Context: pcb.ctx}:
+							case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrConnClosed, Context: pcb.ctx}:
 								continue
 							case <-w.die:
 								return
@@ -394,7 +394,7 @@ func (w *Watcher) loop() {
 				if !ok {
 					if dupfd, err := dupconn(pcb.conn); err != nil {
 						select {
-						case w.chIOCompletion <- OpResult{Op: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Err: err, Context: pcb.ctx}:
+						case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: err, Context: pcb.ctx}:
 							continue
 						case <-w.die:
 							return
@@ -407,7 +407,7 @@ func (w *Watcher) loop() {
 						werr := w.pfd.Watch(ident)
 						if werr != nil {
 							select {
-							case w.chIOCompletion <- OpResult{Op: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Err: werr, Context: pcb.ctx}:
+							case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: werr, Context: pcb.ctx}:
 								continue
 							case <-w.die:
 								return
@@ -529,7 +529,7 @@ func (w *Watcher) loop() {
 			if !pcb.hasCompleted {
 				// ErrDeadline
 				select {
-				case w.chIOCompletion <- OpResult{Op: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Err: ErrDeadline, Context: pcb.ctx}:
+				case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrDeadline, Context: pcb.ctx}:
 					pcb.hasCompleted = true
 				case <-w.die:
 					return

@@ -48,7 +48,7 @@ func main() {
 		for {
 			select {
 			case res := <-chIO: // receive IO events from watcher
-				if res.Err != nil {
+				if res.Error != nil {
 					delete(conns, res.Conn)
 				}
 			case t := <-ticker.C: // receive ticker events

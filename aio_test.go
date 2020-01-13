@@ -270,7 +270,7 @@ func TestSocketClose(t *testing.T) {
 
 		switch res.Operation {
 		case OpWrite:
-			w.Release(conn)
+			w.Free(conn)
 			w.Read(nil, conn, nil)
 		case OpRead:
 			if res.Error != nil {

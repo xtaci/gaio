@@ -23,7 +23,7 @@ var (
 	ErrNoRawConn = errors.New("net.Conn does implement net.RawConn")
 	// ErrWatcherClosed means the watcher is closed
 	ErrWatcherClosed = errors.New("watcher closed")
-	// ErrConnClosed means the user called Release() on related connection
+	// ErrConnClosed means the user called Free() on related connection
 	ErrConnClosed = errors.New("connection closed")
 	// ErrDeadline means the specific operation has exceeded deadline before completion
 	ErrDeadline = errors.New("operation exceeded deadline")
@@ -71,9 +71,9 @@ func WriteTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time
 	return defaultWatcher.WriteTimeout(ctx, conn, buf, deadline)
 }
 
-// Release let the watcher to release resources related to this conn immediately, like file descriptors
-func Release(conn net.Conn) error {
-	return defaultWatcher.Release(conn)
+// Free let the watcher to release resources related to this conn immediately, like file descriptors
+func Free(conn net.Conn) error {
+	return defaultWatcher.Free(conn)
 }
 
 // OpType defines Operation Type
@@ -225,8 +225,8 @@ func (w *Watcher) WriteTimeout(ctx interface{}, conn net.Conn, buf []byte, deadl
 	return w.aioCreate(ctx, OpWrite, conn, buf, deadline)
 }
 
-// Release let the watcher to release resources related to this conn immediately, like file descriptors
-func (w *Watcher) Release(conn net.Conn) error {
+// Free let the watcher to release resources related to this conn immediately, like file descriptors
+func (w *Watcher) Free(conn net.Conn) error {
 	return w.aioCreate(nil, opDelete, conn, nil, time.Time{})
 }
 

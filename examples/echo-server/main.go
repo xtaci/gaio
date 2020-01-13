@@ -7,53 +7,43 @@ import (
 	"github.com/xtaci/gaio"
 )
 
+// this goroutine will wait for all io events, and sents back everything it received
+// in async way
+func echoServer() {
+	for {
+		// loop wait for any IO events
+		res, err := gaio.WaitIO()
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		switch res.Operation {
+		case gaio.OpRead: // read completion event
+			if res.Error == nil {
+				// send back everything, we won't start to read again until write completes.
+				buf := make([]byte, res.Size)
+				copy(buf, res.Buffer[:res.Size])
+				// submit an async write request
+				gaio.Write(nil, res.Conn, buf)
+			}
+		case gaio.OpWrite: // write completion event
+			if res.Error == nil {
+				// since write has completed, let's start read on this conn again
+				gaio.Read(nil, res.Conn, nil)
+			}
+		}
+	}
+}
+
 func main() {
+	go echoServer()
+
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		log.Fatal(err)
 	}
 	log.Println("echo server listening on", ln.Addr())
-
-	// this goroutine will wait for all io events, and sents back everything it received
-	go func() {
-		for {
-			// wait for any IO events
-			res, err := gaio.WaitIO()
-			if err != nil {
-				log.Println(err)
-				return
-			}
-
-			switch res.Operation {
-			case gaio.OpRead: // read completion event
-				// handle unexpected read error
-				if res.Error != nil {
-					log.Println("read error")
-					continue
-				}
-
-				// handle connection close
-				if res.Size == 0 {
-					log.Println("client closed")
-					continue
-				}
-
-				// send back everything, we won't start to read again until write completes.
-				buf := make([]byte, res.Size)
-				copy(buf, res.Buffer[:res.Size])
-				gaio.Write(nil, res.Conn, buf)
-
-			case gaio.OpWrite: // write completion event
-				// handle unexpected write error
-				if res.Error != nil {
-					log.Println("write error")
-					continue
-				}
-				// since write has completed, let's start read on this 'fd' again
-				gaio.Read(nil, res.Conn, nil)
-			}
-		}
-	}()
 
 	for {
 		conn, err := ln.Accept()

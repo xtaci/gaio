@@ -73,8 +73,6 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 		changes = changes[:0]
 
 		var pe pollerEvents
-		pe.events = make([]event, 0, n)
-		pe.done = make(chan struct{})
 
 		for i := 0; i < n; i++ {
 			ev := &events[i]
@@ -104,18 +102,12 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 					e.r = true
 					e.w = true
 				}
-				pe.events = append(pe.events, e)
+				pe = append(pe, e)
 			}
 		}
 
 		select {
 		case chEventNotify <- pe:
-		case <-die:
-			return
-		}
-
-		select {
-		case <-pe.done:
 		case <-die:
 			return
 		}

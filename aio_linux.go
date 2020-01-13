@@ -83,8 +83,6 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 		}
 
 		var pe pollerEvents
-		pe.events = make([]event, 0, n)
-		pe.done = make(chan struct{})
 
 		for i := 0; i < n; i++ {
 			ev := &events[i]
@@ -104,18 +102,12 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 				if ev.Events&(syscall.EPOLLOUT|syscall.EPOLLERR|syscall.EPOLLHUP) != 0 {
 					e.w = true
 				}
-				pe.events = append(pe.events, e)
+				pe = append(pe, e)
 			}
 		}
 
 		select {
 		case chEventNotify <- pe:
-		case <-die:
-			return
-		}
-
-		select {
-		case <-pe.done:
 		case <-die:
 			return
 		}

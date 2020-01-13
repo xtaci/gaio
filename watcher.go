@@ -489,7 +489,7 @@ func (w *Watcher) loop() {
 			// then the following IO operation is impossible to misread or miswrite on
 			// the new same socket fd number as in net.Conn.
 			//log.Println(e)
-			for _, e := range pe.events {
+			for _, e := range pe {
 				if e.r {
 					count := 0
 					closed := false
@@ -532,7 +532,6 @@ func (w *Watcher) loop() {
 					}
 				}
 			}
-			close(pe.done)
 		case pcb := <-chTimeoutOps:
 			if !pcb.hasCompleted {
 				// ErrDeadline

@@ -13,10 +13,7 @@ type event struct {
 }
 
 // events from epoll_wait passing to loop,should be in batch for atomicity
-type pollerEvents struct {
-	events []event
-	done   chan struct{}
-}
+type pollerEvents []event
 
 func dupconn(conn net.Conn) (newfd int, err error) {
 	sc, ok := conn.(interface {

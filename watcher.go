@@ -246,7 +246,6 @@ func (w *Watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 }
 
 // tryRead will try to read data on aiocb and notify
-// returns true if IO has completed, false means not.
 func (w *Watcher) tryRead(pcb *aiocb) {
 	if pcb.hasCompleted {
 		return
@@ -323,7 +322,7 @@ func (w *Watcher) tryWrite(pcb *aiocb) {
 
 // the core event loop of this watcher
 func (w *Watcher) loop() {
-	// the maps belove is consistent at any give time.
+	// the maps below is consistent at any give time.
 	queuedReaders := make(map[int][]*aiocb) // ident -> aiocb
 	queuedWriters := make(map[int][]*aiocb)
 	connIdents := make(map[uintptr]int)
@@ -395,8 +394,8 @@ func (w *Watcher) loop() {
 							}
 						}
 						releaseConn(ident)
-						continue
 					}
+					continue
 				}
 
 				// new conn

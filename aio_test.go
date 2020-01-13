@@ -168,21 +168,17 @@ func TestEchoHuge(t *testing.T) {
 	}
 
 	tx := make([]byte, 100*1024*1024)
-	n, err := io.ReadFull(rand.Reader, tx)
+	rx := make([]byte, len(tx))
+	_, err = io.ReadFull(rand.Reader, tx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	go func() {
-		n, err := conn.Write(tx)
-		if err != nil {
-			log.Fatal(err)
-		}
-		log.Println("ping size", n)
+		conn.Write(tx)
 	}()
 
-	rx := make([]byte, len(tx))
-	n, err = io.ReadFull(conn, rx)
+	n, err := io.ReadFull(conn, rx)
 	if err != nil {
 		t.Fatal(err, n)
 	}

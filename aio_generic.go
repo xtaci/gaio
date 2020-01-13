@@ -31,7 +31,6 @@ func dupconn(conn net.Conn) (newfd int, err error) {
 	}
 	ec := rc.Control(func(fd uintptr) {
 		newfd, err = syscall.Dup(int(fd))
-		return
 	})
 
 	if ec != nil {

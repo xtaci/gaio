@@ -8,8 +8,7 @@ import (
 )
 
 type poller struct {
-	fd    int
-	seqid int32
+	fd int
 	// awaiting for poll
 	awaiting      []int
 	awaitingMutex sync.Mutex
@@ -38,20 +37,18 @@ func openPoll() (*poller, error) {
 
 func (p *poller) Close() error { return syscall.Close(p.fd) }
 
-func (p *poller) trigger() error {
+func (p *poller) Watch(fd int) error {
+	p.awaitingMutex.Lock()
+	p.awaiting = append(p.awaiting, fd)
+	p.awaitingMutex.Unlock()
+
+	// notify poller
 	_, err := syscall.Kevent(p.fd, []syscall.Kevent_t{{
 		Ident:  0,
 		Filter: syscall.EVFILT_USER,
 		Fflags: syscall.NOTE_TRIGGER,
 	}}, nil, nil)
 	return err
-}
-
-func (p *poller) Watch(fd int) {
-	p.awaitingMutex.Lock()
-	p.awaiting = append(p.awaiting, fd)
-	p.awaitingMutex.Unlock()
-	p.trigger()
 }
 
 func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
@@ -61,21 +58,19 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 		p.awaitingMutex.Lock()
 		for _, fd := range p.awaiting {
 			changes = append(changes,
-				syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR | syscall.EV_EOF, Filter: syscall.EVFILT_READ},
-				syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR | syscall.EV_EOF, Filter: syscall.EVFILT_WRITE},
+				syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_READ},
+				syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_WRITE},
 			)
-			// apply changes one by one to notify caller
-			syscall.Kevent(p.fd, changes, nil, nil)
-			changes = changes[:0]
 		}
 		p.awaiting = p.awaiting[:0]
 		p.awaitingMutex.Unlock()
 
 		// poll
-		n, err := syscall.Kevent(p.fd, nil, events, nil)
+		n, err := syscall.Kevent(p.fd, changes, events, nil)
 		if err != nil && err != syscall.EINTR {
 			return
 		}
+		changes = changes[:0]
 
 		var pe pollerEvents
 		pe.events = make([]event, 0, n)

@@ -27,8 +27,6 @@ var (
 	ErrConnClosed = errors.New("connection closed")
 	// ErrDeadline means the specific operation has exceeded deadline before completion
 	ErrDeadline = errors.New("operation exceeded deadline")
-	// ErrNotWatched means the file descriptor is not being watched
-	ErrNotWatched = errors.New("file descriptor is not being watched")
 )
 
 const (
@@ -397,10 +395,23 @@ func (w *Watcher) loop() {
 							return
 						}
 					} else {
+						// assign idents
 						ident = dupfd
+
+						// unexpected situation, should notify caller
+						werr := w.pfd.Watch(ident)
+						if werr != nil {
+							select {
+							case w.chIOCompletion <- OpResult{Op: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Err: werr, Context: pcb.ctx}:
+								continue
+							case <-w.die:
+								return
+							}
+						}
+
+						// bindings
 						idents[ident] = ptr
 						connIdents[ptr] = ident
-						w.pfd.Watch(ident)
 						// as we duplicated succesfuly, we're safe to
 						// close the original connection
 						pcb.conn.Close()

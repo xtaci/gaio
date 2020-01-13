@@ -55,17 +55,15 @@ func (p *poller) Close() error {
 	return syscall.Close(p.pfd)
 }
 
-func (p *poller) trigger() error {
-	var x uint64 = 1
-	_, err := syscall.Write(p.efd, (*(*[8]byte)(unsafe.Pointer(&x)))[:])
-	return err
-}
-
-func (p *poller) Watch(fd int) {
+func (p *poller) Watch(fd int) error {
 	p.awaitingMutex.Lock()
 	p.awaiting = append(p.awaiting, fd)
 	p.awaitingMutex.Unlock()
-	p.trigger()
+
+	// interrupt epoll_wait
+	var x uint64 = 1
+	_, err := syscall.Write(p.efd, (*(*[8]byte)(unsafe.Pointer(&x)))[:])
+	return err
 }
 
 func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {

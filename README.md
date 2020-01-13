@@ -137,4 +137,4 @@ More to be found: https://github.com/xtaci/gaio/tree/master/examples
 
 ## Status
 
-Beta
+GA

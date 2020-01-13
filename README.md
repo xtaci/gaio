@@ -48,7 +48,7 @@ import (
         "github.com/xtaci/gaio"
 )
 
-// this goroutine will wait for all io events, and sents back everything it received
+// this goroutine will wait for all io events, and send back everything it received
 // in async way
 func echoServer() {
         for {

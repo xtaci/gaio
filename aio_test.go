@@ -270,13 +270,10 @@ func TestSocketClose(t *testing.T) {
 
 		switch res.Operation {
 		case OpWrite:
-			w.Read(nil, conn, nil)
 			w.Release(conn)
+			w.Read(nil, conn, nil)
 		case OpRead:
-			if res.Error == nil {
-				log.Println(res.Size, res.Error)
-				t.Fatal("socket close not successful")
-			} else {
+			if res.Error != nil {
 				t.Log(res.Error)
 				return
 			}

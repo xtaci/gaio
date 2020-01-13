@@ -98,18 +98,12 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 				// half of connection.  (This flag is especially useful for writ-
 				// ing simple code to detect peer shutdown when using Edge Trig-
 				// gered monitoring.)
-				if ev.Events&(syscall.EPOLLERR|syscall.EPOLLHUP|syscall.EPOLLRDHUP) != 0 {
-					e.r = true
-					e.w = true
-				}
-
-				if ev.Events&syscall.EPOLLIN != 0 {
+				if ev.Events&(syscall.EPOLLIN|syscall.EPOLLERR|syscall.EPOLLHUP|syscall.EPOLLRDHUP) != 0 {
 					e.r = true
 				}
-				if ev.Events&syscall.EPOLLOUT != 0 {
+				if ev.Events&(syscall.EPOLLOUT|syscall.EPOLLERR|syscall.EPOLLHUP) != 0 {
 					e.w = true
 				}
-
 				pe.events = append(pe.events, e)
 			}
 		}

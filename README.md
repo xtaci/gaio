@@ -30,6 +30,12 @@ By eliminating **one goroutine per one connection scheme** with **Edge-Triggered
 3. Non-intrusive design, this library works with `net.Listener` and `net.Conn`. (with `syscall.RawConn` support)
 4. Support for Linux, BSD.
 
+## Conventions
+
+1. Once you submit an async read/write requests with related `net.Conn` to `gaio.Watcher`, this conn will be delegated to `gaio.Watcher` at first submit. Future use of this conn like `conn.Read` or `conn.Write` **will return error**.
+2. If you decide not to use this connection anymore, you could call `gaio.Free(net.Conn)` to close socket and free related resources immediately.
+3. If you forgot to call `gaio.Free(net.Conn`, golang runtime garbage collection will do that for you. You don't have to worry about this.
+
 ## Documentation
 
 For complete documentation, see the associated [Godoc](https://godoc.org/github.com/xtaci/gaio).

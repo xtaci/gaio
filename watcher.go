@@ -44,6 +44,11 @@ func init() {
 	defaultWatcher = w
 }
 
+// WaitIO blocks until any read/write completion, or error
+func WaitIO() (r OpResult, err error) {
+	return defaultWatcher.WaitIO()
+}
+
 // Read submits an async read request on 'fd' with context 'ctx', using buffer 'buf'
 func Read(ctx interface{}, conn net.Conn, buf []byte) error {
 	return defaultWatcher.Read(ctx, conn, buf)

@@ -6,7 +6,6 @@ package gaio
 
 import (
 	"errors"
-	"log"
 	"net"
 	"reflect"
 	"runtime"
@@ -24,6 +23,8 @@ var (
 	ErrNoRawConn = errors.New("net.Conn does implement net.RawConn")
 	// ErrWatcherClosed means the watcher is closed
 	ErrWatcherClosed = errors.New("watcher closed")
+	// ErrConnClosed means the user called Release() on related connection
+	ErrConnClosed = errors.New("connection closed")
 	// ErrDeadline means the specific operation has exceeded deadline before completion
 	ErrDeadline = errors.New("operation exceeded deadline")
 	// ErrNotWatched means the file descriptor is not being watched
@@ -176,8 +177,8 @@ func (w *Watcher) Close() (err error) {
 	w.dieOnce.Do(func() {
 		close(w.die)
 		err = w.pfd.Close()
-		runtime.SetFinalizer(w, nil)
 	})
+	runtime.SetFinalizer(w, nil)
 	return err
 }
 
@@ -315,7 +316,7 @@ func (w *Watcher) loop() {
 	queuedWriters := make(map[int][]*aiocb)
 	connIdents := make(map[uintptr]int)
 	idents := make(map[int]uintptr) // fd->net.conn
-	gc := make(chan uintptr)
+	gc := make(chan int)
 
 	// for timeout operations
 	chTimeoutOps := make(chan *aiocb)
@@ -330,7 +331,6 @@ func (w *Watcher) loop() {
 			// close file descriptor
 			syscall.Close(ident)
 		}
-		//log.Println("released", ident)
 	}
 
 	var pending []*aiocb
@@ -363,7 +363,25 @@ func (w *Watcher) loop() {
 				ident, ok := connIdents[ptr]
 				// resource release
 				if pcb.op == opDelete {
-					if ok { // omit if already deleted
+					if ok {
+						// for each request, send release signal
+						// before resource releases.
+						for _, pcb := range queuedReaders[ident] {
+							select {
+							case w.chIOCompletion <- OpResult{Op: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Err: ErrConnClosed, Context: pcb.ctx}:
+								continue
+							case <-w.die:
+								return
+							}
+						}
+						for _, pcb := range queuedWriters[ident] {
+							select {
+							case w.chIOCompletion <- OpResult{Op: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Err: ErrConnClosed, Context: pcb.ctx}:
+								continue
+							case <-w.die:
+								return
+							}
+						}
 						releaseConn(ident)
 						continue
 					}
@@ -390,7 +408,7 @@ func (w *Watcher) loop() {
 						// the conn is still useful for GC finalizer
 						runtime.SetFinalizer(pcb.conn, func(conn net.Conn) {
 							select {
-							case gc <- ptr:
+							case gc <- ident:
 							case <-w.die:
 								return
 							}
@@ -501,11 +519,8 @@ func (w *Watcher) loop() {
 					return
 				}
 			}
-		case ptr := <-gc: // gc recycled net.Conn
-			if ident, ok := connIdents[ptr]; ok {
-				releaseConn(ident)
-				log.Println("GC", ident)
-			}
+		case ident := <-gc: // gc recycled net.Conn
+			releaseConn(ident)
 		case <-w.die:
 			return
 		}

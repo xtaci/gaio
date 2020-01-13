@@ -42,13 +42,13 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 				if res.Err != nil {
 					log.Println("read error:", res.Err, res.Size)
 					delete(wbuffers, res.Conn)
-					res.Conn.Close()
+
 					continue
 				}
 
 				if res.Size == 0 {
 					delete(wbuffers, res.Conn)
-					res.Conn.Close()
+
 					continue
 				}
 
@@ -65,7 +65,7 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 				if res.Err != nil {
 					log.Println("write error:", res.Err, res.Size)
 					delete(wbuffers, res.Conn)
-					res.Conn.Close()
+
 					continue
 				}
 				// write complete, start read again
@@ -118,7 +118,6 @@ func TestEchoTiny(t *testing.T) {
 	}
 
 	t.Log("rx:", string(tx))
-	conn.Close()
 }
 
 func TestDeadline(t *testing.T) {
@@ -154,7 +153,6 @@ func TestDeadline(t *testing.T) {
 		case OpRead:
 			if res.Err != ErrDeadline {
 				t.Fatal(res.Err, "mismatch")
-				conn.Close()
 			}
 			return
 		}
@@ -168,7 +166,6 @@ func TestEchoHuge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
 
 	tx := make([]byte, 100*1024*1024)
 	n, err := io.ReadFull(rand.Reader, tx)
@@ -195,7 +192,6 @@ func TestEchoHuge(t *testing.T) {
 		t.Fatal("incorrect receiving")
 	}
 	t.Log("bytes compare successful")
-	conn.Close()
 }
 
 func TestBidirectionWatcher(t *testing.T) {
@@ -243,7 +239,6 @@ func TestBidirectionWatcher(t *testing.T) {
 			}
 		case OpRead:
 			t.Log("read:", res.Err, res.Size)
-			conn.Close()
 			return
 		}
 	}
@@ -279,23 +274,16 @@ func TestSocketClose(t *testing.T) {
 
 		switch res.Op {
 		case OpWrite:
-			// recv
-			if res.Err != nil {
-				t.Fatal(res.Err)
-			}
-
-			t.Log("written:", res.Err, res.Size)
-			//j	err := w.Read(nil, conn, nil)
-			//	if err != nil {
-			//		t.Fatal(err)
-			//	}
-			conn.Close()
-			return
+			w.Read(nil, conn, nil)
+			w.Release(conn)
 		case OpRead:
-			t.Log("read:", res.Err, res.Size)
-			conn.Close()
-			log.Println("conn closed", conn)
-			return
+			if res.Err == nil {
+				log.Println(res.Size, res.Err)
+				t.Fatal("socket close not successful")
+			} else {
+				t.Log(res.Err)
+				return
+			}
 		}
 	}
 }
@@ -368,7 +356,6 @@ func testParallel(t *testing.T, par int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
 
 	data := make([]byte, 1024)
 
@@ -403,7 +390,6 @@ func testParallel(t *testing.T, par int) {
 		case OpWrite:
 			// recv
 			if res.Err != nil {
-				res.Conn.Close()
 				continue
 			}
 
@@ -413,11 +399,9 @@ func testParallel(t *testing.T, par int) {
 			}
 		case OpRead:
 			if res.Err != nil {
-				res.Conn.Close()
 				continue
 			}
 			if res.Size == 0 {
-				res.Conn.Close()
 				continue
 			}
 
@@ -487,21 +471,12 @@ func testDeadline(t *testing.T, par int) {
 		switch res.Op {
 		case OpRead:
 			if res.Err == ErrDeadline {
-				res.Conn.Close()
 				nerrs++
 				if nerrs == par {
 					t.Log("all deadline reached")
 					close(die)
 					return
 				}
-			}
-
-			if res.Err != nil {
-				res.Conn.Close()
-			}
-
-			if res.Size == 0 {
-				res.Conn.Close()
 			}
 		}
 	}

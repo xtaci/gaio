@@ -50,12 +50,13 @@ func WaitIO() (r OpResult, err error) {
 }
 
 // Read submits an async read request on 'fd' with context 'ctx', using buffer 'buf'
+// 'buf' can be set to nil to use internal buffer
 func Read(ctx interface{}, conn net.Conn, buf []byte) error {
 	return defaultWatcher.Read(ctx, conn, buf)
 }
 
 // ReadTimeout submits an async read request on 'fd' with context 'ctx', using buffer 'buf', and
-// expected to be completed before 'deadline'
+// expected to be completed before 'deadline', 'buf' can be set to nil to use internal buffer
 func ReadTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
 	return defaultWatcher.ReadTimeout(ctx, conn, buf, deadline)
 }
@@ -145,6 +146,7 @@ type Watcher struct {
 }
 
 // NewWatcher creates a management object for monitoring file descriptors
+// 'bufsize' is used to set internal swap buffer size for `Read()` API
 func NewWatcher(bufsize int) (*Watcher, error) {
 	w := new(Watcher)
 	pfd, err := openPoll()
@@ -203,29 +205,31 @@ func (w *Watcher) WaitIO() (r OpResult, err error) {
 	}
 }
 
-// Read submits an async read request on 'fd' with context 'ctx', using buffer 'buf'
+// Read submits an async read request on 'fd' with context 'ctx', using buffer 'buf'.
+// 'buf' can be set to nil to use internal buffer.
 func (w *Watcher) Read(ctx interface{}, conn net.Conn, buf []byte) error {
 	return w.aioCreate(ctx, OpRead, conn, buf, time.Time{})
 }
 
 // ReadTimeout submits an async read request on 'fd' with context 'ctx', using buffer 'buf', and
-// expected to be completed before 'deadline'
+// expected to be completed before 'deadline'.
 func (w *Watcher) ReadTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
 	return w.aioCreate(ctx, OpRead, conn, buf, deadline)
 }
 
-// Write submits an async write request on 'fd' with context 'ctx', using buffer 'buf'
+// Write submits an async write request on 'fd' with context 'ctx', using buffer 'buf'.
 func (w *Watcher) Write(ctx interface{}, conn net.Conn, buf []byte) error {
 	return w.aioCreate(ctx, OpWrite, conn, buf, time.Time{})
 }
 
 // WriteTimeout submits an async write request on 'fd' with context 'ctx', using buffer 'buf', and
-// expected to be completed before 'deadline'
+// expected to be completed before 'deadline', 'buf' can be set to nil to use internal buffer.
 func (w *Watcher) WriteTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
 	return w.aioCreate(ctx, OpWrite, conn, buf, deadline)
 }
 
-// Free let the watcher to release resources related to this conn immediately, like file descriptors
+// Free let the watcher to release resources related to this conn immediately,
+// like socket file descriptors.
 func (w *Watcher) Free(conn net.Conn) error {
 	return w.aioCreate(nil, opDelete, conn, nil, time.Time{})
 }
@@ -325,6 +329,8 @@ func (w *Watcher) loop() {
 	// the maps below is consistent at any give time.
 	queuedReaders := make(map[int][]*aiocb) // ident -> aiocb
 	queuedWriters := make(map[int][]*aiocb)
+
+	// we must not hold net.Conn as key, for GC purpose
 	connIdents := make(map[uintptr]int)
 	idents := make(map[int]uintptr) // fd->net.conn
 	gc := make(chan uintptr)
@@ -339,7 +345,7 @@ func (w *Watcher) loop() {
 			delete(queuedWriters, ident)
 			delete(idents, ident)
 			delete(connIdents, ptr)
-			// close file descriptor
+			// close socket file descriptor duplicated from net.Conn
 			syscall.Close(ident)
 		}
 	}
@@ -430,6 +436,8 @@ func (w *Watcher) loop() {
 						pcb.conn.Close()
 
 						// the conn is still useful for GC finalizer
+						// note finalizer function cannot hold reference to net.Conn
+						// if not it will never be GC-ed
 						runtime.SetFinalizer(pcb.conn, func(c net.Conn) {
 							select {
 							case gc <- reflect.ValueOf(c).Pointer():
@@ -482,12 +490,13 @@ func (w *Watcher) loop() {
 			pending = pending[:0]
 		case pe := <-w.chEventNotify:
 			// suppose fd(s) being polled is closed by conn.Close() from outside after chanrecv,
-			// and a new conn is re-opened with the same handler number(fd).
+			// and a new conn has re-opened with the same handler number(fd). The read and write
+			// on this fd is fatal.
 			//
-			// Note poller will remove closed fd automatically epoll(7), kqueue(2) and silently,
-			// watcher will dup() a new fd related to net.Conn, which uniquely identified by 'e.ident'
-			// then the following IO operation is impossible to misread or miswrite on
-			// the new same socket fd number as in net.Conn.
+			// Note poller will remove closed fd automatically epoll(7), kqueue(2) and silently.
+			// To solve this problem watcher will dup() a new fd from net.Conn, which uniquely
+			// identified by 'e.ident', all library operation will be based on 'e.ident',
+			// then IO operation is impossible to misread or miswrite on re-created fd.
 			//log.Println(e)
 			for _, e := range pe {
 				if e.r {
@@ -545,12 +554,11 @@ func (w *Watcher) loop() {
 		case ptr := <-gc: // gc recycled net.Conn
 			if ident, ok := connIdents[ptr]; ok {
 				// since it's gc-ed, queue is impossible to hold net.Conn
-				// just release here
+				// we don't have to send to chIOCompletion,just release here
 				releaseConn(ident)
 			}
 		case <-w.die:
 			return
 		}
-
 	}
 }

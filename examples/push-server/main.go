@@ -11,7 +11,7 @@ import (
 
 func main() {
 	// by simply replace net.Listen with reuseport.Listen, everything is the same as in push-server
-	//ln, err := reuseport.Listen("tcp", "localhost:0")
+	// ln, err := reuseport.Listen("tcp", "localhost:0")
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		log.Fatal(err)
@@ -44,20 +44,23 @@ func main() {
 
 	// main logic loop, like your program core loop.
 	go func() {
-		conns := make(map[net.Conn]bool)
+		var conns []net.Conn
 		for {
 			select {
 			case res := <-chIO: // receive IO events from watcher
 				if res.Error != nil {
-					delete(conns, res.Conn)
+					continue
 				}
+				conns = append(conns, res.Conn)
 			case t := <-ticker.C: // receive ticker events
 				push := []byte(fmt.Sprintf("%s\n", t))
-				for fd := range conns {
-					w.Write(nil, fd, push)
+				// all conn will receive the same 'push' content
+				for _, conn := range conns {
+					w.Write(nil, conn, push)
 				}
+				conns = nil
 			case conn := <-chConn: // receive new connection events
-				conns[conn] = true
+				conns = append(conns, conn)
 			}
 		}
 	}()
@@ -69,7 +72,6 @@ func main() {
 			log.Println(err)
 			return
 		}
-		log.Println("new client", conn.RemoteAddr())
 		chConn <- conn
 	}
 }

@@ -379,10 +379,10 @@ func (w *Watcher) loop() {
 				} else {
 					select {
 					case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: ErrUnsupported, Context: pcb.ctx}:
-						continue
 					case <-w.die:
 						return
 					}
+					continue
 				}
 
 				ident, ok := connIdents[ptr]
@@ -394,7 +394,6 @@ func (w *Watcher) loop() {
 						for _, pcb := range queuedReaders[ident] {
 							select {
 							case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrConnClosed, Context: pcb.ctx}:
-								continue
 							case <-w.die:
 								return
 							}
@@ -402,7 +401,6 @@ func (w *Watcher) loop() {
 						for _, pcb := range queuedWriters[ident] {
 							select {
 							case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrConnClosed, Context: pcb.ctx}:
-								continue
 							case <-w.die:
 								return
 							}
@@ -417,10 +415,10 @@ func (w *Watcher) loop() {
 					if dupfd, err := dupconn(pcb.conn); err != nil {
 						select {
 						case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: err, Context: pcb.ctx}:
-							continue
 						case <-w.die:
 							return
 						}
+						continue
 					} else {
 						// assign idents
 						ident = dupfd
@@ -430,10 +428,10 @@ func (w *Watcher) loop() {
 						if werr != nil {
 							select {
 							case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: werr, Context: pcb.ctx}:
-								continue
 							case <-w.die:
 								return
 							}
+							continue
 						}
 
 						// bindings

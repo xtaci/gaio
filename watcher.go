@@ -50,14 +50,14 @@ func WaitIO() (r OpResult, err error) {
 }
 
 // Read submits an async read request on 'fd' with context 'ctx', using buffer 'buf'
-// 'buf' can be set to nil to use internal buffer
+// 'buf' can be set to nil to use internal buffer.
 // 'ctx' is the user-defined value passed through the gaio watcher unchanged.
 func Read(ctx interface{}, conn net.Conn, buf []byte) error {
 	return defaultWatcher.Read(ctx, conn, buf)
 }
 
 // ReadTimeout submits an async read request on 'fd' with context 'ctx', using buffer 'buf', and
-// expected to be completed before 'deadline', 'buf' can be set to nil to use internal buffer
+// expected to be completed before 'deadline', 'buf' can be set to nil to use internal buffer.
 // 'ctx' is the user-defined value passed through the gaio watcher unchanged
 func ReadTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
 	return defaultWatcher.ReadTimeout(ctx, conn, buf, deadline)

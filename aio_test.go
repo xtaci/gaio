@@ -42,12 +42,13 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 				if res.Error != nil {
 					log.Println("read error:", res.Error, res.Size)
 					delete(wbuffers, res.Conn)
-
+					w.Free(res.Conn)
 					continue
 				}
 
 				if res.Size == 0 {
 					delete(wbuffers, res.Conn)
+					w.Free(res.Conn)
 
 					continue
 				}
@@ -65,6 +66,7 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 				if res.Error != nil {
 					log.Println("write error:", res.Error, res.Size)
 					delete(wbuffers, res.Conn)
+					w.Free(res.Conn)
 
 					continue
 				}
@@ -336,6 +338,10 @@ func Test4k(t *testing.T) {
 
 func Test8k(t *testing.T) {
 	testParallel(t, 8192)
+}
+
+func Test16k(t *testing.T) {
+	testParallel(t, 16384)
 }
 
 func testParallel(t *testing.T, par int) {

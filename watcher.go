@@ -222,7 +222,6 @@ func (w *Watcher) tryRead(pcb *aiocb) {
 	for {
 		// return values are stored in pcb
 		pcb.size, pcb.err = syscall.Read(pcb.fd, buf)
-		runtime.KeepAlive(w)
 		if pcb.err == syscall.EAGAIN {
 			return
 		}
@@ -258,7 +257,6 @@ func (w *Watcher) tryWrite(pcb *aiocb) {
 
 	if pcb.buffer != nil {
 		nw, ew = syscall.Write(pcb.fd, pcb.buffer[pcb.size:])
-		runtime.KeepAlive(w)
 		pcb.err = ew
 		if ew == syscall.EAGAIN {
 			return
@@ -515,9 +513,9 @@ func (w *Watcher) loop() {
 				releaseConn(ident)
 			}
 		case <-w.die:
-			// close all opened fds
+			// release all resources
 			for ident := range idents {
-				syscall.Close(ident)
+				releaseConn(ident)
 			}
 			return
 		}

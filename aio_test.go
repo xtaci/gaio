@@ -353,6 +353,7 @@ func testParallel(t *testing.T, par int) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer w.Close()
 
 	data := make([]byte, 1024)
 

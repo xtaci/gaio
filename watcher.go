@@ -121,7 +121,8 @@ func NewWatcher(bufsize int) (*Watcher, error) {
 
 	// finalizer for system resources
 	runtime.SetFinalizer(w, func(w *Watcher) {
-		w.Close()
+		close(w.die)
+		w.pfd.Close()
 	})
 
 	go w.pfd.Wait(w.chEventNotify, w.die)
@@ -131,11 +132,11 @@ func NewWatcher(bufsize int) (*Watcher, error) {
 
 // Close stops monitoring on events for all connections
 func (w *Watcher) Close() (err error) {
+	runtime.SetFinalizer(w, nil)
 	w.dieOnce.Do(func() {
 		close(w.die)
 		err = w.pfd.Close()
 	})
-	runtime.SetFinalizer(w, nil)
 	return err
 }
 
@@ -221,6 +222,7 @@ func (w *Watcher) tryRead(pcb *aiocb) {
 	for {
 		// return values are stored in pcb
 		pcb.size, pcb.err = syscall.Read(pcb.fd, buf)
+		runtime.KeepAlive(w)
 		if pcb.err == syscall.EAGAIN {
 			return
 		}
@@ -256,6 +258,7 @@ func (w *Watcher) tryWrite(pcb *aiocb) {
 
 	if pcb.buffer != nil {
 		nw, ew = syscall.Write(pcb.fd, pcb.buffer[pcb.size:])
+		runtime.KeepAlive(w)
 		pcb.err = ew
 		if ew == syscall.EAGAIN {
 			return
@@ -512,6 +515,10 @@ func (w *Watcher) loop() {
 				releaseConn(ident)
 			}
 		case <-w.die:
+			// close all opened fds
+			for ident := range idents {
+				syscall.Close(ident)
+			}
 			return
 		}
 	}

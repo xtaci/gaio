@@ -417,10 +417,9 @@ func TestDeadline4k(t *testing.T) {
 	testDeadline(t, 4096)
 }
 
-/*
 func TestDeadline8k(t *testing.T) {
 	testDeadline(t, 8192)
-}*/
+}
 
 func testDeadline(t *testing.T, par int) {
 	t.Log("testing concurrent:", par, "unresponsive connections")

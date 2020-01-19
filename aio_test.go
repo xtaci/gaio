@@ -340,8 +340,8 @@ func Test8k(t *testing.T) {
 	testParallel(t, 8192)
 }
 
-func Test12k(t *testing.T) {
-	testParallel(t, 12288)
+func Test10k(t *testing.T) {
+	testParallel(t, 10240)
 }
 
 func testParallel(t *testing.T, par int) {

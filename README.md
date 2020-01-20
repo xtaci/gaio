@@ -215,6 +215,10 @@ For complete documentation, see the associated [Godoc](https://godoc.org/github.
 
 ### Regression
 
+![regression](regression.png)
+
+X -> number of concurrent connections, Y -> time of completion in seconds
+
 ```
 Best-fit values	 
 Slope	8.613e-005 ± 5.272e-006
@@ -240,7 +244,6 @@ Deviation from horizontal?	Significant
 Data	 
 Number of XY pairs	6
 Equation	Y = 8.613e-005*X + 0.08278
-
 ```
 
 

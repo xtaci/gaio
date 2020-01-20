@@ -72,7 +72,7 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 		}
 		changes = changes[:0]
 
-		var pe pollerEvents
+		pe := make([]event, 0, n)
 
 		for i := 0; i < n; i++ {
 			ev := &events[i]

@@ -82,8 +82,7 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 			return
 		}
 
-		var pe pollerEvents
-
+		pe := make([]event, 0, n)
 		for i := 0; i < n; i++ {
 			ev := &events[i]
 			if int(ev.Fd) == p.efd {

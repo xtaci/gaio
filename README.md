@@ -213,6 +213,35 @@ For complete documentation, see the associated [Godoc](https://godoc.org/github.
 | Linux AMD64 | 0.94s |
 | Raspberry Pi4 | 2.09s |
 
+### Regression
+
+```
+Best-fit values	 
+Slope	8.613e-005 ± 5.272e-006
+Y-intercept	0.08278 ± 0.03998
+X-intercept	-961.1
+1/Slope	11610
+ 
+95% Confidence Intervals	 
+Slope	7.150e-005 to 0.0001008
+Y-intercept	-0.02820 to 0.1938
+X-intercept	-2642 to 287.1
+ 
+Goodness of Fit	 
+R square	0.9852
+Sy.x	0.05421
+ 
+Is slope significantly non-zero?	 
+F	266.9
+DFn,DFd	1,4
+P Value	< 0.0001
+Deviation from horizontal?	Significant
+ 
+Data	 
+Number of XY pairs	6
+Equation	Y = 8.613e-005*X + 0.08278
+
+```
 
 
 ## License

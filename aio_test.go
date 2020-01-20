@@ -344,6 +344,10 @@ func Test10k(t *testing.T) {
 	testParallel(t, 10240)
 }
 
+func Test12k(t *testing.T) {
+	testParallel(t, 12288)
+}
+
 func testParallel(t *testing.T, par int) {
 	t.Log("testing concurrent:", par, "connections")
 	ln := echoServer(t, 1024)

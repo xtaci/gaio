@@ -326,40 +326,40 @@ func TestWriteOnClosedConn(t *testing.T) {
 }
 
 func Test1k(t *testing.T) {
-	testParallel(t, 1024)
+	testParallel(t, 1024, 1024)
 }
 func Test2k(t *testing.T) {
-	testParallel(t, 2048)
+	testParallel(t, 2048, 1024)
 }
 
 func Test4k(t *testing.T) {
-	testParallel(t, 4096)
+	testParallel(t, 4096, 1024)
 }
 
 func Test8k(t *testing.T) {
-	testParallel(t, 8192)
+	testParallel(t, 8192, 1024)
 }
 
 func Test10k(t *testing.T) {
-	testParallel(t, 10240)
+	testParallel(t, 10240, 1024)
 }
 
 func Test12k(t *testing.T) {
-	testParallel(t, 12288)
+	testParallel(t, 12288, 1024)
 }
 
-func testParallel(t *testing.T, par int) {
+func testParallel(t *testing.T, par int, msgsize int) {
 	t.Log("testing concurrent:", par, "connections")
 	ln := echoServer(t, 1024)
 	defer ln.Close()
 
-	w, err := NewWatcher(1024)
+	w, err := NewWatcher(msgsize)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer w.Close()
 
-	data := make([]byte, 1024)
+	data := make([]byte, msgsize)
 
 	die := make(chan struct{})
 	go func() {

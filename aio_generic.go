@@ -12,7 +12,9 @@ type event struct {
 	w     bool // writable
 }
 
-// events from epoll_wait passing to loop,should be in batch for atomicity
+// events from epoll_wait passing to loop,should be in batch for atomicity.
+// and batch processing is the key to amortize context switching costs for
+// tiny messages.
 type pollerEvents []event
 
 func dupconn(conn net.Conn) (newfd int, err error) {

@@ -5,6 +5,9 @@ import (
 	"syscall"
 )
 
+// poller wait max events count
+const maxEvents = 1024
+
 // event represent a file descriptor event
 type event struct {
 	ident int  // identifier of this event, usually file descriptor

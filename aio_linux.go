@@ -67,7 +67,7 @@ func (p *poller) Watch(fd int) error {
 }
 
 func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
-	events := make([]syscall.EpollEvent, 128)
+	events := make([]syscall.EpollEvent, maxEvents)
 	for {
 		// check for new awaiting
 		p.awaitingMutex.Lock()

@@ -23,12 +23,13 @@ In this case, you need at least **2KB(goroutine stack) + 4KB(buffer)** for recei
 
 By eliminating **one goroutine per one connection scheme** with **Edge-Triggered IO Multiplexing**, the 2KB goroutine stack can be saved, and by restricting delivery order or events, internal **mutual buffer** can be shared for all incoming connections in a `Watcher`.
 
-## Guarantees
+## Features
 
 1. Only a fixed number of goroutines will be created per **Watcher**(the core object of this library).
 2. The IO-completion notification on a **Watcher** is sequential, that means buffer can be reused in some pattern.
 3. Non-intrusive design, this library works with `net.Listener` and `net.Conn`. (with `syscall.RawConn` support)
-4. Support for Linux, BSD.
+4. **Amortized context switching cost** for tiny messages, able to handle frequent chat message exchanging.
+5. Support for Linux, BSD.
 
 ## Conventions
 

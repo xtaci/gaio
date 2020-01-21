@@ -348,6 +348,18 @@ func Test12k(t *testing.T) {
 	testParallel(t, 12288, 1024)
 }
 
+func Test1kTiny(t *testing.T) {
+	testParallel(t, 1024, 16)
+}
+
+func Test2kTiny(t *testing.T) {
+	testParallel(t, 2048, 16)
+}
+
+func Test4kTiny(t *testing.T) {
+	testParallel(t, 4096, 16)
+}
+
 func testParallel(t *testing.T, par int, msgsize int) {
 	t.Log("testing concurrent:", par, "connections")
 	ln := echoServer(t, 1024)

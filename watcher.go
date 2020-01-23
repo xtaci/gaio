@@ -502,7 +502,7 @@ func (w *Watcher) loop() {
 				case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrDeadline, Context: pcb.ctx}:
 					pcb.hasCompleted = true
 				case <-w.die:
-					return
+					goto EXIT
 				}
 			}
 		case ptr := <-gc: // gc recycled net.Conn

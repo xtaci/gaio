@@ -20,6 +20,7 @@ type event struct {
 // tiny messages.
 type pollerEvents []event
 
+// dupconn use RawConn to dup() file descriptor
 func dupconn(conn net.Conn) (newfd int, err error) {
 	sc, ok := conn.(interface {
 		SyscallConn() (syscall.RawConn, error)
@@ -31,6 +32,8 @@ func dupconn(conn net.Conn) (newfd int, err error) {
 	if err != nil {
 		return -1, ErrUnsupported
 	}
+
+	// Control() gurantees the integrity of file descriptor
 	ec := rc.Control(func(fd uintptr) {
 		newfd, err = syscall.Dup(int(fd))
 	})

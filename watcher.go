@@ -329,7 +329,7 @@ func (w *Watcher) loop() {
 					select {
 					case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: ErrUnsupported, Context: pcb.ctx}:
 					case <-w.die:
-						return
+						goto EXIT
 					}
 					continue
 				}
@@ -344,14 +344,14 @@ func (w *Watcher) loop() {
 							select {
 							case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrConnClosed, Context: pcb.ctx}:
 							case <-w.die:
-								return
+								goto EXIT
 							}
 						}
 						for _, pcb := range queuedWriters[ident] {
 							select {
 							case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrConnClosed, Context: pcb.ctx}:
 							case <-w.die:
-								return
+								goto EXIT
 							}
 						}
 						releaseConn(ident)
@@ -365,7 +365,7 @@ func (w *Watcher) loop() {
 						select {
 						case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: err, Context: pcb.ctx}:
 						case <-w.die:
-							return
+							goto EXIT
 						}
 						continue
 					} else {
@@ -378,7 +378,7 @@ func (w *Watcher) loop() {
 							select {
 							case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: werr, Context: pcb.ctx}:
 							case <-w.die:
-								return
+								goto EXIT
 							}
 							continue
 						}
@@ -397,7 +397,6 @@ func (w *Watcher) loop() {
 							select {
 							case gc <- reflect.ValueOf(c).Pointer():
 							case <-w.die:
-								return
 							}
 						})
 					}
@@ -513,11 +512,12 @@ func (w *Watcher) loop() {
 				releaseConn(ident)
 			}
 		case <-w.die:
-			// release all resources
-			for ident := range idents {
-				releaseConn(ident)
-			}
-			return
+			goto EXIT
 		}
+	}
+EXIT:
+	// release all resources
+	for ident := range idents {
+		releaseConn(ident)
 	}
 }

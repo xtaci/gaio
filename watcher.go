@@ -283,6 +283,7 @@ func (w *Watcher) tryWrite(pcb *aiocb) {
 
 // the core event loop of this watcher
 func (w *Watcher) loop() {
+
 	// the maps below is consistent at any give time.
 	queuedReaders := make(map[int][]*aiocb) // ident -> aiocb
 	queuedWriters := make(map[int][]*aiocb)
@@ -307,6 +308,13 @@ func (w *Watcher) loop() {
 		}
 	}
 
+	// release all resources
+	defer func() {
+		for ident := range idents {
+			releaseConn(ident)
+		}
+	}()
+
 	var pending []*aiocb
 	for {
 		select {
@@ -329,7 +337,7 @@ func (w *Watcher) loop() {
 					select {
 					case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: ErrUnsupported, Context: pcb.ctx}:
 					case <-w.die:
-						goto EXIT
+						return
 					}
 					continue
 				}
@@ -344,14 +352,14 @@ func (w *Watcher) loop() {
 							select {
 							case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrConnClosed, Context: pcb.ctx}:
 							case <-w.die:
-								goto EXIT
+								return
 							}
 						}
 						for _, pcb := range queuedWriters[ident] {
 							select {
 							case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrConnClosed, Context: pcb.ctx}:
 							case <-w.die:
-								goto EXIT
+								return
 							}
 						}
 						releaseConn(ident)
@@ -365,7 +373,7 @@ func (w *Watcher) loop() {
 						select {
 						case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: err, Context: pcb.ctx}:
 						case <-w.die:
-							goto EXIT
+							return
 						}
 						continue
 					} else {
@@ -378,7 +386,7 @@ func (w *Watcher) loop() {
 							select {
 							case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: werr, Context: pcb.ctx}:
 							case <-w.die:
-								goto EXIT
+								return
 							}
 							continue
 						}
@@ -502,7 +510,7 @@ func (w *Watcher) loop() {
 				case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrDeadline, Context: pcb.ctx}:
 					pcb.hasCompleted = true
 				case <-w.die:
-					goto EXIT
+					return
 				}
 			}
 		case ptr := <-gc: // gc recycled net.Conn
@@ -512,12 +520,7 @@ func (w *Watcher) loop() {
 				releaseConn(ident)
 			}
 		case <-w.die:
-			goto EXIT
+			return
 		}
-	}
-EXIT:
-	// release all resources
-	for ident := range idents {
-		releaseConn(ident)
 	}
 }

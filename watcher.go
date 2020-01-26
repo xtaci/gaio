@@ -48,6 +48,7 @@ const (
 // aiocb contains all info for a request
 type aiocb struct {
 	ctx          interface{} // user context associated with this request
+	ptr          uintptr     // pointer to conn
 	op           OpType      // read or write
 	fd           int         // associated file descriptor for nonblocking-io
 	conn         net.Conn    // associated connection for nonblocking-io
@@ -201,8 +202,14 @@ func (w *Watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 	case <-w.die:
 		return ErrWatcherClosed
 	default:
+		var ptr uintptr
+		if reflect.TypeOf(conn).Kind() == reflect.Ptr {
+			ptr = reflect.ValueOf(conn).Pointer()
+		} else {
+			return ErrUnsupported
+		}
 		w.pendingMutex.Lock()
-		w.pending = append(w.pending, &aiocb{op: op, ctx: ctx, conn: conn, buffer: buf, deadline: deadline})
+		w.pending = append(w.pending, &aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline})
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()
@@ -334,19 +341,7 @@ func (w *Watcher) loop() {
 			w.pendingMutex.Unlock()
 
 			for _, pcb := range pending {
-				var ptr uintptr
-				if reflect.TypeOf(pcb.conn).Kind() == reflect.Ptr {
-					ptr = reflect.ValueOf(pcb.conn).Pointer()
-				} else {
-					select {
-					case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: ErrUnsupported, Context: pcb.ctx}:
-					case <-w.die:
-						return
-					}
-					continue
-				}
-
-				ident, ok := connIdents[ptr]
+				ident, ok := connIdents[pcb.ptr]
 				// resource release
 				if pcb.op == opDelete {
 					if ok {
@@ -396,8 +391,8 @@ func (w *Watcher) loop() {
 						}
 
 						// bindings
-						idents[ident] = ptr
-						connIdents[ptr] = ident
+						idents[ident] = pcb.ptr
+						connIdents[pcb.ptr] = ident
 						// as we duplicated succesfuly, we're safe to
 						// close the original connection
 						pcb.conn.Close()
@@ -469,6 +464,11 @@ func (w *Watcher) loop() {
 					count := 0
 					closed := false
 					for _, pcb := range queuedReaders[e.ident] {
+						if pcb.hasCompleted {
+							count++
+							continue
+						}
+
 						w.tryRead(pcb)
 						if pcb.hasCompleted {
 							count++
@@ -489,6 +489,11 @@ func (w *Watcher) loop() {
 					count := 0
 					closed := false
 					for _, pcb := range queuedWriters[e.ident] {
+						if pcb.hasCompleted {
+							count++
+							continue
+						}
+
 						w.tryWrite(pcb)
 						if pcb.hasCompleted {
 							count++
@@ -508,13 +513,15 @@ func (w *Watcher) loop() {
 				}
 			}
 		case pcb := <-chTimeoutOps:
-			if !pcb.hasCompleted {
-				// ErrDeadline
-				select {
-				case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrDeadline, Context: pcb.ctx}:
-					pcb.hasCompleted = true
-				case <-w.die:
-					return
+			if _, ok := connIdents[pcb.ptr]; ok {
+				if !pcb.hasCompleted {
+					// ErrDeadline
+					select {
+					case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrDeadline, Context: pcb.ctx}:
+						pcb.hasCompleted = true
+					case <-w.die:
+						return
+					}
 				}
 			}
 		case ptr := <-gc: // gc recycled net.Conn

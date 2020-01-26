@@ -67,11 +67,11 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 
 		// poll
 		n, err := syscall.Kevent(p.fd, changes, events, nil)
-		if err != nil {
-			if err != syscall.EINTR {
-				return
-			}
+		if err == syscall.EINTR {
 			continue
+		}
+		if err != nil {
+			return
 		}
 		changes = changes[:0]
 

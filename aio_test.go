@@ -502,43 +502,64 @@ func benchmarkEcho(b *testing.B, bufsize int) {
 
 	numLoops := b.N
 	addr, _ := net.ResolveTCPAddr("tcp", ln.Addr().String())
-	tx := make([]byte, 1024*1024)
+	tx := make([]byte, bufsize)
 	_, err := io.ReadFull(rand.Reader, tx)
 	if err != nil {
 		b.Fatal(err)
 	}
 
 	rx := make([]byte, bufsize)
-
 	conn, err := net.DialTCP("tcp", nil, addr)
 	if err != nil {
-		b.Fatal(err)
+		b.Fatal("dial:", err)
 		return
 	}
 	defer conn.Close()
+
+	w, err := NewWatcher(bufsize)
+	if err != nil {
+		b.Fatal("new watcher:", err)
+	}
+	defer w.Close()
 
 	b.Log("sending", len(tx), "bytes for", b.N, "times", "with buffer size:", bufsize)
 	b.ReportAllocs()
 	b.SetBytes(int64(len(tx)))
 	b.ResetTimer()
-	go func() {
-		for i := 0; i < numLoops; i++ {
-			_, err := conn.Write(tx)
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
-	}()
 
 	count := 0
+	target := len(tx) * numLoops
+	w.Write(nil, conn, tx)
+	w.Read(nil, conn, rx)
 	for {
-		n, err := conn.Read(rx)
+		res, err := w.WaitIO()
 		if err != nil {
-			b.Fatal(err)
+			b.Fatal("waitio:", err)
+			return
 		}
-		count += n
-		if count == len(tx)*numLoops {
-			break
+
+		switch res.Operation {
+		case OpWrite:
+			if res.Error != nil {
+				b.Fatal("read:", res.Error)
+			}
+			err := w.Write(nil, res.Conn, tx)
+			if err != nil {
+				b.Log("wirte:", err)
+			}
+		case OpRead:
+			if res.Error != nil {
+				b.Fatal("read:", res.Error)
+			}
+			count += res.Size
+			if count >= target {
+				return
+			}
+			//log.Println("count:", count, "target:", target)
+			err := w.Read(nil, res.Conn, rx)
+			if err != nil {
+				b.Log("read:", err)
+			}
 		}
 	}
 }

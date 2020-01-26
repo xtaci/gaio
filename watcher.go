@@ -414,6 +414,17 @@ func (w *Watcher) loop() {
 				// operations splitted into different buckets
 				switch pcb.op {
 				case OpRead:
+					// try clean timeout requests
+					count := 0
+					for _, e := range queuedReaders[ident] {
+						if e.hasCompleted {
+							count++
+						} else {
+							break
+						}
+					}
+					queuedReaders[ident] = queuedReaders[ident][count:]
+
 					if len(queuedReaders[ident]) == 0 {
 						w.tryRead(pcb)
 						if pcb.hasCompleted {
@@ -425,6 +436,16 @@ func (w *Watcher) loop() {
 					}
 					queuedReaders[ident] = append(queuedReaders[ident], pcb)
 				case OpWrite:
+					count := 0
+					for _, e := range queuedWriters[ident] {
+						if e.hasCompleted {
+							count++
+						} else {
+							break
+						}
+					}
+					queuedWriters[ident] = queuedWriters[ident][count:]
+
 					if len(queuedWriters[ident]) == 0 {
 						w.tryWrite(pcb)
 						if pcb.hasCompleted {
@@ -465,6 +486,7 @@ func (w *Watcher) loop() {
 					closed := false
 					for _, pcb := range queuedReaders[e.ident] {
 						if pcb.hasCompleted {
+							// request may completed via timeout
 							count++
 							continue
 						}

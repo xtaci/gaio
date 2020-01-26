@@ -202,9 +202,9 @@ For complete documentation, see the associated [Godoc](https://godoc.org/github.
 |:-------------:|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Description | A client keep on sending 64KB bytes to server, server keeps on reading and sending back whatever it received, the client keeps on receiving whatever the server sent back until all bytes received successfully |
 | Command | `go test -v -run=^$ -bench Echo` |
-| Macbook Pro | 1695.27 MB/s |
-| Linux AMD64 | 1883.23 MB/s |
-| Raspberry Pi4 | 317.13 MB/s |
+| Macbook Pro | 1695.27 MB/s 518 B/op 4 allocs/op|
+| Linux AMD64 | 1883.23 MB/s 518 B/op 4 allocs/op|
+| Raspberry Pi4 | 317.13 MB/s 518 B/op 4 allocs/op|
 
 | Test Case | 8K concurrent connection echo test |
 |:-------------:|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|

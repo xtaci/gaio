@@ -29,6 +29,10 @@ var (
 	ErrDeadline = errors.New("operation exceeded deadline")
 )
 
+var (
+	zeroTime = time.Time{}
+)
+
 // OpType defines Operation Type
 type OpType int
 
@@ -162,7 +166,7 @@ func (w *Watcher) WaitIO() (r OpResult, err error) {
 // 'buf' can be set to nil to use internal buffer.
 // 'ctx' is the user-defined value passed through the gaio watcher unchanged.
 func (w *Watcher) Read(ctx interface{}, conn net.Conn, buf []byte) error {
-	return w.aioCreate(ctx, OpRead, conn, buf, time.Time{})
+	return w.aioCreate(ctx, OpRead, conn, buf, zeroTime)
 }
 
 // ReadTimeout submits an async read request on 'fd' with context 'ctx', using buffer 'buf', and
@@ -175,7 +179,7 @@ func (w *Watcher) ReadTimeout(ctx interface{}, conn net.Conn, buf []byte, deadli
 // Write submits an async write request on 'fd' with context 'ctx', using buffer 'buf'.
 // 'ctx' is the user-defined value passed through the gaio watcher unchanged.
 func (w *Watcher) Write(ctx interface{}, conn net.Conn, buf []byte) error {
-	return w.aioCreate(ctx, OpWrite, conn, buf, time.Time{})
+	return w.aioCreate(ctx, OpWrite, conn, buf, zeroTime)
 }
 
 // WriteTimeout submits an async write request on 'fd' with context 'ctx', using buffer 'buf', and
@@ -188,7 +192,7 @@ func (w *Watcher) WriteTimeout(ctx interface{}, conn net.Conn, buf []byte, deadl
 // Free let the watcher to release resources related to this conn immediately,
 // like socket file descriptors.
 func (w *Watcher) Free(conn net.Conn) error {
-	return w.aioCreate(nil, opDelete, conn, nil, time.Time{})
+	return w.aioCreate(nil, opDelete, conn, nil, zeroTime)
 }
 
 // core async-io creation

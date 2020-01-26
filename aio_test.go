@@ -59,7 +59,7 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 					continue
 				}
 				// write complete, start read again
-				w.Read(nil, res.Conn, res.Buffer)
+				w.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
 			}
 		}
 	}()

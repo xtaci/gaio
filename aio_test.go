@@ -553,3 +553,24 @@ func benchmarkEcho(b *testing.B, bufsize int) {
 		}
 	}
 }
+
+func BenchmarkContextSwitch(b *testing.B) {
+	die := make(chan struct{})
+	ch := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-ch:
+				ch <- struct{}{}
+			case <-die:
+				return
+			}
+		}
+	}()
+
+	for i := 0; i < b.N; i++ {
+		ch <- struct{}{}
+		<-ch
+	}
+	close(die)
+}

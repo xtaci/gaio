@@ -29,7 +29,6 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 
 	// ping-pong scheme echo server
 	go func() {
-		wbuffers := make(map[net.Conn][]byte)
 		for {
 			res, err := w.WaitIO()
 			if err != nil {
@@ -41,37 +40,26 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 			case OpRead:
 				if res.Error != nil {
 					log.Println("read error:", res.Error, res.Size)
-					delete(wbuffers, res.Conn)
 					w.Free(res.Conn)
 					continue
 				}
 
 				if res.Size == 0 {
-					delete(wbuffers, res.Conn)
 					w.Free(res.Conn)
-
 					continue
 				}
 
 				// write the data, we won't start to read again until write completes.
-				// so we only need at most 1 write buffer for a connection
-				buf, ok := wbuffers[res.Conn]
-				if !ok {
-					buf = make([]byte, bufsize)
-					wbuffers[res.Conn] = buf
-				}
-				copy(buf, res.Buffer[:res.Size])
-				w.Write(nil, res.Conn, buf[:res.Size])
+				// so we only need at most 1 shared read/write buffer for a connection to echo
+				w.Write(nil, res.Conn, res.Buffer[:res.Size])
 			case OpWrite:
 				if res.Error != nil {
 					log.Println("write error:", res.Error, res.Size)
-					delete(wbuffers, res.Conn)
 					w.Free(res.Conn)
-
 					continue
 				}
 				// write complete, start read again
-				w.Read(nil, res.Conn, nil)
+				w.Read(nil, res.Conn, res.Buffer)
 			}
 		}
 	}()
@@ -87,7 +75,8 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 			//log.Println("watching", conn.RemoteAddr(), "fd:", fd)
 
 			// kick off
-			err = w.Read(nil, conn, nil)
+			buf := make([]byte, bufsize)
+			err = w.Read(nil, conn, buf)
 			if err != nil {
 				log.Println(err)
 				w.Close()

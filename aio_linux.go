@@ -68,6 +68,11 @@ func (p *poller) Watch(fd int) error {
 
 func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 	events := make([]syscall.EpollEvent, maxEvents)
+	swapEvents := make(chan pollerEvents, 2)
+	for i := 0; i < cap(swapEvents); i++ {
+		swapEvents <- make([]event, 0, maxEvents)
+	}
+
 	for {
 		// check for new awaiting
 		p.awaitingMutex.Lock()
@@ -82,7 +87,10 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 			return
 		}
 
-		pe := make([]event, 0, n)
+		// note chan swap must not continue unexpected
+		pe := <-swapEvents
+		pe = pe[:0]
+
 		for i := 0; i < n; i++ {
 			ev := &events[i]
 			if int(ev.Fd) == p.efd {
@@ -107,6 +115,7 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 
 		select {
 		case chEventNotify <- pe:
+			swapEvents <- pe
 		case <-die:
 			return
 		}

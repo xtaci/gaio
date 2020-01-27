@@ -55,6 +55,7 @@ type aiocb struct {
 	size         int         // size received or sent
 	buffer       []byte
 	hasCompleted bool // mark this aiocb has completed
+	idx          int  // index for heap op
 	deadline     time.Time
 }
 
@@ -490,6 +491,9 @@ func (w *Watcher) loop() {
 
 						w.tryRead(pcb)
 						if pcb.hasCompleted {
+							if !pcb.deadline.IsZero() {
+								heap.Remove(&timeouts, pcb.idx)
+							}
 							count++
 							if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
 								releaseConn(e.ident)
@@ -515,6 +519,9 @@ func (w *Watcher) loop() {
 
 						w.tryWrite(pcb)
 						if pcb.hasCompleted {
+							if !pcb.deadline.IsZero() {
+								heap.Remove(&timeouts, pcb.idx)
+							}
 							count++
 							if pcb.err != nil {
 								releaseConn(e.ident)

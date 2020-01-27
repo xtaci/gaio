@@ -306,6 +306,23 @@ func (w *Watcher) loop() {
 	releaseConn := func(ident int) {
 		//log.Println("release", ident)
 		if ptr, ok := idents[ident]; ok {
+			// delete from heap
+			l := queuedReaders[ident]
+			for e := l.Front(); e != nil; e = e.Next() {
+				tcb := e.Value.(*aiocb)
+				if !tcb.deadline.IsZero() {
+					heap.Remove(&timeouts, tcb.idx)
+				}
+			}
+
+			l = queuedWriters[ident]
+			for e := l.Front(); e != nil; e = e.Next() {
+				tcb := e.Value.(*aiocb)
+				if !tcb.deadline.IsZero() {
+					heap.Remove(&timeouts, tcb.idx)
+				}
+			}
+
 			delete(queuedReaders, ident)
 			delete(queuedWriters, ident)
 			delete(idents, ident)
@@ -339,36 +356,8 @@ func (w *Watcher) loop() {
 			for _, pcb := range pending {
 				ident, ok := connIdents[pcb.ptr]
 				// resource release
-				if pcb.op == opDelete {
-					if ok {
-						// for each request, send release signal
-						// before resource releases.
-						l := queuedReaders[ident]
-						for e := l.Front(); e != nil; e = e.Next() {
-							tcb := e.Value.(*aiocb)
-							if !tcb.deadline.IsZero() { // dequeue heap
-								heap.Remove(&timeouts, tcb.idx)
-							}
-							select {
-							case w.chIOCompletion <- OpResult{Operation: tcb.op, Conn: tcb.conn, Buffer: tcb.buffer, Size: tcb.size, Error: ErrConnClosed, Context: tcb.ctx}:
-							case <-w.die:
-								return
-							}
-						}
-						l = queuedWriters[ident]
-						for e := l.Front(); e != nil; e = e.Next() {
-							tcb := e.Value.(*aiocb)
-							if !tcb.deadline.IsZero() {
-								heap.Remove(&timeouts, tcb.idx)
-							}
-							select {
-							case w.chIOCompletion <- OpResult{Operation: tcb.op, Conn: tcb.conn, Buffer: tcb.buffer, Size: tcb.size, Error: ErrConnClosed, Context: tcb.ctx}:
-							case <-w.die:
-								return
-							}
-						}
-						releaseConn(ident)
-					}
+				if pcb.op == opDelete && ok {
+					releaseConn(ident)
 					continue
 				}
 

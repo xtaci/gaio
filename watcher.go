@@ -516,15 +516,13 @@ func (w *Watcher) loop() {
 				now := time.Now()
 				pcb := timeouts[0]
 				if now.After(pcb.deadline) {
-					if _, ok := connIdents[pcb.ptr]; ok {
-						// remove from list
-						pcb.l.Remove(pcb.elem)
-						// ErrDeadline
-						select {
-						case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrDeadline, Context: pcb.ctx}:
-						case <-w.die:
-							return
-						}
+					// remove from list
+					pcb.l.Remove(pcb.elem)
+					// ErrDeadline
+					select {
+					case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrDeadline, Context: pcb.ctx}:
+					case <-w.die:
+						return
 					}
 					heap.Pop(&timeouts)
 				} else {

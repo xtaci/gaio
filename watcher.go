@@ -47,19 +47,18 @@ const (
 
 // aiocb contains all info for a request
 type aiocb struct {
-	l            *list.List // list where this request belongs to
-	elem         *list.Element
-	ctx          interface{} // user context associated with this request
-	ptr          uintptr     // pointer to conn
-	op           OpType      // read or write
-	fd           int         // associated file descriptor for nonblocking-io
-	conn         net.Conn    // associated connection for nonblocking-io
-	err          error       // error for last operation
-	size         int         // size received or sent
-	buffer       []byte
-	hasCompleted bool // mark this aiocb has completed
-	idx          int  // index for heap op
-	deadline     time.Time
+	l        *list.List // list where this request belongs to
+	elem     *list.Element
+	ctx      interface{} // user context associated with this request
+	ptr      uintptr     // pointer to conn
+	op       OpType      // read or write
+	fd       int         // associated file descriptor for nonblocking-io
+	conn     net.Conn    // associated connection for nonblocking-io
+	err      error       // error for last operation
+	size     int         // size received or sent
+	buffer   []byte
+	idx      int // index for heap op
+	deadline time.Time
 }
 
 // OpResult is the result of an aysnc-io
@@ -221,11 +220,7 @@ func (w *Watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 }
 
 // tryRead will try to read data on aiocb and notify
-func (w *Watcher) tryRead(pcb *aiocb) {
-	if pcb.hasCompleted {
-		return
-	}
-
+func (w *Watcher) tryRead(pcb *aiocb) bool {
 	buf := pcb.buffer
 	var useSwap bool
 	if buf == nil { // internal buffer
@@ -237,7 +232,7 @@ func (w *Watcher) tryRead(pcb *aiocb) {
 		// return values are stored in pcb
 		pcb.size, pcb.err = syscall.Read(pcb.fd, buf)
 		if pcb.err == syscall.EAGAIN {
-			return
+			return false
 		}
 
 		// On MacOS we can see EINTR here if the user
@@ -254,26 +249,21 @@ func (w *Watcher) tryRead(pcb *aiocb) {
 		if useSwap {
 			w.nextSwapBuffer = (w.nextSwapBuffer + 1) % len(w.swapBuffer)
 		}
-		pcb.hasCompleted = true
-		return
+		return true
 	case <-w.die:
-		return
+		return true
 	}
 }
 
-func (w *Watcher) tryWrite(pcb *aiocb) {
+func (w *Watcher) tryWrite(pcb *aiocb) bool {
 	var nw int
 	var ew error
-
-	if pcb.hasCompleted {
-		return
-	}
 
 	if pcb.buffer != nil {
 		nw, ew = syscall.Write(pcb.fd, pcb.buffer[pcb.size:])
 		pcb.err = ew
 		if ew == syscall.EAGAIN {
-			return
+			return false
 		}
 
 		// if ew is nil, accumulate bytes written
@@ -287,12 +277,12 @@ func (w *Watcher) tryWrite(pcb *aiocb) {
 	if pcb.size == len(pcb.buffer) || ew != nil {
 		select {
 		case w.chIOCompletion <- OpResult{Operation: OpWrite, Conn: pcb.conn, Buffer: pcb.buffer, Size: nw, Error: ew, Context: pcb.ctx}:
-			pcb.hasCompleted = true
-			return
+			return true
 		case <-w.die:
-			return
+			return true
 		}
 	}
+	return false
 }
 
 // the core event loop of this watcher
@@ -426,8 +416,7 @@ func (w *Watcher) loop() {
 				case OpRead:
 					l := queuedReaders[ident]
 					if l.Len() == 0 {
-						w.tryRead(pcb)
-						if pcb.hasCompleted {
+						if w.tryRead(pcb) {
 							if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
 								releaseConn(ident)
 							}
@@ -439,8 +428,7 @@ func (w *Watcher) loop() {
 				case OpWrite:
 					l := queuedWriters[ident]
 					if l.Len() == 0 {
-						w.tryWrite(pcb)
-						if pcb.hasCompleted {
+						if w.tryWrite(pcb) {
 							if pcb.err != nil {
 								releaseConn(ident)
 							}
@@ -477,8 +465,7 @@ func (w *Watcher) loop() {
 						for elem := l.Front(); elem != nil; elem = next {
 							next = elem.Next()
 							pcb := elem.Value.(*aiocb)
-							w.tryRead(pcb)
-							if pcb.hasCompleted {
+							if w.tryRead(pcb) {
 								l.Remove(elem)
 								if !pcb.deadline.IsZero() {
 									heap.Remove(&timeouts, pcb.idx)
@@ -500,8 +487,7 @@ func (w *Watcher) loop() {
 						for elem := l.Front(); elem != nil; elem = next {
 							next = elem.Next()
 							pcb := elem.Value.(*aiocb)
-							w.tryWrite(pcb)
-							if pcb.hasCompleted {
+							if w.tryWrite(pcb) {
 								l.Remove(elem)
 								if !pcb.deadline.IsZero() {
 									heap.Remove(&timeouts, pcb.idx)
@@ -523,16 +509,13 @@ func (w *Watcher) loop() {
 				pcb := timeouts[0]
 				if now.After(pcb.deadline) {
 					if _, ok := connIdents[pcb.ptr]; ok {
-						if !pcb.hasCompleted {
-							// remove from list
-							pcb.l.Remove(pcb.elem)
-							// ErrDeadline
-							select {
-							case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrDeadline, Context: pcb.ctx}:
-								pcb.hasCompleted = true
-							case <-w.die:
-								return
-							}
+						// remove from list
+						pcb.l.Remove(pcb.elem)
+						// ErrDeadline
+						select {
+						case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrDeadline, Context: pcb.ctx}:
+						case <-w.die:
+							return
 						}
 					}
 					heap.Pop(&timeouts)

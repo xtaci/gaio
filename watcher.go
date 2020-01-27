@@ -6,6 +6,7 @@ package gaio
 
 import (
 	"container/heap"
+	"container/list"
 	"errors"
 	"net"
 	"reflect"
@@ -46,6 +47,8 @@ const (
 
 // aiocb contains all info for a request
 type aiocb struct {
+	l            *list.List // list where this request belongs to
+	elem         *list.Element
 	ctx          interface{} // user context associated with this request
 	ptr          uintptr     // pointer to conn
 	op           OpType      // read or write
@@ -296,8 +299,8 @@ func (w *Watcher) tryWrite(pcb *aiocb) {
 func (w *Watcher) loop() {
 
 	// the maps below is consistent at any give time.
-	queuedReaders := make(map[int][]*aiocb) // ident -> aiocb
-	queuedWriters := make(map[int][]*aiocb)
+	queuedReaders := make(map[int]*list.List) // ident -> aiocb
+	queuedWriters := make(map[int]*list.List)
 
 	// we must not hold net.Conn as key, for GC purpose
 	connIdents := make(map[uintptr]int)
@@ -348,16 +351,20 @@ func (w *Watcher) loop() {
 					if ok {
 						// for each request, send release signal
 						// before resource releases.
-						for _, pcb := range queuedReaders[ident] {
+						l := queuedReaders[ident]
+						for e := l.Front(); e != nil; e = e.Next() {
+							tcb := e.Value.(*aiocb)
 							select {
-							case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrConnClosed, Context: pcb.ctx}:
+							case w.chIOCompletion <- OpResult{Operation: tcb.op, Conn: tcb.conn, Buffer: tcb.buffer, Size: tcb.size, Error: ErrConnClosed, Context: tcb.ctx}:
 							case <-w.die:
 								return
 							}
 						}
-						for _, pcb := range queuedWriters[ident] {
+						l = queuedWriters[ident]
+						for e := l.Front(); e != nil; e = e.Next() {
+							tcb := e.Value.(*aiocb)
 							select {
-							case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrConnClosed, Context: pcb.ctx}:
+							case w.chIOCompletion <- OpResult{Operation: tcb.op, Conn: tcb.conn, Buffer: tcb.buffer, Size: tcb.size, Error: ErrConnClosed, Context: tcb.ctx}:
 							case <-w.die:
 								return
 							}
@@ -394,6 +401,8 @@ func (w *Watcher) loop() {
 						// bindings
 						idents[ident] = pcb.ptr
 						connIdents[pcb.ptr] = ident
+						queuedReaders[ident] = new(list.List)
+						queuedWriters[ident] = new(list.List)
 						// as we duplicated succesfuly, we're safe to
 						// close the original connection
 						pcb.conn.Close()
@@ -415,18 +424,8 @@ func (w *Watcher) loop() {
 				// operations splitted into different buckets
 				switch pcb.op {
 				case OpRead:
-					// try clean timeout requests
-					count := 0
-					for _, e := range queuedReaders[ident] {
-						if e.hasCompleted {
-							count++
-						} else {
-							break
-						}
-					}
-					queuedReaders[ident] = queuedReaders[ident][count:]
-
-					if len(queuedReaders[ident]) == 0 {
+					l := queuedReaders[ident]
+					if l.Len() == 0 {
 						w.tryRead(pcb)
 						if pcb.hasCompleted {
 							if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
@@ -435,19 +434,11 @@ func (w *Watcher) loop() {
 							continue
 						}
 					}
-					queuedReaders[ident] = append(queuedReaders[ident], pcb)
+					pcb.l = l
+					pcb.elem = pcb.l.PushBack(pcb)
 				case OpWrite:
-					count := 0
-					for _, e := range queuedWriters[ident] {
-						if e.hasCompleted {
-							count++
-						} else {
-							break
-						}
-					}
-					queuedWriters[ident] = queuedWriters[ident][count:]
-
-					if len(queuedWriters[ident]) == 0 {
+					l := queuedWriters[ident]
+					if l.Len() == 0 {
 						w.tryWrite(pcb)
 						if pcb.hasCompleted {
 							if pcb.err != nil {
@@ -456,7 +447,8 @@ func (w *Watcher) loop() {
 							continue
 						}
 					}
-					queuedWriters[ident] = append(queuedWriters[ident], pcb)
+					pcb.l = l
+					pcb.elem = pcb.l.PushBack(pcb)
 				}
 
 				// timer
@@ -480,61 +472,48 @@ func (w *Watcher) loop() {
 			//log.Println(e)
 			for _, e := range pe {
 				if e.r {
-					count := 0
-					closed := false
-					for _, pcb := range queuedReaders[e.ident] {
-						if pcb.hasCompleted {
-							// request may completed via timeout
-							count++
-							continue
-						}
-
-						w.tryRead(pcb)
-						if pcb.hasCompleted {
-							if !pcb.deadline.IsZero() {
-								heap.Remove(&timeouts, pcb.idx)
-							}
-							count++
-							if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
-								releaseConn(e.ident)
-								closed = true
+					if l := queuedReaders[e.ident]; l != nil {
+						var next *list.Element
+						for elem := l.Front(); elem != nil; elem = next {
+							next = elem.Next()
+							pcb := elem.Value.(*aiocb)
+							w.tryRead(pcb)
+							if pcb.hasCompleted {
+								l.Remove(elem)
+								if !pcb.deadline.IsZero() {
+									heap.Remove(&timeouts, pcb.idx)
+								}
+								if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
+									releaseConn(e.ident)
+									break
+								}
+							} else {
 								break
 							}
-						} else {
-							break
 						}
-					}
-					if !closed {
-						queuedReaders[e.ident] = queuedReaders[e.ident][count:]
 					}
 				}
-				if e.w {
-					count := 0
-					closed := false
-					for _, pcb := range queuedWriters[e.ident] {
-						if pcb.hasCompleted {
-							count++
-							continue
-						}
 
-						w.tryWrite(pcb)
-						if pcb.hasCompleted {
-							if !pcb.deadline.IsZero() {
-								heap.Remove(&timeouts, pcb.idx)
-							}
-							count++
-							if pcb.err != nil {
-								releaseConn(e.ident)
-								closed = true
+				if e.w {
+					if l := queuedWriters[e.ident]; l != nil {
+						var next *list.Element
+						for elem := l.Front(); elem != nil; elem = next {
+							next = elem.Next()
+							pcb := elem.Value.(*aiocb)
+							w.tryWrite(pcb)
+							if pcb.hasCompleted {
+								l.Remove(elem)
+								if !pcb.deadline.IsZero() {
+									heap.Remove(&timeouts, pcb.idx)
+								}
+								if pcb.err != nil {
+									releaseConn(e.ident)
+									break
+								}
+							} else {
 								break
 							}
-						} else {
-							break
 						}
-					}
-
-					if !closed {
-						queuedWriters[e.ident] = queuedWriters[e.ident][count:]
 					}
 				}
 			}
@@ -545,6 +524,8 @@ func (w *Watcher) loop() {
 				if now.After(pcb.deadline) {
 					if _, ok := connIdents[pcb.ptr]; ok {
 						if !pcb.hasCompleted {
+							// remove from list
+							pcb.l.Remove(pcb.elem)
 							// ErrDeadline
 							select {
 							case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrDeadline, Context: pcb.ctx}:

@@ -298,6 +298,8 @@ func (w *Watcher) loop() {
 	gc := make(chan uintptr)
 
 	// for timeout operations
+	// aiocb has non-zero deadline exists in timeouts & queue
+	// at same time or in neither of them
 	timer := time.NewTimer(0)
 	var timeouts timedHeap
 
@@ -344,6 +346,9 @@ func (w *Watcher) loop() {
 						l := queuedReaders[ident]
 						for e := l.Front(); e != nil; e = e.Next() {
 							tcb := e.Value.(*aiocb)
+							if !tcb.deadline.IsZero() { // dequeue heap
+								heap.Remove(&timeouts, tcb.idx)
+							}
 							select {
 							case w.chIOCompletion <- OpResult{Operation: tcb.op, Conn: tcb.conn, Buffer: tcb.buffer, Size: tcb.size, Error: ErrConnClosed, Context: tcb.ctx}:
 							case <-w.die:
@@ -353,6 +358,9 @@ func (w *Watcher) loop() {
 						l = queuedWriters[ident]
 						for e := l.Front(); e != nil; e = e.Next() {
 							tcb := e.Value.(*aiocb)
+							if !tcb.deadline.IsZero() {
+								heap.Remove(&timeouts, tcb.idx)
+							}
 							select {
 							case w.chIOCompletion <- OpResult{Operation: tcb.op, Conn: tcb.conn, Buffer: tcb.buffer, Size: tcb.size, Error: ErrConnClosed, Context: tcb.ctx}:
 							case <-w.die:

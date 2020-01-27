@@ -5,6 +5,7 @@
 package gaio
 
 import (
+	"container/heap"
 	"errors"
 	"net"
 	"reflect"
@@ -12,8 +13,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"github.com/xtaci/gaio/internal"
 )
 
 var (
@@ -305,7 +304,8 @@ func (w *Watcher) loop() {
 	gc := make(chan uintptr)
 
 	// for timeout operations
-	chTimeoutOps := make(chan *aiocb)
+	timer := time.NewTimer(0)
+	var timeouts timedHeap
 
 	releaseConn := func(ident int) {
 		//log.Println("release", ident)
@@ -460,13 +460,10 @@ func (w *Watcher) loop() {
 
 				// timer
 				if !pcb.deadline.IsZero() {
-					timedpcb := pcb
-					internal.SystemTimedSched.Put(func() {
-						select {
-						case chTimeoutOps <- timedpcb:
-						case <-w.die:
-						}
-					}, timedpcb.deadline)
+					heap.Push(&timeouts, pcb)
+					if timeouts.Len() == 1 {
+						timer.Reset(pcb.deadline.Sub(time.Now()))
+					}
 				}
 			}
 			pending = pending[:0]
@@ -534,16 +531,26 @@ func (w *Watcher) loop() {
 					}
 				}
 			}
-		case pcb := <-chTimeoutOps:
-			if _, ok := connIdents[pcb.ptr]; ok {
-				if !pcb.hasCompleted {
-					// ErrDeadline
-					select {
-					case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrDeadline, Context: pcb.ctx}:
-						pcb.hasCompleted = true
-					case <-w.die:
-						return
+		case <-timer.C:
+			for timeouts.Len() > 0 {
+				now := time.Now()
+				pcb := timeouts[0]
+				if now.After(pcb.deadline) {
+					if _, ok := connIdents[pcb.ptr]; ok {
+						if !pcb.hasCompleted {
+							// ErrDeadline
+							select {
+							case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrDeadline, Context: pcb.ctx}:
+								pcb.hasCompleted = true
+							case <-w.die:
+								return
+							}
+						}
 					}
+					heap.Pop(&timeouts)
+				} else {
+					timer.Reset(pcb.deadline.Sub(now))
+					break
 				}
 			}
 		case ptr := <-gc: // gc recycled net.Conn

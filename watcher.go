@@ -45,6 +45,11 @@ const (
 	opDelete
 )
 
+const (
+	fdRead  byte = 1
+	fdWrite      = 2
+)
+
 // aiocb contains all info for a request
 type aiocb struct {
 	l        *list.List // list where this request belongs to
@@ -292,6 +297,9 @@ func (w *Watcher) loop() {
 	queuedReaders := make(map[int]*list.List) // ident -> aiocb
 	queuedWriters := make(map[int]*list.List)
 
+	// fd status
+	fdstatus := make(map[int]byte)
+
 	// we must not hold net.Conn as key, for GC purpose
 	connIdents := make(map[uintptr]int)
 	idents := make(map[int]uintptr) // fd->net.conn
@@ -325,6 +333,7 @@ func (w *Watcher) loop() {
 
 			delete(queuedReaders, ident)
 			delete(queuedWriters, ident)
+			delete(fdstatus, ident)
 			delete(idents, ident)
 			delete(connIdents, ptr)
 			// close socket file descriptor duplicated from net.Conn
@@ -388,6 +397,7 @@ func (w *Watcher) loop() {
 						// bindings
 						idents[ident] = pcb.ptr
 						connIdents[pcb.ptr] = ident
+						//		fdstatus[ident] = fdRead | fdWrite
 						queuedReaders[ident] = new(list.List)
 						queuedWriters[ident] = new(list.List)
 						// as we duplicated succesfuly, we're safe to
@@ -412,24 +422,28 @@ func (w *Watcher) loop() {
 				switch pcb.op {
 				case OpRead:
 					l := queuedReaders[ident]
-					if l.Len() == 0 {
+					if l.Len() == 0 && fdstatus[ident]&fdRead > 0 {
 						if w.tryRead(pcb) {
 							if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
 								releaseConn(ident)
 							}
 							continue
+						} else {
+							fdstatus[ident] &^= fdRead
 						}
 					}
 					pcb.l = l
 					pcb.elem = pcb.l.PushBack(pcb)
 				case OpWrite:
 					l := queuedWriters[ident]
-					if l.Len() == 0 {
+					if l.Len() == 0 && fdstatus[ident]&fdWrite > 0 {
 						if w.tryWrite(pcb) {
 							if pcb.err != nil {
 								releaseConn(ident)
 							}
 							continue
+						} else {
+							fdstatus[ident] &^= fdWrite
 						}
 					}
 					pcb.l = l
@@ -457,6 +471,7 @@ func (w *Watcher) loop() {
 			//log.Println(e)
 			for _, e := range pe {
 				if e.r {
+					fdstatus[e.ident] |= fdRead
 					if l := queuedReaders[e.ident]; l != nil {
 						var next *list.Element
 						for elem := l.Front(); elem != nil; elem = next {
@@ -472,6 +487,7 @@ func (w *Watcher) loop() {
 									break
 								}
 							} else {
+								fdstatus[e.ident] &^= fdRead
 								break
 							}
 						}
@@ -479,6 +495,7 @@ func (w *Watcher) loop() {
 				}
 
 				if e.w {
+					fdstatus[e.ident] |= fdWrite
 					if l := queuedWriters[e.ident]; l != nil {
 						var next *list.Element
 						for elem := l.Front(); elem != nil; elem = next {
@@ -494,6 +511,7 @@ func (w *Watcher) loop() {
 									break
 								}
 							} else {
+								fdstatus[e.ident] &^= fdWrite
 								break
 							}
 						}

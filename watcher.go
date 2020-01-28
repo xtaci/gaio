@@ -45,11 +45,6 @@ const (
 	opDelete
 )
 
-const (
-	fdRead  byte = 1
-	fdWrite      = 2
-)
-
 // aiocb contains all info for a request
 type aiocb struct {
 	l        *list.List // list where this request belongs to
@@ -57,13 +52,26 @@ type aiocb struct {
 	ctx      interface{} // user context associated with this request
 	ptr      uintptr     // pointer to conn
 	op       OpType      // read or write
-	fd       int         // associated file descriptor for nonblocking-io
 	conn     net.Conn    // associated connection for nonblocking-io
 	err      error       // error for last operation
 	size     int         // size received or sent
 	buffer   []byte
 	idx      int // index for heap op
 	deadline time.Time
+}
+
+// readable & writable bitmask
+const (
+	fdRead  byte = 1
+	fdWrite      = 2
+)
+
+// fdDesc contains all info related to fd
+type fdDesc struct {
+	status  byte
+	readers list.List
+	writers list.List
+	ptr     uintptr // pointer to net.Conn
 }
 
 // OpResult is the result of an aysnc-io
@@ -225,7 +233,7 @@ func (w *Watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 }
 
 // tryRead will try to read data on aiocb and notify
-func (w *Watcher) tryRead(pcb *aiocb) bool {
+func (w *Watcher) tryRead(fd int, pcb *aiocb) bool {
 	buf := pcb.buffer
 	var useSwap bool
 	if buf == nil { // internal buffer
@@ -235,7 +243,7 @@ func (w *Watcher) tryRead(pcb *aiocb) bool {
 
 	for {
 		// return values are stored in pcb
-		pcb.size, pcb.err = syscall.Read(pcb.fd, buf)
+		pcb.size, pcb.err = syscall.Read(fd, buf)
 		if pcb.err == syscall.EAGAIN {
 			return false
 		}
@@ -260,12 +268,12 @@ func (w *Watcher) tryRead(pcb *aiocb) bool {
 	}
 }
 
-func (w *Watcher) tryWrite(pcb *aiocb) bool {
+func (w *Watcher) tryWrite(fd int, pcb *aiocb) bool {
 	var nw int
 	var ew error
 
 	if pcb.buffer != nil {
-		nw, ew = syscall.Write(pcb.fd, pcb.buffer[pcb.size:])
+		nw, ew = syscall.Write(fd, pcb.buffer[pcb.size:])
 		pcb.err = ew
 		if ew == syscall.EAGAIN {
 			return false
@@ -292,17 +300,10 @@ func (w *Watcher) tryWrite(pcb *aiocb) bool {
 
 // the core event loop of this watcher
 func (w *Watcher) loop() {
-
-	// the maps below is consistent at any give time.
-	queuedReaders := make(map[int]*list.List) // ident -> aiocb
-	queuedWriters := make(map[int]*list.List)
-
-	// fd status
-	fdstatus := make(map[int]byte)
-
+	// all descriptor
+	descs := make(map[int]*fdDesc)
 	// we must not hold net.Conn as key, for GC purpose
 	connIdents := make(map[uintptr]int)
-	idents := make(map[int]uintptr) // fd->net.conn
 	gc := make(chan uintptr)
 
 	// for timeout operations
@@ -312,30 +313,24 @@ func (w *Watcher) loop() {
 	var timeouts timedHeap
 
 	releaseConn := func(ident int) {
-		//log.Println("release", ident)
-		if ptr, ok := idents[ident]; ok {
+		if desc, ok := descs[ident]; ok {
 			// delete from heap
-			l := queuedReaders[ident]
-			for e := l.Front(); e != nil; e = e.Next() {
+			for e := desc.readers.Front(); e != nil; e = e.Next() {
 				tcb := e.Value.(*aiocb)
 				if !tcb.deadline.IsZero() {
 					heap.Remove(&timeouts, tcb.idx)
 				}
 			}
 
-			l = queuedWriters[ident]
-			for e := l.Front(); e != nil; e = e.Next() {
+			for e := desc.writers.Front(); e != nil; e = e.Next() {
 				tcb := e.Value.(*aiocb)
 				if !tcb.deadline.IsZero() {
 					heap.Remove(&timeouts, tcb.idx)
 				}
 			}
 
-			delete(queuedReaders, ident)
-			delete(queuedWriters, ident)
-			delete(fdstatus, ident)
-			delete(idents, ident)
-			delete(connIdents, ptr)
+			delete(descs, ident)
+			delete(connIdents, desc.ptr)
 			// close socket file descriptor duplicated from net.Conn
 			syscall.Close(ident)
 		}
@@ -343,7 +338,7 @@ func (w *Watcher) loop() {
 
 	// release all resources
 	defer func() {
-		for ident := range idents {
+		for ident := range descs {
 			releaseConn(ident)
 		}
 	}()
@@ -371,7 +366,10 @@ func (w *Watcher) loop() {
 				}
 
 				// new conn
-				if !ok {
+				var desc *fdDesc
+				if ok {
+					desc = descs[ident]
+				} else {
 					if dupfd, err := dupconn(pcb.conn); err != nil {
 						select {
 						case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: err, Context: pcb.ctx}:
@@ -395,11 +393,9 @@ func (w *Watcher) loop() {
 						}
 
 						// bindings
-						idents[ident] = pcb.ptr
+						desc = &fdDesc{ptr: pcb.ptr}
+						descs[ident] = desc
 						connIdents[pcb.ptr] = ident
-						//		fdstatus[ident] = fdRead | fdWrite
-						queuedReaders[ident] = new(list.List)
-						queuedWriters[ident] = new(list.List)
 						// as we duplicated succesfuly, we're safe to
 						// close the original connection
 						pcb.conn.Close()
@@ -415,38 +411,34 @@ func (w *Watcher) loop() {
 						})
 					}
 				}
-				//log.Println("idents:", ident, ptr)
-				pcb.fd = ident
 
 				// operations splitted into different buckets
 				switch pcb.op {
 				case OpRead:
-					l := queuedReaders[ident]
-					if l.Len() == 0 && fdstatus[ident]&fdRead > 0 {
-						if w.tryRead(pcb) {
+					if desc.readers.Len() == 0 && desc.status&fdRead > 0 {
+						if w.tryRead(ident, pcb) {
 							if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
 								releaseConn(ident)
 							}
 							continue
 						} else {
-							fdstatus[ident] &^= fdRead
+							desc.status &^= fdRead
 						}
 					}
-					pcb.l = l
+					pcb.l = &desc.readers
 					pcb.elem = pcb.l.PushBack(pcb)
 				case OpWrite:
-					l := queuedWriters[ident]
-					if l.Len() == 0 && fdstatus[ident]&fdWrite > 0 {
-						if w.tryWrite(pcb) {
+					if desc.writers.Len() == 0 && desc.status&fdWrite > 0 {
+						if w.tryWrite(ident, pcb) {
 							if pcb.err != nil {
 								releaseConn(ident)
 							}
 							continue
 						} else {
-							fdstatus[ident] &^= fdWrite
+							desc.status &^= fdWrite
 						}
 					}
-					pcb.l = l
+					pcb.l = &desc.writers
 					pcb.elem = pcb.l.PushBack(pcb)
 				}
 
@@ -470,51 +462,54 @@ func (w *Watcher) loop() {
 			// then IO operation is impossible to misread or miswrite on re-created fd.
 			//log.Println(e)
 			for _, e := range pe {
-				if e.r {
-					fdstatus[e.ident] |= fdRead
-					if l := queuedReaders[e.ident]; l != nil {
+				if desc, ok := descs[e.ident]; ok {
+					var shouldRelease bool
+					if e.r {
+						desc.status |= fdRead
 						var next *list.Element
-						for elem := l.Front(); elem != nil; elem = next {
+						for elem := desc.readers.Front(); elem != nil; elem = next {
 							next = elem.Next()
 							pcb := elem.Value.(*aiocb)
-							if w.tryRead(pcb) {
-								l.Remove(elem)
+							if w.tryRead(e.ident, pcb) {
+								desc.readers.Remove(elem)
 								if !pcb.deadline.IsZero() {
 									heap.Remove(&timeouts, pcb.idx)
 								}
 								if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
-									releaseConn(e.ident)
+									shouldRelease = true
 									break
 								}
 							} else {
-								fdstatus[e.ident] &^= fdRead
+								desc.status &^= fdRead
 								break
 							}
 						}
 					}
-				}
 
-				if e.w {
-					fdstatus[e.ident] |= fdWrite
-					if l := queuedWriters[e.ident]; l != nil {
+					if e.w {
+						desc.status |= fdWrite
 						var next *list.Element
-						for elem := l.Front(); elem != nil; elem = next {
+						for elem := desc.writers.Front(); elem != nil; elem = next {
 							next = elem.Next()
 							pcb := elem.Value.(*aiocb)
-							if w.tryWrite(pcb) {
-								l.Remove(elem)
+							if w.tryWrite(e.ident, pcb) {
+								desc.writers.Remove(elem)
 								if !pcb.deadline.IsZero() {
 									heap.Remove(&timeouts, pcb.idx)
 								}
 								if pcb.err != nil {
-									releaseConn(e.ident)
+									shouldRelease = true
 									break
 								}
 							} else {
-								fdstatus[e.ident] &^= fdWrite
+								desc.status &^= fdWrite
 								break
 							}
 						}
+					}
+
+					if shouldRelease {
+						releaseConn(e.ident)
 					}
 				}
 			}

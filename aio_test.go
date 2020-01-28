@@ -484,6 +484,10 @@ func testDeadline(t *testing.T, par int) {
 	}
 }
 
+func BenchmarkEcho128B(b *testing.B) {
+	benchmarkEcho(b, 128)
+}
+
 func BenchmarkEcho4K(b *testing.B) {
 	benchmarkEcho(b, 4096)
 }

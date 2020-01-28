@@ -68,8 +68,8 @@ const (
 
 // fdDesc contains all info related to fd
 type fdDesc struct {
-	status  byte
-	readers list.List
+	status  byte      // fd read/write status
+	readers list.List // all read/write requests
 	writers list.List
 	ptr     uintptr // pointer to net.Conn
 }
@@ -300,7 +300,7 @@ func (w *Watcher) tryWrite(fd int, pcb *aiocb) bool {
 
 // the core event loop of this watcher
 func (w *Watcher) loop() {
-	// all descriptor
+	// all descriptors
 	descs := make(map[int]*fdDesc)
 	// we must not hold net.Conn as key, for GC purpose
 	connIdents := make(map[uintptr]int)

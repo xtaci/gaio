@@ -118,8 +118,8 @@ type Watcher struct {
 }
 
 // NewWatcher creates a management object for monitoring file descriptors
-// 'bufsize' is used to set internal swap buffer size for `Read()` API
-func NewWatcher(bufsize int) (*Watcher, error) {
+// qlen sets the maximum notification completion queue size
+func NewWatcher(qlen int) (*Watcher, error) {
 	w := new(Watcher)
 	pfd, err := openPoll()
 	if err != nil {
@@ -127,16 +127,10 @@ func NewWatcher(bufsize int) (*Watcher, error) {
 	}
 	w.pfd = pfd
 
-	// swapBuffer for concurrent read
-	w.swapBuffer = make([][]byte, 2)
-	for i := 0; i < len(w.swapBuffer); i++ {
-		w.swapBuffer[i] = make([]byte, bufsize)
-	}
-
 	// loop related chan
 	w.chEventNotify = make(chan pollerEvents)
 	w.chPendingNotify = make(chan struct{}, 1)
-	w.chIOCompletion = make(chan OpResult)
+	w.chIOCompletion = make(chan OpResult, qlen)
 	w.die = make(chan struct{})
 
 	// finalizer for system resources
@@ -235,11 +229,6 @@ func (w *Watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 // tryRead will try to read data on aiocb and notify
 func (w *Watcher) tryRead(fd int, pcb *aiocb) bool {
 	buf := pcb.buffer
-	var useSwap bool
-	if buf == nil { // internal buffer
-		buf = w.swapBuffer[w.nextSwapBuffer]
-		useSwap = true
-	}
 
 	for {
 		// return values are stored in pcb
@@ -258,14 +247,9 @@ func (w *Watcher) tryRead(fd int, pcb *aiocb) bool {
 
 	select {
 	case w.chIOCompletion <- OpResult{Operation: OpRead, Conn: pcb.conn, Buffer: buf, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}:
-		// swap buffer if IO successful
-		if useSwap {
-			w.nextSwapBuffer = (w.nextSwapBuffer + 1) % len(w.swapBuffer)
-		}
-		return true
 	case <-w.die:
-		return true
 	}
+	return true
 }
 
 func (w *Watcher) tryWrite(fd int, pcb *aiocb) bool {

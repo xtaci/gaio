@@ -6,14 +6,14 @@ import (
 )
 
 const (
-	defaultInternalBufferSize = 65536
+	defaultQlen = 1024
 )
 
 // library default watcher API
 var defaultWatcher *Watcher
 
 func init() {
-	w, err := NewWatcher(defaultInternalBufferSize)
+	w, err := NewWatcher(defaultQlen)
 	if err != nil {
 		panic(err)
 	}

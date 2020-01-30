@@ -16,13 +16,13 @@ func init() {
 	go http.ListenAndServe(":6060", nil)
 }
 
-func echoServer(t testing.TB, bufsize int) net.Listener {
+func echoServer(t testing.TB, qlen int) net.Listener {
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	w, err := NewWatcher(bufsize)
+	w, err := NewWatcher(qlen)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 			//log.Println("watching", conn.RemoteAddr(), "fd:", fd)
 
 			// kick off
-			buf := make([]byte, bufsize)
+			buf := make([]byte, 4096)
 			err = w.Read(nil, conn, buf)
 			if err != nil {
 				log.Println(err)
@@ -189,7 +189,7 @@ func TestBidirectionWatcher(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w, err := NewWatcher(65536)
+	w, err := NewWatcher(128)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestSocketClose(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w, err := NewWatcher(1024)
+	w, err := NewWatcher(128)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func TestWriteOnClosedConn(t *testing.T) {
 	}
 	conn.Close()
 
-	w, err := NewWatcher(65536)
+	w, err := NewWatcher(128)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +354,7 @@ func testParallel(t *testing.T, par int, msgsize int) {
 	ln := echoServer(t, 1024)
 	defer ln.Close()
 
-	w, err := NewWatcher(msgsize)
+	w, err := NewWatcher(1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -520,7 +520,7 @@ func benchmarkEcho(b *testing.B, bufsize int) {
 	}
 	defer conn.Close()
 
-	w, err := NewWatcher(bufsize)
+	w, err := NewWatcher(128)
 	if err != nil {
 		b.Fatal("new watcher:", err)
 	}

@@ -103,6 +103,8 @@ type Watcher struct {
 
 	// IO-completion events to user
 	chNotifyCompletion chan []OpResult
+	swapResults        [][]OpResult
+	swapIdx            int
 
 	// lock for pending io operations
 	// aiocb is associated to fd
@@ -129,6 +131,10 @@ func NewWatcher() (*Watcher, error) {
 	w.chNotifyCompletion = make(chan []OpResult)
 	w.die = make(chan struct{})
 
+	w.swapResults = make([][]OpResult, 2)
+	for i := 0; i < len(w.swapResults); i++ {
+		w.swapResults[i] = make([]OpResult, 0, maxEvents)
+	}
 	// finalizer for system resources
 	runtime.SetFinalizer(w, func(w *Watcher) {
 		close(w.die)
@@ -442,7 +448,7 @@ func (w *Watcher) loop() {
 			// identified by 'e.ident', all library operation will be based on 'e.ident',
 			// then IO operation is impossible to misread or miswrite on re-created fd.
 			//log.Println(e)
-			results := make([]OpResult, 0, len(pe))
+			results := w.swapResults[w.swapIdx][:0]
 			for _, e := range pe {
 				if desc, ok := descs[e.ident]; ok {
 					var shouldRelease bool
@@ -502,7 +508,9 @@ func (w *Watcher) loop() {
 			if len(results) > 0 {
 				select {
 				case w.chNotifyCompletion <- results:
+					w.swapIdx = (w.swapIdx + 1) % len(w.swapResults)
 				case <-w.die:
+					return
 				}
 			}
 

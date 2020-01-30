@@ -33,10 +33,6 @@ var (
 	zeroTime = time.Time{}
 )
 
-const (
-	defaultQlen = 128
-)
-
 // OpType defines Operation Type
 type OpType int
 
@@ -130,7 +126,7 @@ func NewWatcher() (*Watcher, error) {
 	// loop related chan
 	w.chEventNotify = make(chan pollerEvents)
 	w.chPendingNotify = make(chan struct{}, 1)
-	w.chNotifyCompletion = make(chan []OpResult, defaultQlen)
+	w.chNotifyCompletion = make(chan []OpResult)
 	w.die = make(chan struct{})
 
 	// finalizer for system resources

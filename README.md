@@ -21,15 +21,14 @@ In this case, you need at least **2KB(goroutine stack) + 4KB(buffer)** for recei
 
 ```gaio``` is an [proactor pattern](https://en.wikipedia.org/wiki/Proactor_pattern) networking library satisfy both **memory requirements** and **performance requirements**.
 
-By eliminating **one goroutine per one connection scheme** with **Edge-Triggered IO Multiplexing**, the 2KB goroutine stack can be saved, and by restricting delivery order or events, internal **mutual buffer** can be shared for all incoming connections in a `Watcher`.
+By eliminating **one goroutine per one connection scheme** with **Edge-Triggered IO Multiplexing**, the 2KB goroutine stack can be saved, and by restricting delivery order or events, buffers can be used effectively.
 
 ## Features
 
 1. Only a fixed number of goroutines will be created per **Watcher**(the core object of this library).
-2. The IO-completion notification on a **Watcher** is sequential, that means buffer can be reused in some pattern.
-3. Non-intrusive design, this library works with `net.Listener` and `net.Conn`. (with `syscall.RawConn` support)
-4. **Amortized context switching cost** for tiny messages, able to handle frequent chat message exchanging.
-5. Support for Linux, BSD.
+2. Non-intrusive design, this library works with `net.Listener` and `net.Conn`. (with `syscall.RawConn` support)
+3. **Amortized context switching cost** for tiny messages, able to handle frequent chat message exchanging.
+4. Support for Linux, BSD.
 
 ## Conventions
 
@@ -49,30 +48,30 @@ import (
         "github.com/xtaci/gaio"
 )
 
-// this goroutine will wait for all io events, and send back everything it received
+// this goroutine will wait for all io events, and sents back everything it received
 // in async way
 func echoServer() {
         for {
                 // loop wait for any IO events
-                res, err := gaio.WaitIO()
+                results, err := gaio.WaitIO()
                 if err != nil {
                         log.Println(err)
                         return
                 }
 
-                switch res.Operation {
-                case gaio.OpRead: // read completion event
-                        if res.Error == nil {
-                                // send back everything, we won't start to read again until write completes.
-                                buf := make([]byte, res.Size)
-                                copy(buf, res.Buffer[:res.Size])
-                                // submit an async write request
-                                gaio.Write(nil, res.Conn, buf)
-                        }
-                case gaio.OpWrite: // write completion event
-                        if res.Error == nil {
-                                // since write has completed, let's start read on this conn again
-                                gaio.Read(nil, res.Conn, nil)
+                for _, res := range results {
+                        switch res.Operation {
+                        case gaio.OpRead: // read completion event
+                                if res.Error == nil {
+                                        // send back everything, we won't start to read again until write completes.
+                                        // submit an async write request
+                                        gaio.Write(nil, res.Conn, res.Buffer[:res.Size])
+                                }
+                        case gaio.OpWrite: // write completion event
+                                if res.Error == nil {
+                                        // since write has completed, let's start read on this conn again
+                                        gaio.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
+                                }
                         }
                 }
         }
@@ -80,11 +79,12 @@ func echoServer() {
 
 func main() {
         go echoServer()
-        
+
         ln, err := net.Listen("tcp", "localhost:0")
         if err != nil {
                 log.Fatal(err)
         }
+        log.Println("echo server listening on", ln.Addr())
 
         for {
                 conn, err := ln.Accept()
@@ -92,9 +92,10 @@ func main() {
                         log.Println(err)
                         return
                 }
+                log.Println("new client", conn.RemoteAddr())
 
                 // submit the first async read IO request
-                err = gaio.Read(nil, conn, nil)
+                err = gaio.Read(nil, conn, make([]byte, 128))
                 if err != nil {
                         log.Println(err)
                         return
@@ -114,79 +115,82 @@ func main() {
 package main
 
 import (
-	"fmt"
-	"log"
-	"net"
-	"time"
+        "fmt"
+        "log"
+        "net"
+        "time"
 
-	"github.com/xtaci/gaio"
+        "github.com/xtaci/gaio"
 )
 
 func main() {
-	// by simply replace net.Listen with reuseport.Listen, everything is the same as in push-server
-	// ln, err := reuseport.Listen("tcp", "localhost:0")
-	ln, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		log.Fatal(err)
-	}
+        // by simply replace net.Listen with reuseport.Listen, everything is the same as in push-server
+        // ln, err := reuseport.Listen("tcp", "localhost:0")
+        ln, err := net.Listen("tcp", "localhost:0")
+        if err != nil {
+                log.Fatal(err)
+        }
 
-	log.Println("pushing server listening on", ln.Addr(), ", use telnet to receive push")
+        log.Println("pushing server listening on", ln.Addr(), ", use telnet to receive push")
 
-	// create a watcher with 4kb internal buffer
-	w, err := gaio.NewWatcher(4096)
-	if err != nil {
-		log.Fatal(err)
-	}
+        // create a watcher
+        w, err := gaio.NewWatcher()
+        if err != nil {
+                log.Fatal(err)
+        }
 
-	// channel
-	ticker := time.NewTicker(time.Second)
-	chConn := make(chan net.Conn)
-	chIO := make(chan gaio.OpResult)
+        // channel
+        ticker := time.NewTicker(time.Second)
+        chConn := make(chan net.Conn)
+        chIO := make(chan gaio.OpResult)
 
-	// watcher.WaitIO goroutine
-	go func() {
-		for {
-			res, err := w.WaitIO()
-			if err != nil {
-				log.Println(err)
-				return
-			}
-			chIO <- res
-		}
-	}()
+        // watcher.WaitIO goroutine
+        go func() {
+                for {
+                        results, err := w.WaitIO()
+                        if err != nil {
+                                log.Println(err)
+                                return
+                        }
 
-	// main logic loop, like your program core loop.
-	go func() {
-		var conns []net.Conn
-		for {
-			select {
-			case res := <-chIO: // receive IO events from watcher
-				if res.Error != nil {
-					continue
-				}
-				conns = append(conns, res.Conn)
-			case t := <-ticker.C: // receive ticker events
-				push := []byte(fmt.Sprintf("%s\n", t))
-				// all conn will receive the same 'push' content
-				for _, conn := range conns {
-					w.Write(nil, conn, push)
-				}
-				conns = nil
-			case conn := <-chConn: // receive new connection events
-				conns = append(conns, conn)
-			}
-		}
-	}()
+                        for _, res := range results {
+                                chIO <- res
+                        }
+                }
+        }()
 
-	// this loop keeps on accepting connections and send to main loop
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		chConn <- conn
-	}
+        // main logic loop, like your program core loop.
+        go func() {
+                var conns []net.Conn
+                for {
+                        select {
+                        case res := <-chIO: // receive IO events from watcher
+                                if res.Error != nil {
+                                        continue
+                                }
+                                conns = append(conns, res.Conn)
+                        case t := <-ticker.C: // receive ticker events
+                                push := []byte(fmt.Sprintf("%s\n", t))
+                                // all conn will receive the same 'push' content
+                                for _, conn := range conns {
+                                        w.Write(nil, conn, push)
+                                }
+                                conns = nil
+                        case conn := <-chConn: // receive new connection events
+                                conns = append(conns, conn)
+                        }
+                }
+        }()
+
+        // this loop keeps on accepting connections and send to main loop
+        for {
+                conn, err := ln.Accept()
+                if err != nil {
+                        log.Println(err)
+                        return
+                }
+                chConn <- conn
+        }
 }
 
 ```

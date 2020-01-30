@@ -19,8 +19,8 @@ func main() {
 
 	log.Println("pushing server listening on", ln.Addr(), ", use telnet to receive push")
 
-	// create a watcher with 4kb internal buffer
-	w, err := gaio.NewWatcher(4096)
+	// create a watcher
+	w, err := gaio.NewWatcher()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -33,12 +33,15 @@ func main() {
 	// watcher.WaitIO goroutine
 	go func() {
 		for {
-			res, err := w.WaitIO()
+			results, err := w.WaitIO()
 			if err != nil {
 				log.Println(err)
 				return
 			}
-			chIO <- res
+
+			for _, res := range results {
+				chIO <- res
+			}
 		}
 	}()
 

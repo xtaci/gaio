@@ -16,13 +16,13 @@ func init() {
 	go http.ListenAndServe(":6060", nil)
 }
 
-func echoServer(t testing.TB, qlen int) net.Listener {
+func echoServer(t testing.TB, bufsize int) net.Listener {
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	w, err := NewWatcher(qlen)
+	w, err := NewWatcher()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,36 +30,38 @@ func echoServer(t testing.TB, qlen int) net.Listener {
 	// ping-pong scheme echo server
 	go func() {
 		for {
-			res, err := w.WaitIO()
+			results, err := w.WaitIO()
 			if err != nil {
 				log.Println(err)
 				return
 			}
 
-			switch res.Operation {
-			case OpRead:
-				if res.Error != nil {
-					log.Println("read error:", res.Error, res.Size)
-					w.Free(res.Conn)
-					continue
-				}
+			for _, res := range results {
+				switch res.Operation {
+				case OpRead:
+					if res.Error != nil {
+						log.Println("read error:", res.Error, res.Size)
+						w.Free(res.Conn)
+						continue
+					}
 
-				if res.Size == 0 {
-					w.Free(res.Conn)
-					continue
-				}
+					if res.Size == 0 {
+						w.Free(res.Conn)
+						continue
+					}
 
-				// write the data, we won't start to read again until write completes.
-				// so we only need at most 1 shared read/write buffer for a connection to echo
-				w.Write(nil, res.Conn, res.Buffer[:res.Size])
-			case OpWrite:
-				if res.Error != nil {
-					log.Println("write error:", res.Error, res.Size)
-					w.Free(res.Conn)
-					continue
+					// write the data, we won't start to read again until write completes.
+					// so we only need at most 1 shared read/write buffer for a connection to echo
+					w.Write(nil, res.Conn, res.Buffer[:res.Size])
+				case OpWrite:
+					if res.Error != nil {
+						log.Println("write error:", res.Error, res.Size)
+						w.Free(res.Conn)
+						continue
+					}
+					// write complete, start read again
+					w.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
 				}
-				// write complete, start read again
-				w.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
 			}
 		}
 	}()
@@ -75,7 +77,7 @@ func echoServer(t testing.TB, qlen int) net.Listener {
 			//log.Println("watching", conn.RemoteAddr(), "fd:", fd)
 
 			// kick off
-			buf := make([]byte, 4096)
+			buf := make([]byte, bufsize)
 			err = w.Read(nil, conn, buf)
 			if err != nil {
 				log.Println(err)
@@ -120,7 +122,7 @@ func TestDeadline(t *testing.T) {
 	}
 	defer conn.Close()
 
-	w, err := NewWatcher(1024)
+	w, err := NewWatcher()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,18 +136,20 @@ func TestDeadline(t *testing.T) {
 	}()
 
 	for {
-		res, err := w.WaitIO()
+		results, err := w.WaitIO()
 		if err != nil {
 			t.Log(err)
 			return
 		}
 
-		switch res.Operation {
-		case OpRead:
-			if res.Error != ErrDeadline {
-				t.Fatal(res.Error, "mismatch")
+		for _, res := range results {
+			switch res.Operation {
+			case OpRead:
+				if res.Error != ErrDeadline {
+					t.Fatal(res.Error, "mismatch")
+				}
+				return
 			}
-			return
 		}
 	}
 }
@@ -189,7 +193,7 @@ func TestBidirectionWatcher(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w, err := NewWatcher(128)
+	w, err := NewWatcher()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,27 +210,29 @@ func TestBidirectionWatcher(t *testing.T) {
 	}()
 
 	for {
-		res, err := w.WaitIO()
+		results, err := w.WaitIO()
 		if err != nil {
 			t.Log(err)
 			return
 		}
 
-		switch res.Operation {
-		case OpWrite:
-			// recv
-			if res.Error != nil {
-				t.Fatal(res.Error)
-			}
+		for _, res := range results {
+			switch res.Operation {
+			case OpWrite:
+				// recv
+				if res.Error != nil {
+					t.Fatal(res.Error)
+				}
 
-			t.Log("written:", res.Error, res.Size)
-			err := w.Read(nil, conn, nil)
-			if err != nil {
-				t.Fatal(err)
+				t.Log("written:", res.Error, res.Size)
+				err := w.Read(nil, conn, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+			case OpRead:
+				t.Log("read:", res.Error, res.Size)
+				return
 			}
-		case OpRead:
-			t.Log("read:", res.Error, res.Size)
-			return
 		}
 	}
 }
@@ -239,7 +245,7 @@ func TestSocketClose(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w, err := NewWatcher(128)
+	w, err := NewWatcher()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,20 +259,22 @@ func TestSocketClose(t *testing.T) {
 		log.Fatal(err)
 	}
 	for {
-		res, err := w.WaitIO()
+		results, err := w.WaitIO()
 		if err != nil {
 			t.Log(err)
 			return
 		}
 
-		switch res.Operation {
-		case OpWrite:
-			w.Free(conn)
-			w.Read(nil, conn, nil)
-		case OpRead:
-			if res.Error != nil {
-				t.Log(res.Error)
-				return
+		for _, res := range results {
+			switch res.Operation {
+			case OpWrite:
+				w.Free(conn)
+				w.Read(nil, conn, nil)
+			case OpRead:
+				if res.Error != nil {
+					t.Log(res.Error)
+					return
+				}
 			}
 		}
 	}
@@ -281,7 +289,7 @@ func TestWriteOnClosedConn(t *testing.T) {
 	}
 	conn.Close()
 
-	w, err := NewWatcher(128)
+	w, err := NewWatcher()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,18 +305,20 @@ func TestWriteOnClosedConn(t *testing.T) {
 	}()
 
 	for {
-		res, err := w.WaitIO()
+		results, err := w.WaitIO()
 		if err != nil {
 			t.Log(err)
 			return
 		}
 
-		switch res.Operation {
-		case OpWrite:
-			// recv
-			if res.Error != nil {
-				conn.Close()
-				return
+		for _, res := range results {
+			switch res.Operation {
+			case OpWrite:
+				// recv
+				if res.Error != nil {
+					conn.Close()
+					return
+				}
 			}
 		}
 	}
@@ -354,7 +364,7 @@ func testParallel(t *testing.T, par int, msgsize int) {
 	ln := echoServer(t, 1024)
 	defer ln.Close()
 
-	w, err := NewWatcher(1024)
+	w, err := NewWatcher()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,36 +393,38 @@ func testParallel(t *testing.T, par int, msgsize int) {
 	nbytes := 0
 	ntotal := len(data) * par
 	for {
-		res, err := w.WaitIO()
+		results, err := w.WaitIO()
 		if err != nil {
 			t.Log(err)
 			return
 		}
 
-		switch res.Operation {
-		case OpWrite:
-			// recv
-			if res.Error != nil {
-				continue
-			}
+		for _, res := range results {
+			switch res.Operation {
+			case OpWrite:
+				// recv
+				if res.Error != nil {
+					continue
+				}
 
-			err := w.Read(nil, res.Conn, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-		case OpRead:
-			if res.Error != nil {
-				continue
-			}
-			if res.Size == 0 {
-				continue
-			}
+				err := w.Read(nil, res.Conn, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+			case OpRead:
+				if res.Error != nil {
+					continue
+				}
+				if res.Size == 0 {
+					continue
+				}
 
-			nbytes += res.Size
-			if nbytes >= ntotal {
-				t.Log("completed:", nbytes)
-				close(die)
-				return
+				nbytes += res.Size
+				if nbytes >= ntotal {
+					t.Log("completed:", nbytes)
+					close(die)
+					return
+				}
 			}
 		}
 	}
@@ -438,7 +450,7 @@ func testDeadline(t *testing.T, par int) {
 	ln := echoServer(t, 1024)
 	defer ln.Close()
 
-	w, err := NewWatcher(1024)
+	w, err := NewWatcher()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,20 +476,22 @@ func testDeadline(t *testing.T, par int) {
 
 	nerrs := 0
 	for {
-		res, err := w.WaitIO()
+		results, err := w.WaitIO()
 		if err != nil {
 			t.Log(err)
 			return
 		}
 
-		switch res.Operation {
-		case OpRead:
-			if res.Error == ErrDeadline {
-				nerrs++
-				if nerrs == par {
-					t.Log("all deadline reached")
-					close(die)
-					return
+		for _, res := range results {
+			switch res.Operation {
+			case OpRead:
+				if res.Error == ErrDeadline {
+					nerrs++
+					if nerrs == par {
+						t.Log("all deadline reached")
+						close(die)
+						return
+					}
 				}
 			}
 		}
@@ -520,7 +534,7 @@ func benchmarkEcho(b *testing.B, bufsize int) {
 	}
 	defer conn.Close()
 
-	w, err := NewWatcher(128)
+	w, err := NewWatcher()
 	if err != nil {
 		b.Fatal("new watcher:", err)
 	}
@@ -536,33 +550,35 @@ func benchmarkEcho(b *testing.B, bufsize int) {
 	w.Write(nil, conn, tx)
 	w.Read(nil, conn, rx)
 	for {
-		res, err := w.WaitIO()
+		results, err := w.WaitIO()
 		if err != nil {
 			b.Fatal("waitio:", err)
 			return
 		}
 
-		switch res.Operation {
-		case OpWrite:
-			if res.Error != nil {
-				b.Fatal("read:", res.Error)
-			}
-			err := w.Write(nil, res.Conn, tx)
-			if err != nil {
-				b.Log("wirte:", err)
-			}
-		case OpRead:
-			if res.Error != nil {
-				b.Fatal("read:", res.Error)
-			}
-			count += res.Size
-			if count >= target {
-				return
-			}
-			//log.Println("count:", count, "target:", target)
-			err := w.Read(nil, res.Conn, rx)
-			if err != nil {
-				b.Log("read:", err)
+		for _, res := range results {
+			switch res.Operation {
+			case OpWrite:
+				if res.Error != nil {
+					b.Fatal("read:", res.Error)
+				}
+				err := w.Write(nil, res.Conn, tx)
+				if err != nil {
+					b.Log("wirte:", err)
+				}
+			case OpRead:
+				if res.Error != nil {
+					b.Fatal("read:", res.Error)
+				}
+				count += res.Size
+				if count >= target {
+					return
+				}
+				//log.Println("count:", count, "target:", target)
+				err := w.Read(nil, res.Conn, rx)
+				if err != nil {
+					b.Log("read:", err)
+				}
 			}
 		}
 	}

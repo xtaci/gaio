@@ -33,6 +33,10 @@ var (
 	zeroTime = time.Time{}
 )
 
+const (
+	defaultQlen = 128
+)
+
 // OpType defines Operation Type
 type OpType int
 
@@ -102,16 +106,12 @@ type Watcher struct {
 	chPendingNotify chan struct{}
 
 	// IO-completion events to user
-	chIOCompletion chan OpResult
+	chNotifyCompletion chan []OpResult
 
 	// lock for pending io operations
 	// aiocb is associated to fd
 	pending      []*aiocb
 	pendingMutex sync.Mutex
-
-	// internal buffer for reading
-	swapBuffer     [][]byte
-	nextSwapBuffer int
 
 	die     chan struct{}
 	dieOnce sync.Once
@@ -119,7 +119,7 @@ type Watcher struct {
 
 // NewWatcher creates a management object for monitoring file descriptors
 // qlen sets the maximum notification completion queue size
-func NewWatcher(qlen int) (*Watcher, error) {
+func NewWatcher() (*Watcher, error) {
 	w := new(Watcher)
 	pfd, err := openPoll()
 	if err != nil {
@@ -130,7 +130,7 @@ func NewWatcher(qlen int) (*Watcher, error) {
 	// loop related chan
 	w.chEventNotify = make(chan pollerEvents)
 	w.chPendingNotify = make(chan struct{}, 1)
-	w.chIOCompletion = make(chan OpResult, qlen)
+	w.chNotifyCompletion = make(chan []OpResult, defaultQlen)
 	w.die = make(chan struct{})
 
 	// finalizer for system resources
@@ -163,9 +163,9 @@ func (w *Watcher) notifyPending() {
 }
 
 // WaitIO blocks until any read/write completion, or error
-func (w *Watcher) WaitIO() (r OpResult, err error) {
+func (w *Watcher) WaitIO() (r []OpResult, err error) {
 	select {
-	case r := <-w.chIOCompletion:
+	case r := <-w.chNotifyCompletion:
 		return r, nil
 	case <-w.die:
 		return r, ErrWatcherClosed
@@ -245,10 +245,6 @@ func (w *Watcher) tryRead(fd int, pcb *aiocb) bool {
 		break
 	}
 
-	select {
-	case w.chIOCompletion <- OpResult{Operation: OpRead, Conn: pcb.conn, Buffer: buf, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}:
-	case <-w.die:
-	}
 	return true
 }
 
@@ -272,12 +268,7 @@ func (w *Watcher) tryWrite(fd int, pcb *aiocb) bool {
 	// all bytes written or has error
 	// nil buffer still returns
 	if pcb.size == len(pcb.buffer) || ew != nil {
-		select {
-		case w.chIOCompletion <- OpResult{Operation: OpWrite, Conn: pcb.conn, Buffer: pcb.buffer, Size: nw, Error: ew, Context: pcb.ctx}:
-			return true
-		case <-w.die:
-			return true
-		}
+		return true
 	}
 	return false
 }
@@ -356,7 +347,7 @@ func (w *Watcher) loop() {
 				} else {
 					if dupfd, err := dupconn(pcb.conn); err != nil {
 						select {
-						case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: err, Context: pcb.ctx}:
+						case w.chNotifyCompletion <- []OpResult{{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: err, Context: pcb.ctx}}:
 						case <-w.die:
 							return
 						}
@@ -369,7 +360,7 @@ func (w *Watcher) loop() {
 						werr := w.pfd.Watch(ident)
 						if werr != nil {
 							select {
-							case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: werr, Context: pcb.ctx}:
+							case w.chNotifyCompletion <- []OpResult{{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: werr, Context: pcb.ctx}}:
 							case <-w.die:
 								return
 							}
@@ -401,6 +392,11 @@ func (w *Watcher) loop() {
 				case OpRead:
 					if desc.readers.Len() == 0 && desc.status&fdRead > 0 {
 						if w.tryRead(ident, pcb) {
+							select {
+							case w.chNotifyCompletion <- []OpResult{{Operation: OpRead, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}}:
+							case <-w.die:
+								return
+							}
 							if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
 								releaseConn(ident)
 							}
@@ -414,6 +410,11 @@ func (w *Watcher) loop() {
 				case OpWrite:
 					if desc.writers.Len() == 0 && desc.status&fdWrite > 0 {
 						if w.tryWrite(ident, pcb) {
+							select {
+							case w.chNotifyCompletion <- []OpResult{{Operation: OpWrite, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}}:
+							case <-w.die:
+								return
+							}
 							if pcb.err != nil {
 								releaseConn(ident)
 							}
@@ -445,6 +446,7 @@ func (w *Watcher) loop() {
 			// identified by 'e.ident', all library operation will be based on 'e.ident',
 			// then IO operation is impossible to misread or miswrite on re-created fd.
 			//log.Println(e)
+			results := make([]OpResult, 0, len(pe))
 			for _, e := range pe {
 				if desc, ok := descs[e.ident]; ok {
 					var shouldRelease bool
@@ -455,6 +457,7 @@ func (w *Watcher) loop() {
 							next = elem.Next()
 							pcb := elem.Value.(*aiocb)
 							if w.tryRead(e.ident, pcb) {
+								results = append(results, OpResult{Operation: OpRead, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
 								desc.readers.Remove(elem)
 								if !pcb.deadline.IsZero() {
 									heap.Remove(&timeouts, pcb.idx)
@@ -477,6 +480,7 @@ func (w *Watcher) loop() {
 							next = elem.Next()
 							pcb := elem.Value.(*aiocb)
 							if w.tryWrite(e.ident, pcb) {
+								results = append(results, OpResult{Operation: OpWrite, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
 								desc.writers.Remove(elem)
 								if !pcb.deadline.IsZero() {
 									heap.Remove(&timeouts, pcb.idx)
@@ -497,6 +501,15 @@ func (w *Watcher) loop() {
 					}
 				}
 			}
+
+			// batch notification
+			if len(results) > 0 {
+				select {
+				case w.chNotifyCompletion <- results:
+				case <-w.die:
+				}
+			}
+
 		case <-timer.C:
 			for timeouts.Len() > 0 {
 				now := time.Now()
@@ -506,7 +519,7 @@ func (w *Watcher) loop() {
 					pcb.l.Remove(pcb.elem)
 					// ErrDeadline
 					select {
-					case w.chIOCompletion <- OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrDeadline, Context: pcb.ctx}:
+					case w.chNotifyCompletion <- []OpResult{{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrDeadline, Context: pcb.ctx}}:
 					case <-w.die:
 						return
 					}

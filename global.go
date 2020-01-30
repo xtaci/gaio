@@ -5,15 +5,11 @@ import (
 	"time"
 )
 
-const (
-	defaultQlen = 1024
-)
-
 // library default watcher API
 var defaultWatcher *Watcher
 
 func init() {
-	w, err := NewWatcher(defaultQlen)
+	w, err := NewWatcher()
 	if err != nil {
 		panic(err)
 	}
@@ -21,7 +17,7 @@ func init() {
 }
 
 // WaitIO blocks until any read/write completion, or error
-func WaitIO() (r OpResult, err error) {
+func WaitIO() (r []OpResult, err error) {
 	return defaultWatcher.WaitIO()
 }
 

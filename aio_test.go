@@ -90,7 +90,7 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 }
 
 func TestEchoTiny(t *testing.T) {
-	ln := echoServer(t, 1024)
+	ln := echoServer(t, 1)
 	defer ln.Close()
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -225,7 +225,7 @@ func TestBidirectionWatcher(t *testing.T) {
 				}
 
 				t.Log("written:", res.Error, res.Size)
-				err := w.Read(nil, conn, nil)
+				err := w.Read(nil, conn, tx)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -269,7 +269,7 @@ func TestSocketClose(t *testing.T) {
 			switch res.Operation {
 			case OpWrite:
 				w.Free(conn)
-				w.Read(nil, conn, nil)
+				w.Read(nil, conn, tx)
 			case OpRead:
 				if res.Error != nil {
 					t.Log(res.Error)
@@ -281,7 +281,7 @@ func TestSocketClose(t *testing.T) {
 }
 
 func TestWriteOnClosedConn(t *testing.T) {
-	ln := echoServer(t, 65536)
+	ln := echoServer(t, 1024)
 	defer ln.Close()
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -361,7 +361,7 @@ func Test4kTiny(t *testing.T) {
 
 func testParallel(t *testing.T, par int, msgsize int) {
 	t.Log("testing concurrent:", par, "connections")
-	ln := echoServer(t, 1024)
+	ln := echoServer(t, msgsize)
 	defer ln.Close()
 
 	w, err := NewWatcher()
@@ -370,11 +370,10 @@ func testParallel(t *testing.T, par int, msgsize int) {
 	}
 	defer w.Close()
 
-	data := make([]byte, msgsize)
-
 	die := make(chan struct{})
 	go func() {
 		for i := 0; i < par; i++ {
+			data := make([]byte, msgsize)
 			conn, err := net.Dial("tcp", ln.Addr().String())
 			if err != nil {
 				log.Fatal(err)
@@ -391,7 +390,7 @@ func testParallel(t *testing.T, par int, msgsize int) {
 	}()
 
 	nbytes := 0
-	ntotal := len(data) * par
+	ntotal := msgsize * par
 	for {
 		results, err := w.WaitIO()
 		if err != nil {
@@ -407,7 +406,7 @@ func testParallel(t *testing.T, par int, msgsize int) {
 					continue
 				}
 
-				err := w.Read(nil, res.Conn, nil)
+				err := w.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -447,7 +446,7 @@ func TestDeadline8k(t *testing.T) {
 
 func testDeadline(t *testing.T, par int) {
 	t.Log("testing concurrent:", par, "unresponsive connections")
-	ln := echoServer(t, 1024)
+	ln := echoServer(t, 128)
 	defer ln.Close()
 
 	w, err := NewWatcher()

@@ -204,7 +204,7 @@ For complete documentation, see the associated [Godoc](https://godoc.org/github.
 | Command | `go test -v -run=^$ -bench Echo` |
 | Macbook Pro | 1695.27 MB/s 518 B/op 4 allocs/op|
 | Linux AMD64 | 1883.23 MB/s 518 B/op 4 allocs/op|
-| Raspberry Pi4 | 317.13 MB/s 518 B/op 4 allocs/op|
+| Raspberry Pi4 | 354.59 MB/s 334 B/op 4 allocs/op|
 
 | Test Case | 8K concurrent connection echo test |
 |:-------------:|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|

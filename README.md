@@ -15,13 +15,14 @@
 
 ## Introduction
 
-For a typical golang network program, you would first `conn := lis.Accept()` to get a connection and `go func(net.Conn)` to start a goroutine for handling the incoming data, then you would `buf:=make([]byte, 4096)` to allocate some buffer and finally waits on `conn.Read(buf)`. This is wasteful in memory, especially for a server holding >10K connections and most of them are in idle. 
+For a typical golang network program, you would first `conn := lis.Accept()` to get a connection and `go func(net.Conn)` to start a goroutine for handling the incoming data, then you would `buf:=make([]byte, 4096)` to allocate some buffer and finally waits on `conn.Read(buf)`.
 
-In this case, you need at least **2KB(goroutine stack) + 4KB(buffer)** for receiving data on one connection, at least **6KB x 10K = 60MB** in total, this number will be doubled with data sending goroutine, not counting the **context switches**(at least 1000 CPU cycles or 600ns on 2.1GHz).
+For a server holding >10K connections with frequent short messages(e.g. < 512B), cost for **context switching** is much more expensive than receiving message(a context switch needs at least 1000 CPU cycles or 600ns on 2.1GHz).
+
+And by eliminating **one goroutine per one connection scheme** with **Edge-Triggered IO Multiplexing**, the 2KB(R)+2KB(W) per connection goroutine stack can be saved.
 
 ```gaio``` is an [proactor pattern](https://en.wikipedia.org/wiki/Proactor_pattern) networking library satisfy both **memory requirements** and **performance requirements**.
 
-By eliminating **one goroutine per one connection scheme** with **Edge-Triggered IO Multiplexing**, the 2KB goroutine stack can be saved, and by restricting delivery order or events, buffers can be used effectively.
 
 ## Features
 

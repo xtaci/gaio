@@ -19,7 +19,7 @@ For a typical golang network program, you would first `conn := lis.Accept()` to 
 
 For a server holding >10K connections with frequent short messages(e.g. < 512B), cost for **context switching** is much more expensive than receiving message(a context switch needs at least 1000 CPU cycles or 600ns on 2.1GHz).
 
-And by eliminating **one goroutine per one connection scheme** with **Edge-Triggered IO Multiplexing**, the 2KB(R)+2KB(W) per connection goroutine stack can be saved.
+And by eliminating **one goroutine per one connection scheme** with **Edge-Triggered IO Multiplexing**, the 2KB(R)+2KB(W) per connection goroutine stack can be saved. By using internal swap buffer, `buf:=make([]byte, 4096)` can be saved(at the cost of performance).
 
 ```gaio``` is an [proactor pattern](https://en.wikipedia.org/wiki/Proactor_pattern) networking library satisfy both **memory requirements** and **performance requirements**.
 
@@ -27,9 +27,10 @@ And by eliminating **one goroutine per one connection scheme** with **Edge-Trigg
 ## Features
 
 1. Only a fixed number of goroutines will be created per **Watcher**(the core object of this library).
-2. Non-intrusive design, this library works with `net.Listener` and `net.Conn`. (with `syscall.RawConn` support)
-3. **Amortized context switching cost** for tiny messages, able to handle frequent chat message exchanging.
-4. Support for Linux, BSD.
+2. `Read(ctx, conn, buffer)` can be called with `nil` buffer to make use of internal swap buffer.
+3. Non-intrusive design, this library works with `net.Listener` and `net.Conn`. (with `syscall.RawConn` support)
+4. **Amortized context switching cost** for tiny messages, able to handle frequent chat message exchanging.
+5. Support for Linux, BSD.
 
 ## Conventions
 

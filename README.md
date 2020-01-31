@@ -21,16 +21,17 @@ For a server holding >10K connections with frequent short messages(e.g. < 512B),
 
 And by eliminating **one goroutine per one connection scheme** with **Edge-Triggered IO Multiplexing**, the 2KB(R)+2KB(W) per connection goroutine stack can be saved. By using internal swap buffer, `buf:=make([]byte, 4096)` can be saved(at the cost of performance).
 
-```gaio``` is an [proactor pattern](https://en.wikipedia.org/wiki/Proactor_pattern) networking library satisfy both **memory requirements** and **performance requirements**.
+```gaio``` is an [proactor pattern](https://en.wikipedia.org/wiki/Proactor_pattern) networking library satisfy both **memory constraints** and **performance goals**.
 
 
 ## Features
 
 1. Only a fixed number of goroutines will be created per **Watcher**(the core object of this library).
-2. `Read(ctx, conn, buffer)` can be called with `nil` buffer to make use of internal swap buffer.
-3. Non-intrusive design, this library works with `net.Listener` and `net.Conn`. (with `syscall.RawConn` support)
+2. `Read(ctx, conn, buffer)` can be called with `nil` buffer to make use of **internal swap buffer**.
+3. **Non-intrusive** design, this library works with `net.Listener` and `net.Conn`. (with `syscall.RawConn` support)
 4. **Amortized context switching cost** for tiny messages, able to handle frequent chat message exchanging.
 5. Support for Linux, BSD.
+6. <1000 LOC, easy to debug.
 
 ## Conventions
 
@@ -264,4 +265,4 @@ Equation	Y = 8.613e-005*X + 0.08278
 
 ## Status
 
-Beta
+RC

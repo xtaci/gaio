@@ -413,6 +413,80 @@ func testParallel(t *testing.T, par int, msgsize int) {
 					continue
 				}
 
+				err = w.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
+				if err != nil {
+					t.Fatal(err)
+				}
+			case OpRead:
+				if res.Error != nil {
+					continue
+				}
+				if res.Size == 0 {
+					continue
+				}
+
+				nbytes += res.Size
+				if nbytes >= ntotal {
+					t.Log("completed:", nbytes)
+					close(die)
+					return
+				}
+			}
+		}
+	}
+}
+
+func Test10kRandomInternal(t *testing.T) {
+	testParallelRandomInternal(t, 10240, 1024)
+}
+
+func testParallelRandomInternal(t *testing.T, par int, msgsize int) {
+	t.Log("testing concurrent:", par, "connections")
+	ln := echoServer(t, msgsize)
+	defer ln.Close()
+
+	w, err := NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	die := make(chan struct{})
+	go func() {
+		for i := 0; i < par; i++ {
+			data := make([]byte, msgsize)
+			conn, err := net.Dial("tcp", ln.Addr().String())
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer conn.Close()
+
+			// send
+			err = w.Write(nil, conn, data)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+		<-die
+	}()
+
+	nbytes := 0
+	ntotal := msgsize * par
+	for {
+		results, err := w.WaitIO()
+		if err != nil {
+			t.Log(err)
+			return
+		}
+
+		for _, res := range results {
+			switch res.Operation {
+			case OpWrite:
+				// recv
+				if res.Error != nil {
+					continue
+				}
+
 				// inject random nil buffer to test internal buffer
 				var err error
 				var rnd int32

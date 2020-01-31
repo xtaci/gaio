@@ -53,9 +53,10 @@ func (p *poller) Watch(fd int) error {
 
 func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 	events := make([]syscall.Kevent_t, maxEvents)
-	swapEvents := make(chan pollerEvents, 2)
-	for i := 0; i < cap(swapEvents); i++ {
-		swapEvents <- make([]event, 0, maxEvents)
+	swapEvents := make([]pollerEvents, 2)
+	swapIdx := 0
+	for i := 0; i < len(swapEvents); i++ {
+		swapEvents[i] = make([]event, 0, maxEvents)
 	}
 
 	var changes []syscall.Kevent_t
@@ -80,8 +81,9 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 		}
 		changes = changes[:0]
 
-		pe := <-swapEvents
+		pe := swapEvents[swapIdx]
 		pe = pe[:0]
+		swapIdx = (swapIdx + 1) % len(swapEvents)
 
 		for i := 0; i < n; i++ {
 			ev := &events[i]
@@ -117,7 +119,6 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 
 		select {
 		case chEventNotify <- pe:
-			swapEvents <- pe
 		case <-die:
 			return
 		}

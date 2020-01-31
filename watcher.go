@@ -56,7 +56,8 @@ type aiocb struct {
 	err      error       // error for last operation
 	size     int         // size received or sent
 	buffer   []byte
-	idx      int // index for heap op
+	useSwap  bool // mark if the buffer is internal swap
+	idx      int  // index for heap op
 	deadline time.Time
 }
 
@@ -111,13 +112,17 @@ type Watcher struct {
 	pending      []*aiocb
 	pendingMutex sync.Mutex
 
+	// internal buffer for reading
+	swapBuffer     [][]byte
+	nextSwapBuffer int
+
 	die     chan struct{}
 	dieOnce sync.Once
 }
 
 // NewWatcher creates a management object for monitoring file descriptors
 // qlen sets the maximum notification completion queue size
-func NewWatcher() (*Watcher, error) {
+func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w := new(Watcher)
 	pfd, err := openPoll()
 	if err != nil {
@@ -131,10 +136,18 @@ func NewWatcher() (*Watcher, error) {
 	w.chNotifyCompletion = make(chan []OpResult)
 	w.die = make(chan struct{})
 
+	// swapBuffer for shared reading
+	w.swapBuffer = make([][]byte, 2)
+	for i := 0; i < len(w.swapBuffer); i++ {
+		w.swapBuffer[i] = make([]byte, bufsize)
+	}
+
+	// swapResults for batch notification
 	w.swapResults = make([][]OpResult, 2)
 	for i := 0; i < len(w.swapResults); i++ {
 		w.swapResults[i] = make([]OpResult, 0, maxEvents)
 	}
+
 	// finalizer for system resources
 	runtime.SetFinalizer(w, func(w *Watcher) {
 		close(w.die)
@@ -232,6 +245,12 @@ func (w *Watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 func (w *Watcher) tryRead(fd int, pcb *aiocb) bool {
 	buf := pcb.buffer
 
+	var useSwap bool
+	if buf == nil { // internal buffer
+		buf = w.swapBuffer[w.nextSwapBuffer]
+		useSwap = true
+	}
+
 	for {
 		// return values are stored in pcb
 		pcb.size, pcb.err = syscall.Read(fd, buf)
@@ -245,6 +264,13 @@ func (w *Watcher) tryRead(fd int, pcb *aiocb) bool {
 			continue
 		}
 		break
+	}
+
+	// IO completed
+	if useSwap {
+		pcb.buffer = buf
+		pcb.useSwap = true
+		w.nextSwapBuffer = (w.nextSwapBuffer + 1) % len(w.swapBuffer)
 	}
 
 	return true
@@ -460,6 +486,16 @@ func (w *Watcher) loop() {
 							pcb := elem.Value.(*aiocb)
 							if w.tryRead(e.ident, pcb) {
 								results = append(results, OpResult{Operation: OpRead, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+								// for shared memory, we need to notify WaitIO immediately
+								if pcb.useSwap {
+									select {
+									case w.chNotifyCompletion <- results:
+										w.swapIdx = (w.swapIdx + 1) % len(w.swapResults)
+										results = w.swapResults[w.swapIdx][:0]
+									case <-w.die:
+										return
+									}
+								}
 								desc.readers.Remove(elem)
 								if !pcb.deadline.IsZero() {
 									heap.Remove(&timeouts, pcb.idx)

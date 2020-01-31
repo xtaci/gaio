@@ -5,15 +5,25 @@ import (
 	"time"
 )
 
+const (
+	defaultInternalBufferSize = 65536
+)
+
 // library default watcher API
 var defaultWatcher *Watcher
 
 func init() {
-	w, err := NewWatcher()
+	w, err := NewWatcherSize(defaultInternalBufferSize)
 	if err != nil {
 		panic(err)
 	}
 	defaultWatcher = w
+}
+
+// NewWatcher creates a management object for monitoring file descriptors
+// with default internal buffer size - 64KB
+func NewWatcher() (*Watcher, error) {
+	return NewWatcherSize(defaultInternalBufferSize)
 }
 
 // WaitIO blocks until any read/write completion, or error

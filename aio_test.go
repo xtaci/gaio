@@ -3,6 +3,7 @@ package gaio
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/binary"
 	"io"
 	"log"
 	"net"
@@ -207,6 +208,12 @@ func TestBidirectionWatcher(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
+
+		// read will use internal buffer
+		err = w.Read(nil, conn, nil)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}()
 
 	for {
@@ -406,7 +413,16 @@ func testParallel(t *testing.T, par int, msgsize int) {
 					continue
 				}
 
-				err := w.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
+				// inject random nil buffer to test internal buffer
+				var err error
+				var rnd int32
+				binary.Read(rand.Reader, binary.LittleEndian, &rnd)
+				if rnd%13 == 0 {
+					err = w.Read(nil, res.Conn, nil)
+				} else {
+					err = w.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
+				}
+
 				if err != nil {
 					t.Fatal(err)
 				}

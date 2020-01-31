@@ -27,6 +27,8 @@ var (
 	ErrConnClosed = errors.New("connection closed")
 	// ErrDeadline means the specific operation has exceeded deadline before completion
 	ErrDeadline = errors.New("operation exceeded deadline")
+	// ErrEmptyBuffer means the buffer is nil
+	ErrEmptyBuffer = errors.New("empty buffer")
 )
 
 var (
@@ -121,7 +123,7 @@ type Watcher struct {
 }
 
 // NewWatcher creates a management object for monitoring file descriptors
-// qlen sets the maximum notification completion queue size
+// 'bufsize' sets the internal swap buffer size for Read() with nil.
 func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w := new(Watcher)
 	pfd, err := openPoll()
@@ -204,6 +206,9 @@ func (w *Watcher) ReadTimeout(ctx interface{}, conn net.Conn, buf []byte, deadli
 // Write submits an async write request on 'fd' with context 'ctx', using buffer 'buf'.
 // 'ctx' is the user-defined value passed through the gaio watcher unchanged.
 func (w *Watcher) Write(ctx interface{}, conn net.Conn, buf []byte) error {
+	if len(buf) == 0 {
+		return ErrEmptyBuffer
+	}
 	return w.aioCreate(ctx, OpWrite, conn, buf, zeroTime)
 }
 
@@ -211,6 +216,9 @@ func (w *Watcher) Write(ctx interface{}, conn net.Conn, buf []byte) error {
 // expected to be completed before 'deadline', 'buf' can be set to nil to use internal buffer.
 // 'ctx' is the user-defined value passed through the gaio watcher unchanged.
 func (w *Watcher) WriteTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
+	if len(buf) == 0 {
+		return ErrEmptyBuffer
+	}
 	return w.aioCreate(ctx, OpWrite, conn, buf, deadline)
 }
 

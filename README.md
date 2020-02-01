@@ -30,14 +30,16 @@ And by eliminating **one goroutine per one connection scheme** with **Edge-Trigg
 2. `Read(ctx, conn, buffer)` can be called with `nil` buffer to make use of **internal swap buffer**.
 3. **Non-intrusive** design, this library works with `net.Listener` and `net.Conn`. (with `syscall.RawConn` support)
 4. **Amortized context switching cost** for tiny messages, able to handle frequent chat message exchanging.
-5. Support for Linux, BSD.
-6. <1000 LOC, easy to debug.
+5. Tiny, less than 1000 LOC, easy to debug.
+6. Support for Linux, BSD.
 
 ## Conventions
 
 1. Once you submit an async read/write requests with related `net.Conn` to `gaio.Watcher`, this conn will be delegated to `gaio.Watcher` at first submit. Future use of this conn like `conn.Read` or `conn.Write` **will return error**.
 2. If you decide not to use this connection anymore, you could call `gaio.Free(net.Conn)` to close socket and free related resources immediately.
-3. If you forgot to call `gaio.Free(net.Conn)`, golang runtime garbage collection will do that for you. You don't have to worry about this.
+3. If you forget to call `gaio.Free(net.Conn)`,  runtime garbage collector will close any related resources if nowhere in the system holds the `net.Conn`.
+4. For connection load-balance, you can create multiple `gaio.Watcher` with your own strategy to distribute `net.Conn`.
+5. For acceptor load-balance, you can use [go-reuseport](https://github.com/libp2p/go-reuseport) as the listener.
 
 ## TL;DR
 

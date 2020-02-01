@@ -31,7 +31,7 @@ func WaitIO() (r []OpResult, err error) {
 	return defaultWatcher.WaitIO()
 }
 
-// Read submits an async read request on 'fd' with context 'ctx', using buffer 'buf'
+// Read submits an async read request on 'fd' with context 'ctx', using buffer 'buf'.
 // 'buf' can be set to nil to use internal buffer.
 // 'ctx' is the user-defined value passed through the gaio watcher unchanged.
 func Read(ctx interface{}, conn net.Conn, buf []byte) error {

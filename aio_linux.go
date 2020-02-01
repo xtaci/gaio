@@ -88,7 +88,6 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 			return
 		}
 
-		// note chan swap must not continue unexpected
 		pe := swapEvents[swapIdx]
 		pe = pe[:0]
 		swapIdx = (swapIdx + 1) % len(swapEvents)

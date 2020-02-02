@@ -436,9 +436,6 @@ func (w *Watcher) loop() {
 							case <-w.die:
 								return
 							}
-							if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
-								releaseConn(ident)
-							}
 							continue
 						} else {
 							desc.status &^= fdRead
@@ -454,9 +451,6 @@ func (w *Watcher) loop() {
 							case w.chNotifyCompletion <- []OpResult{{Operation: OpWrite, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}}:
 							case <-w.die:
 								return
-							}
-							if pcb.err != nil {
-								releaseConn(ident)
 							}
 							continue
 						} else {
@@ -488,8 +482,11 @@ func (w *Watcher) loop() {
 			//log.Println(e)
 			results := w.swapResults[w.swapIdx][:0]
 			for _, e := range pe {
+				if e.err { // fd error
+					releaseConn(e.ident)
+				}
+
 				if desc, ok := descs[e.ident]; ok {
-					var shouldRelease bool
 					if e.r {
 						desc.status |= fdRead
 						var next *list.Element
@@ -513,7 +510,6 @@ func (w *Watcher) loop() {
 									heap.Remove(&timeouts, pcb.idx)
 								}
 								if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
-									shouldRelease = true
 									break
 								}
 							} else {
@@ -536,7 +532,6 @@ func (w *Watcher) loop() {
 									heap.Remove(&timeouts, pcb.idx)
 								}
 								if pcb.err != nil {
-									shouldRelease = true
 									break
 								}
 							} else {
@@ -544,10 +539,6 @@ func (w *Watcher) loop() {
 								break
 							}
 						}
-					}
-
-					if shouldRelease {
-						releaseConn(e.ident)
 					}
 				}
 			}

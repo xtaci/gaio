@@ -13,6 +13,7 @@ type event struct {
 	ident int  // identifier of this event, usually file descriptor
 	r     bool // readable
 	w     bool // writable
+	err   bool // fd has error
 }
 
 // events from epoll_wait passing to loop,should be in batch for atomicity.

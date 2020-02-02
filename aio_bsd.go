@@ -108,10 +108,9 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 					e.w = true
 				}
 
-				//  error
-				if ev.Flags&(syscall.EV_ERROR) != 0 {
-					e.r = true
-					e.w = true
+				// explicit error
+				if ev.Flags == syscall.EV_ERROR {
+					e.err = true
 				}
 				pe = append(pe, e)
 			}

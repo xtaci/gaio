@@ -263,9 +263,14 @@ Equation	Y = 8.613e-005*X + 0.08278
 
 `gaio` source code is available under the MIT [License](/LICENSE).
 
-## Articles
+## References
 
 * https://zhuanlan.zhihu.com/p/102890337 -- gaio小记
+* https://golang.org/src/runtime/netpoll_epoll.go -- epoll in golang 
+* https://www.freebsd.org/cgi/man.cgi?query=kqueue&sektion=2 -- kqueue
+* https://idea.popcount.org/2017-02-20-epoll-is-fundamentally-broken-12/ -- epoll is fundamentally broken
+* https://en.wikipedia.org/wiki/Transmission_Control_Protocol#Flow_control -- TCP Flow Control 
+* http://www.idc-online.com/technical_references/pdfs/data_communications/Congestion_Control.pdf -- Back-pressure
 
 ## Status
 

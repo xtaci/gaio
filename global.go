@@ -27,6 +27,7 @@ func NewWatcher() (*Watcher, error) {
 }
 
 // WaitIO blocks until any read/write completion, or error
+// An internal 'buf' returned is safe to use until next WaitIO returns.
 func WaitIO() (r []OpResult, err error) {
 	return defaultWatcher.WaitIO()
 }

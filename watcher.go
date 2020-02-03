@@ -87,6 +87,8 @@ type OpResult struct {
 	Conn net.Conn
 	// Buffer points to user's supplied buffer or watcher's internal swap buffer
 	Buffer []byte
+	// IsSwapBuffer marks true if the buffer internal one
+	IsSwapBuffer bool
 	// Number of bytes sent or received, Buffer[:Size] is the content sent or received.
 	Size int
 	// IO error,timeout error
@@ -123,7 +125,8 @@ type Watcher struct {
 }
 
 // NewWatcher creates a management object for monitoring file descriptors.
-// 'bufsize' sets the internal swap buffer size for Read() with nil.
+// 'bufsize' sets the internal swap buffer size for Read() with nil, 2 slices with'bufsize'
+// will be allocated for performance.
 func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w := new(Watcher)
 	pfd, err := openPoll()
@@ -180,6 +183,7 @@ func (w *Watcher) notifyPending() {
 }
 
 // WaitIO blocks until any read/write completion, or error.
+// An internal 'buf' returned is safe to use until next WaitIO returns.
 func (w *Watcher) WaitIO() (r []OpResult, err error) {
 	select {
 	case r := <-w.chNotifyCompletion:
@@ -274,8 +278,8 @@ func (w *Watcher) tryRead(fd int, pcb *aiocb) bool {
 		break
 	}
 
-	// IO completed
-	if useSwap {
+	// IO completed successfully with internal buffer
+	if useSwap && pcb.err == nil {
 		pcb.buffer = buf
 		pcb.useSwap = true
 		w.nextSwapBuffer = (w.nextSwapBuffer + 1) % len(w.swapBuffer)
@@ -494,7 +498,7 @@ func (w *Watcher) loop() {
 							next = elem.Next()
 							pcb := elem.Value.(*aiocb)
 							if w.tryRead(e.ident, pcb) {
-								results = append(results, OpResult{Operation: OpRead, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+								results = append(results, OpResult{Operation: OpRead, Conn: pcb.conn, Buffer: pcb.buffer, IsSwapBuffer: pcb.useSwap, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
 								// for requests using internal swap buffer, we need to notify WaitIO immediately
 								if pcb.useSwap {
 									select {

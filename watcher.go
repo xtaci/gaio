@@ -49,18 +49,19 @@ const (
 
 // aiocb contains all info for a single request
 type aiocb struct {
-	l        *list.List // list where this request belongs to
-	elem     *list.Element
-	ctx      interface{} // user context associated with this request
-	ptr      uintptr     // pointer to conn
-	op       OpType      // read or write
-	conn     net.Conn    // associated connection for nonblocking-io
-	err      error       // error for last operation
-	size     int         // size received or sent
-	buffer   []byte
-	useSwap  bool // mark if the buffer is internal swap
-	idx      int  // index for heap op
-	deadline time.Time
+	l            *list.List // list where this request belongs to
+	elem         *list.Element
+	ctx          interface{} // user context associated with this request
+	ptr          uintptr     // pointer to conn
+	op           OpType      // read or write
+	conn         net.Conn    // associated connection for nonblocking-io
+	err          error       // error for last operation
+	size         int         // size received or sent
+	buffer       []byte
+	useSwap      bool // mark if the buffer is internal swap buffer
+	notifyCaller bool // mark if the caller have to wakeup caller to swap buffer.
+	idx          int  // index for heap op
+	deadline     time.Time
 }
 
 // readable & writable bitmask
@@ -109,7 +110,7 @@ type Watcher struct {
 	// IO-completion events to user
 	chNotifyCompletion chan []OpResult
 	swapResults        [][]OpResult
-	swapIdx            int
+	swapResultIdx      int
 
 	// lock for pending io operations
 	// aiocb is associated to fd
@@ -117,7 +118,10 @@ type Watcher struct {
 	pendingMutex sync.Mutex
 
 	// internal buffer for reading
-	swapBuffer     [][]byte
+	swapSize     int // swap buffer capacity
+	swapBuffer   [][]byte
+	bufferOffset int // bufferOffset for current using one
+
 	nextSwapBuffer int
 
 	die     chan struct{}
@@ -142,6 +146,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.die = make(chan struct{})
 
 	// swapBuffer for shared reading
+	w.swapSize = bufsize
 	w.swapBuffer = make([][]byte, 2)
 	for i := 0; i < len(w.swapBuffer); i++ {
 		w.swapBuffer[i] = make([]byte, bufsize)
@@ -259,7 +264,7 @@ func (w *Watcher) tryRead(fd int, pcb *aiocb) bool {
 
 	var useSwap bool
 	if buf == nil { // internal buffer
-		buf = w.swapBuffer[w.nextSwapBuffer]
+		buf = w.swapBuffer[w.nextSwapBuffer][w.bufferOffset:]
 		useSwap = true
 	}
 
@@ -280,9 +285,16 @@ func (w *Watcher) tryRead(fd int, pcb *aiocb) bool {
 
 	// IO completed successfully with internal buffer
 	if useSwap && pcb.err == nil {
-		pcb.buffer = buf
+		pcb.buffer = buf[:pcb.size] // set len to pcb.size
 		pcb.useSwap = true
-		w.nextSwapBuffer = (w.nextSwapBuffer + 1) % len(w.swapBuffer)
+		w.bufferOffset += pcb.size
+
+		// current buffer exhausted, notify caller and swap buffer
+		if w.bufferOffset == w.swapSize {
+			w.nextSwapBuffer = (w.nextSwapBuffer + 1) % len(w.swapBuffer)
+			w.bufferOffset = 0
+			pcb.notifyCaller = true
+		}
 	}
 
 	return true
@@ -484,7 +496,7 @@ func (w *Watcher) loop() {
 			// identified by 'e.ident', all library operation will be based on 'e.ident',
 			// then IO operation is impossible to misread or miswrite on re-created fd.
 			//log.Println(e)
-			results := w.swapResults[w.swapIdx][:0]
+			results := w.swapResults[w.swapResultIdx][:0]
 			for _, e := range pe {
 				if e.err { // fd error
 					releaseConn(e.ident)
@@ -499,12 +511,12 @@ func (w *Watcher) loop() {
 							pcb := elem.Value.(*aiocb)
 							if w.tryRead(e.ident, pcb) {
 								results = append(results, OpResult{Operation: OpRead, Conn: pcb.conn, Buffer: pcb.buffer, IsSwapBuffer: pcb.useSwap, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
-								// for requests using internal swap buffer, we need to notify WaitIO immediately
-								if pcb.useSwap {
+								// we need to notify WaitIO immediately if current buffer is exhausted
+								if pcb.notifyCaller {
 									select {
 									case w.chNotifyCompletion <- results:
-										w.swapIdx = (w.swapIdx + 1) % len(w.swapResults)
-										results = w.swapResults[w.swapIdx][:0]
+										w.swapResultIdx = (w.swapResultIdx + 1) % len(w.swapResults)
+										results = w.swapResults[w.swapResultIdx][:0]
 									case <-w.die:
 										return
 									}
@@ -551,7 +563,7 @@ func (w *Watcher) loop() {
 			if len(results) > 0 {
 				select {
 				case w.chNotifyCompletion <- results:
-					w.swapIdx = (w.swapIdx + 1) % len(w.swapResults)
+					w.swapResultIdx = (w.swapResultIdx + 1) % len(w.swapResults)
 				case <-w.die:
 					return
 				}

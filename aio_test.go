@@ -436,11 +436,15 @@ func testParallel(t *testing.T, par int, msgsize int) {
 	}
 }
 
-func Test10kRandomInternal(t *testing.T) {
-	testParallelRandomInternal(t, 10240, 1024)
+func Test10kRandomSwapBuffer(t *testing.T) {
+	testParallelRandomInternal(t, 10240, 1024, false)
 }
 
-func testParallelRandomInternal(t *testing.T, par int, msgsize int) {
+func Test10kCompleteSwapBuffer(t *testing.T) {
+	testParallelRandomInternal(t, 10240, 1024, true)
+}
+
+func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool) {
 	t.Log("testing concurrent:", par, "connections")
 	ln := echoServer(t, msgsize)
 	defer ln.Close()
@@ -491,7 +495,7 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int) {
 				var err error
 				var rnd int32
 				binary.Read(rand.Reader, binary.LittleEndian, &rnd)
-				if rnd%13 == 0 {
+				if allswap || rnd%13 == 0 {
 					err = w.Read(nil, res.Conn, nil)
 				} else {
 					err = w.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])

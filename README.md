@@ -44,6 +44,7 @@ And by eliminating **one goroutine per one connection scheme** with **Edge-Trigg
 3. If you forget to call [gaio.Free(net.Conn)](https://godoc.org/github.com/xtaci/gaio#Free),  runtime garbage collector will close any related resources if nowhere in the system holds the [net.Conn](https://golang.org/pkg/net/#Conn).
 4. For connection load-balance, you can create multiple [gaio.Watcher](https://godoc.org/github.com/xtaci/gaio#Watcher) with your own strategy to distribute [net.Conn](https://golang.org/pkg/net/#Conn).
 5. For acceptor load-balance, you can use [go-reuseport](https://github.com/libp2p/go-reuseport) as the listener.
+6. For read requests submitted with 'nil' buffer, the completed `[]byte` from `gaio.WaitIO()` is safe to use before next call to [gaio.WaitIO()](https://godoc.org/github.com/xtaci/gaio#Watcher.WaitIO) returned.
 
 ## TL;DR
 

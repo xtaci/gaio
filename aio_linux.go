@@ -8,8 +8,8 @@ import (
 	"unsafe"
 )
 
-// EPOLLET value is incorrect in syscall
-const EPOLLET = 0x80000000
+// _EPOLLET value is incorrect in syscall
+const _EPOLLET = 0x80000000
 
 type poller struct {
 	pfd    int // epoll fd
@@ -78,7 +78,7 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 		// check for new awaiting
 		p.awaitingMutex.Lock()
 		for _, fd := range p.awaiting {
-			syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | EPOLLET})
+			syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
 		}
 		p.awaiting = p.awaiting[:0]
 		p.awaitingMutex.Unlock()

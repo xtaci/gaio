@@ -425,7 +425,7 @@ func (w *Watcher) loop() {
 						desc = &fdDesc{ptr: pcb.ptr}
 						descs[ident] = desc
 						connIdents[pcb.ptr] = ident
-						// as we duplicated succesfuly, we're safe to
+						// as we duplicated successfully, we're safe to
 						// close the original connection
 						pcb.conn.Close()
 

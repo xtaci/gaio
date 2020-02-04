@@ -491,7 +491,7 @@ func (w *Watcher) handlePending(pending []*aiocb) {
 			if desc.readers.Len() == 0 && desc.status&fdRead > 0 {
 				if w.tryRead(ident, pcb) {
 					select {
-					case w.chNotifyCompletion <- []OpResult{{Operation: OpRead, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}}:
+					case w.chNotifyCompletion <- []OpResult{{Operation: OpRead, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}}:
 					case <-w.die:
 						return
 					}

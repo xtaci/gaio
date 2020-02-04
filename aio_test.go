@@ -18,7 +18,8 @@ func init() {
 }
 
 func echoServer(t testing.TB, bufsize int) net.Listener {
-	ln, err := net.Listen("tcp", "localhost:0")
+	tcpaddr, _ := net.ResolveTCPAddr("tcp", "localhost:0")
+	ln, err := net.ListenTCP("tcp", tcpaddr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,12 +70,14 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 
 	go func() {
 		for {
-			conn, err := ln.Accept()
+			conn, err := ln.AcceptTCP()
 			if err != nil {
 				w.Close()
 				return
 			}
 
+			conn.SetReadBuffer(1 << 20)
+			conn.SetWriteBuffer(1 << 20)
 			//log.Println("watching", conn.RemoteAddr(), "fd:", fd)
 
 			// kick off
@@ -626,6 +629,9 @@ func benchmarkEcho(b *testing.B, bufsize int) {
 		return
 	}
 	defer conn.Close()
+
+	conn.SetReadBuffer(1 << 20)
+	conn.SetWriteBuffer(1 << 20)
 
 	w, err := NewWatcher()
 	if err != nil {

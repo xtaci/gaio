@@ -398,15 +398,16 @@ func (w *Watcher) loop() {
 				now := time.Now()
 				pcb := w.timeouts[0]
 				if now.After(pcb.deadline) {
-					// remove from list
+					// remove from list & heap together
 					pcb.l.Remove(pcb.elem)
+					heap.Pop(&w.timeouts)
+
 					// ErrDeadline
 					select {
 					case w.chNotifyCompletion <- []OpResult{{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrDeadline, Context: pcb.ctx}}:
 					case <-w.die:
 						return
 					}
-					heap.Pop(&w.timeouts)
 				} else {
 					w.timer.Reset(pcb.deadline.Sub(now))
 					break

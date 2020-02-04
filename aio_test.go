@@ -76,8 +76,6 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 				return
 			}
 
-			conn.SetReadBuffer(1 << 20)
-			conn.SetWriteBuffer(1 << 20)
 			//log.Println("watching", conn.RemoteAddr(), "fd:", fd)
 
 			// kick off
@@ -629,9 +627,6 @@ func benchmarkEcho(b *testing.B, bufsize int) {
 		return
 	}
 	defer conn.Close()
-
-	conn.SetReadBuffer(1 << 20)
-	conn.SetWriteBuffer(1 << 20)
 
 	w, err := NewWatcher()
 	if err != nil {

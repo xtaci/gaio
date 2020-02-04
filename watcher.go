@@ -511,7 +511,6 @@ func (w *Watcher) loop() {
 							pcb := elem.Value.(*aiocb)
 							if w.tryRead(e.ident, pcb) {
 								results = append(results, OpResult{Operation: OpRead, Conn: pcb.conn, Buffer: pcb.buffer, IsSwapBuffer: pcb.useSwap, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
-								// we need to notify WaitIO immediately if current buffer is exhausted
 								if pcb.notifyCaller {
 									select {
 									case w.chNotifyCompletion <- results:

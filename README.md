@@ -32,7 +32,7 @@ And by eliminating **one goroutine per one connection scheme** with **Edge-Trigg
 2. [Read(ctx, conn, buffer)](https://godoc.org/github.com/xtaci/gaio#Watcher.Read) can be called with `nil` buffer to make use of **internal swap buffer**.
 3. **Non-intrusive** design, this library works with [net.Listener](https://golang.org/pkg/net/#Listener) and [net.Conn](https://golang.org/pkg/net/#Conn). (with [syscall.RawConn](https://golang.org/pkg/syscall/#RawConn) support)
 4. **Amortized context switching cost** for tiny messages, able to handle frequent chat message exchanging.
-5. Application can decide **when to delegate** [net.Conn](https://golang.org/pkg/net/#Conn) to `gaio`, for example, you can delegate [net.Conn](https://golang.org/pkg/net/#Conn) to `gaio` after some handshaking procedure.
+5. Application can decide **when to delegate** [net.Conn](https://golang.org/pkg/net/#Conn) to `gaio`, for example, you can delegate [net.Conn](https://golang.org/pkg/net/#Conn) to `gaio` after some handshaking procedure, or having some [net.TCPConn](https://golang.org/pkg/net/#TCPConn) settings done.
 6. Application can decide **when to submit** read or write requests, per-connection [back-pressure](https://en.wikipedia.org/wiki/Transmission_Control_Protocol#Flow_control) can be propagated to peer to slow down sending. This features is particular useful to transmit data from A to B, which B is slower than A.
 7. Tiny, less than 1000 LOC, easy to debug.
 8. Support for Linux, BSD.
@@ -42,9 +42,9 @@ And by eliminating **one goroutine per one connection scheme** with **Edge-Trigg
 1. Once you submit an async read/write requests with related [net.Conn](https://golang.org/pkg/net/#Conn) to [gaio.Watcher](https://godoc.org/github.com/xtaci/gaio#Watcher), this conn will be delegated to `gaio.Watcher` at first submit. Future use of this conn like [conn.Read](https://golang.org/pkg/net/#TCPConn.Read) or [conn.Write](https://golang.org/pkg/net/#TCPConn.Write) **will return error**, but TCP properties set by `SetReadBuffer()`, `SetWriteBuffer()`, `SetLinger()`, `SetKeepAlive()`, `SetNoDelay()` will be inherited.
 2. If you decide not to use this connection anymore, you could call [gaio.Free(net.Conn)](https://godoc.org/github.com/xtaci/gaio#Free) to close socket and free related resources immediately.
 3. If you forget to call [gaio.Free(net.Conn)](https://godoc.org/github.com/xtaci/gaio#Free),  runtime garbage collector will close any related resources if nowhere in the system holds the [net.Conn](https://golang.org/pkg/net/#Conn).
-4. For connection load-balance, you can create multiple [gaio.Watcher](https://godoc.org/github.com/xtaci/gaio#Watcher) with your own strategy to distribute [net.Conn](https://golang.org/pkg/net/#Conn).
+4. For connection load-balance, you can create **multiple** [gaio.Watcher](https://godoc.org/github.com/xtaci/gaio#Watcher) with your own strategy to distribute [net.Conn](https://golang.org/pkg/net/#Conn).
 5. For acceptor load-balance, you can use [go-reuseport](https://github.com/libp2p/go-reuseport) as the listener.
-6. For read requests submitted with 'nil' buffer, the completed `[]byte` from `gaio.WaitIO()` is safe to use before next call to [gaio.WaitIO()](https://godoc.org/github.com/xtaci/gaio#Watcher.WaitIO) returned.
+6. For read requests submitted with 'nil' buffer, the returning `[]byte` from `gaio.WaitIO()` is **SAFE** to use **before next call** to [gaio.WaitIO()](https://godoc.org/github.com/xtaci/gaio#Watcher.WaitIO) returned.
 
 ## TL;DR
 

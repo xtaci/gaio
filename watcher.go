@@ -118,11 +118,21 @@ type Watcher struct {
 	pendingMutex sync.Mutex
 
 	// internal buffer for reading
-	swapSize     int // swap buffer capacity
-	swapBuffer   [][]byte
-	bufferOffset int // bufferOffset for current using one
-
+	swapSize       int // swap buffer capacity
+	swapBuffer     [][]byte
+	bufferOffset   int // bufferOffset for current using one
 	nextSwapBuffer int
+
+	// loop related data structure
+	descs      map[int]*fdDesc // all descriptors
+	connIdents map[uintptr]int // we must not hold net.Conn as key, for GC purpose
+	// for timeout operations which
+	// aiocb has non-zero deadline, either exists
+	// in timeouts & queue at any time
+	// or in neither of them.
+	timeouts timedHeap
+	timer    *time.Timer
+	gc       chan uintptr // for garbage collector
 
 	die     chan struct{}
 	dieOnce sync.Once
@@ -157,6 +167,12 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	for i := 0; i < len(w.swapResults); i++ {
 		w.swapResults[i] = make([]OpResult, 0, maxEvents)
 	}
+
+	// init loop related data structures
+	w.descs = make(map[int]*fdDesc)
+	w.connIdents = make(map[uintptr]int)
+	w.gc = make(chan uintptr)
+	w.timer = time.NewTimer(0)
 
 	// watcher finalizer for system resources
 	runtime.SetFinalizer(w, func(w *Watcher) {
@@ -325,50 +341,38 @@ func (w *Watcher) tryWrite(fd int, pcb *aiocb) bool {
 	return false
 }
 
+// release connection related resources
+func (w *Watcher) releaseConn(ident int) {
+	if desc, ok := w.descs[ident]; ok {
+		// delete from heap
+		for e := desc.readers.Front(); e != nil; e = e.Next() {
+			tcb := e.Value.(*aiocb)
+			if !tcb.deadline.IsZero() {
+				heap.Remove(&w.timeouts, tcb.idx)
+			}
+		}
+
+		for e := desc.writers.Front(); e != nil; e = e.Next() {
+			tcb := e.Value.(*aiocb)
+			if !tcb.deadline.IsZero() {
+				heap.Remove(&w.timeouts, tcb.idx)
+			}
+		}
+
+		delete(w.descs, ident)
+		delete(w.connIdents, desc.ptr)
+		// close socket file descriptor duplicated from net.Conn
+		syscall.Close(ident)
+	}
+}
+
 // the core event loop of this watcher
 func (w *Watcher) loop() {
-	// all descriptors
-	descs := make(map[int]*fdDesc)
-	// we must not hold net.Conn as key, for GC purpose
-	connIdents := make(map[uintptr]int)
-	gc := make(chan uintptr)
-
-	// for timeout operations
-	// aiocb has non-zero deadline exists
-	// in bothtimeouts & queue at any time
-	// or in neither of them.
-	timer := time.NewTimer(0)
-	var timeouts timedHeap
-
-	// release connection related resources
-	releaseConn := func(ident int) {
-		if desc, ok := descs[ident]; ok {
-			// delete from heap
-			for e := desc.readers.Front(); e != nil; e = e.Next() {
-				tcb := e.Value.(*aiocb)
-				if !tcb.deadline.IsZero() {
-					heap.Remove(&timeouts, tcb.idx)
-				}
-			}
-
-			for e := desc.writers.Front(); e != nil; e = e.Next() {
-				tcb := e.Value.(*aiocb)
-				if !tcb.deadline.IsZero() {
-					heap.Remove(&timeouts, tcb.idx)
-				}
-			}
-
-			delete(descs, ident)
-			delete(connIdents, desc.ptr)
-			// close socket file descriptor duplicated from net.Conn
-			syscall.Close(ident)
-		}
-	}
 
 	// defer function to release all resources
 	defer func() {
-		for ident := range descs {
-			releaseConn(ident)
+		for ident := range w.descs {
+			w.releaseConn(ident)
 		}
 	}()
 
@@ -385,193 +389,15 @@ func (w *Watcher) loop() {
 			copy(pending, w.pending)
 			w.pending = w.pending[:0]
 			w.pendingMutex.Unlock()
+			w.handlePending(pending)
 
-			for _, pcb := range pending {
-				ident, ok := connIdents[pcb.ptr]
-				// resource release
-				if pcb.op == opDelete && ok {
-					releaseConn(ident)
-					continue
-				}
-
-				// handling new connection
-				var desc *fdDesc
-				if ok {
-					desc = descs[ident]
-				} else {
-					if dupfd, err := dupconn(pcb.conn); err != nil {
-						select {
-						case w.chNotifyCompletion <- []OpResult{{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: err, Context: pcb.ctx}}:
-						case <-w.die:
-							return
-						}
-						continue
-					} else {
-						// assign idents
-						ident = dupfd
-
-						// unexpected situation, should notify caller if we cannot dup(2)
-						werr := w.pfd.Watch(ident)
-						if werr != nil {
-							select {
-							case w.chNotifyCompletion <- []OpResult{{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: werr, Context: pcb.ctx}}:
-							case <-w.die:
-								return
-							}
-							continue
-						}
-
-						// file description bindings
-						desc = &fdDesc{ptr: pcb.ptr}
-						descs[ident] = desc
-						connIdents[pcb.ptr] = ident
-						// as we duplicated successfully, we're safe to
-						// close the original connection
-						pcb.conn.Close()
-
-						// the conn is still useful for GC finalizer.
-						// note finalizer function cannot hold reference to net.Conn,
-						// if not it will never be GC-ed.
-						runtime.SetFinalizer(pcb.conn, func(c net.Conn) {
-							select {
-							case gc <- reflect.ValueOf(c).Pointer():
-							case <-w.die:
-							}
-						})
-					}
-				}
-
-				// operations splitted into different buckets
-				switch pcb.op {
-				case OpRead:
-					// try immediately if readable/writable
-					if desc.readers.Len() == 0 && desc.status&fdRead > 0 {
-						if w.tryRead(ident, pcb) {
-							select {
-							case w.chNotifyCompletion <- []OpResult{{Operation: OpRead, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}}:
-							case <-w.die:
-								return
-							}
-							continue
-						} else {
-							desc.status &^= fdRead
-						}
-					}
-					// enqueue for poller events
-					pcb.l = &desc.readers
-					pcb.elem = pcb.l.PushBack(pcb)
-				case OpWrite:
-					if desc.writers.Len() == 0 && desc.status&fdWrite > 0 {
-						if w.tryWrite(ident, pcb) {
-							select {
-							case w.chNotifyCompletion <- []OpResult{{Operation: OpWrite, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}}:
-							case <-w.die:
-								return
-							}
-							continue
-						} else {
-							desc.status &^= fdWrite
-						}
-					}
-					pcb.l = &desc.writers
-					pcb.elem = pcb.l.PushBack(pcb)
-				}
-
-				// push to heap for timeout operation
-				if !pcb.deadline.IsZero() {
-					heap.Push(&timeouts, pcb)
-					if timeouts.Len() == 1 {
-						timer.Reset(pcb.deadline.Sub(time.Now()))
-					}
-				}
-			}
-			pending = pending[:0]
 		case pe := <-w.chEventNotify: // poller events
-			// suppose fd(s) being polled is closed by conn.Close() from outside after chanrecv,
-			// and a new conn has re-opened with the same handler number(fd). The read and write
-			// on this fd is fatal.
-			//
-			// Note poller will remove closed fd automatically epoll(7), kqueue(2) and silently.
-			// To solve this problem watcher will dup() a new fd from net.Conn, which uniquely
-			// identified by 'e.ident', all library operation will be based on 'e.ident',
-			// then IO operation is impossible to misread or miswrite on re-created fd.
-			//log.Println(e)
-			results := w.swapResults[w.swapResultIdx][:0]
-			for _, e := range pe {
-				if e.err { // fd error
-					releaseConn(e.ident)
-				}
+			w.handleEvents(pe)
 
-				if desc, ok := descs[e.ident]; ok {
-					if e.r {
-						desc.status |= fdRead
-						var next *list.Element
-						for elem := desc.readers.Front(); elem != nil; elem = next {
-							next = elem.Next()
-							pcb := elem.Value.(*aiocb)
-							if w.tryRead(e.ident, pcb) {
-								results = append(results, OpResult{Operation: OpRead, Conn: pcb.conn, Buffer: pcb.buffer, IsSwapBuffer: pcb.useSwap, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
-								if pcb.notifyCaller {
-									select {
-									case w.chNotifyCompletion <- results:
-										w.swapResultIdx = (w.swapResultIdx + 1) % len(w.swapResults)
-										results = w.swapResults[w.swapResultIdx][:0]
-									case <-w.die:
-										return
-									}
-								}
-								desc.readers.Remove(elem)
-								if !pcb.deadline.IsZero() {
-									heap.Remove(&timeouts, pcb.idx)
-								}
-								if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
-									break
-								}
-							} else {
-								desc.status &^= fdRead
-								break
-							}
-						}
-					}
-
-					if e.w {
-						desc.status |= fdWrite
-						var next *list.Element
-						for elem := desc.writers.Front(); elem != nil; elem = next {
-							next = elem.Next()
-							pcb := elem.Value.(*aiocb)
-							if w.tryWrite(e.ident, pcb) {
-								results = append(results, OpResult{Operation: OpWrite, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
-								desc.writers.Remove(elem)
-								if !pcb.deadline.IsZero() {
-									heap.Remove(&timeouts, pcb.idx)
-								}
-								if pcb.err != nil {
-									break
-								}
-							} else {
-								desc.status &^= fdWrite
-								break
-							}
-						}
-					}
-				}
-			}
-
-			// batch notification
-			if len(results) > 0 {
-				select {
-				case w.chNotifyCompletion <- results:
-					w.swapResultIdx = (w.swapResultIdx + 1) % len(w.swapResults)
-				case <-w.die:
-					return
-				}
-			}
-
-		case <-timer.C: // timeout heap
-			for timeouts.Len() > 0 {
+		case <-w.timer.C: // timeout heap
+			for w.timeouts.Len() > 0 {
 				now := time.Now()
-				pcb := timeouts[0]
+				pcb := w.timeouts[0]
 				if now.After(pcb.deadline) {
 					// remove from list
 					pcb.l.Remove(pcb.elem)
@@ -581,18 +407,205 @@ func (w *Watcher) loop() {
 					case <-w.die:
 						return
 					}
-					heap.Pop(&timeouts)
+					heap.Pop(&w.timeouts)
 				} else {
-					timer.Reset(pcb.deadline.Sub(now))
+					w.timer.Reset(pcb.deadline.Sub(now))
 					break
 				}
 			}
-		case ptr := <-gc: // gc recycled net.Conn
-			if ident, ok := connIdents[ptr]; ok {
+		case ptr := <-w.gc: // gc recycled net.Conn
+			if ident, ok := w.connIdents[ptr]; ok {
 				// since it's gc-ed, queue is impossible to hold net.Conn
 				// we don't have to send to chIOCompletion,just release here
-				releaseConn(ident)
+				w.releaseConn(ident)
 			}
+		case <-w.die:
+			return
+		}
+	}
+}
+
+// for loop handling pending requests
+func (w *Watcher) handlePending(pending []*aiocb) {
+	for _, pcb := range pending {
+		ident, ok := w.connIdents[pcb.ptr]
+		// resource release
+		if pcb.op == opDelete && ok {
+			w.releaseConn(ident)
+			continue
+		}
+
+		// handling new connection
+		var desc *fdDesc
+		if ok {
+			desc = w.descs[ident]
+		} else {
+			if dupfd, err := dupconn(pcb.conn); err != nil {
+				select {
+				case w.chNotifyCompletion <- []OpResult{{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: err, Context: pcb.ctx}}:
+				case <-w.die:
+					return
+				}
+				continue
+			} else {
+				// assign idents
+				ident = dupfd
+
+				// unexpected situation, should notify caller if we cannot dup(2)
+				werr := w.pfd.Watch(ident)
+				if werr != nil {
+					select {
+					case w.chNotifyCompletion <- []OpResult{{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: werr, Context: pcb.ctx}}:
+					case <-w.die:
+						return
+					}
+					continue
+				}
+
+				// file description bindings
+				desc = &fdDesc{ptr: pcb.ptr}
+				w.descs[ident] = desc
+				w.connIdents[pcb.ptr] = ident
+				// as we duplicated successfully, we're safe to
+				// close the original connection
+				pcb.conn.Close()
+
+				// the conn is still useful for GC finalizer.
+				// note finalizer function cannot hold reference to net.Conn,
+				// if not it will never be GC-ed.
+				runtime.SetFinalizer(pcb.conn, func(c net.Conn) {
+					select {
+					case w.gc <- reflect.ValueOf(c).Pointer():
+					case <-w.die:
+					}
+				})
+			}
+		}
+
+		// operations splitted into different buckets
+		switch pcb.op {
+		case OpRead:
+			// try immediately if readable/writable
+			if desc.readers.Len() == 0 && desc.status&fdRead > 0 {
+				if w.tryRead(ident, pcb) {
+					select {
+					case w.chNotifyCompletion <- []OpResult{{Operation: OpRead, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}}:
+					case <-w.die:
+						return
+					}
+					continue
+				} else {
+					desc.status &^= fdRead
+				}
+			}
+			// enqueue for poller events
+			pcb.l = &desc.readers
+			pcb.elem = pcb.l.PushBack(pcb)
+		case OpWrite:
+			if desc.writers.Len() == 0 && desc.status&fdWrite > 0 {
+				if w.tryWrite(ident, pcb) {
+					select {
+					case w.chNotifyCompletion <- []OpResult{{Operation: OpWrite, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}}:
+					case <-w.die:
+						return
+					}
+					continue
+				} else {
+					desc.status &^= fdWrite
+				}
+			}
+			pcb.l = &desc.writers
+			pcb.elem = pcb.l.PushBack(pcb)
+		}
+
+		// push to heap for timeout operation
+		if !pcb.deadline.IsZero() {
+			heap.Push(&w.timeouts, pcb)
+			if w.timeouts.Len() == 1 {
+				w.timer.Reset(pcb.deadline.Sub(time.Now()))
+			}
+		}
+	}
+}
+
+// handle poller events
+func (w *Watcher) handleEvents(pe pollerEvents) {
+	// suppose fd(s) being polled is closed by conn.Close() from outside after chanrecv,
+	// and a new conn has re-opened with the same handler number(fd). The read and write
+	// on this fd is fatal.
+	//
+	// Note poller will remove closed fd automatically epoll(7), kqueue(2) and silently.
+	// To solve this problem watcher will dup() a new fd from net.Conn, which uniquely
+	// identified by 'e.ident', all library operation will be based on 'e.ident',
+	// then IO operation is impossible to misread or miswrite on re-created fd.
+	//log.Println(e)
+	results := w.swapResults[w.swapResultIdx][:0]
+	for _, e := range pe {
+		if e.err { // fd error
+			w.releaseConn(e.ident)
+		}
+
+		if desc, ok := w.descs[e.ident]; ok {
+			if e.r {
+				desc.status |= fdRead
+				var next *list.Element
+				for elem := desc.readers.Front(); elem != nil; elem = next {
+					next = elem.Next()
+					pcb := elem.Value.(*aiocb)
+					if w.tryRead(e.ident, pcb) {
+						results = append(results, OpResult{Operation: OpRead, Conn: pcb.conn, Buffer: pcb.buffer, IsSwapBuffer: pcb.useSwap, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+						if pcb.notifyCaller {
+							select {
+							case w.chNotifyCompletion <- results:
+								w.swapResultIdx = (w.swapResultIdx + 1) % len(w.swapResults)
+								results = w.swapResults[w.swapResultIdx][:0]
+							case <-w.die:
+								return
+							}
+						}
+						desc.readers.Remove(elem)
+						if !pcb.deadline.IsZero() {
+							heap.Remove(&w.timeouts, pcb.idx)
+						}
+						if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
+							break
+						}
+					} else {
+						desc.status &^= fdRead
+						break
+					}
+				}
+			}
+
+			if e.w {
+				desc.status |= fdWrite
+				var next *list.Element
+				for elem := desc.writers.Front(); elem != nil; elem = next {
+					next = elem.Next()
+					pcb := elem.Value.(*aiocb)
+					if w.tryWrite(e.ident, pcb) {
+						results = append(results, OpResult{Operation: OpWrite, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+						desc.writers.Remove(elem)
+						if !pcb.deadline.IsZero() {
+							heap.Remove(&w.timeouts, pcb.idx)
+						}
+						if pcb.err != nil {
+							break
+						}
+					} else {
+						desc.status &^= fdWrite
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// batch notification
+	if len(results) > 0 {
+		select {
+		case w.chNotifyCompletion <- results:
+			w.swapResultIdx = (w.swapResultIdx + 1) % len(w.swapResults)
 		case <-w.die:
 			return
 		}

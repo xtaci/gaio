@@ -593,40 +593,25 @@ func testDeadline(t *testing.T, par int) {
 }
 
 func BenchmarkEcho128B(b *testing.B) {
-	benchmarkEcho(b, 128)
+	benchmarkEcho(b, 128, 100)
 }
 
 func BenchmarkEcho4K(b *testing.B) {
-	benchmarkEcho(b, 4096)
+	benchmarkEcho(b, 4096, 100)
 }
 
 func BenchmarkEcho64K(b *testing.B) {
-	benchmarkEcho(b, 65536)
+	benchmarkEcho(b, 65536, 100)
 }
 
 func BenchmarkEcho128K(b *testing.B) {
-	benchmarkEcho(b, 128*1024)
+	benchmarkEcho(b, 128*1024, 100)
 }
 
-func benchmarkEcho(b *testing.B, bufsize int) {
+func benchmarkEcho(b *testing.B, bufsize int, numconn int) {
+	b.Log("benchmark echo with message size:", bufsize, "with", numconn, "parallel connections, for", b.N, "times")
 	ln := echoServer(b, bufsize)
 	defer ln.Close()
-
-	numLoops := b.N
-	addr, _ := net.ResolveTCPAddr("tcp", ln.Addr().String())
-	tx := make([]byte, bufsize)
-	_, err := io.ReadFull(rand.Reader, tx)
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	rx := make([]byte, bufsize)
-	conn, err := net.DialTCP("tcp", nil, addr)
-	if err != nil {
-		b.Fatal("dial:", err)
-		return
-	}
-	defer conn.Close()
 
 	w, err := NewWatcher()
 	if err != nil {
@@ -634,15 +619,26 @@ func benchmarkEcho(b *testing.B, bufsize int) {
 	}
 	defer w.Close()
 
-	b.Log("sending", len(tx), "bytes for", b.N, "times", "with buffer size:", bufsize)
+	addr, _ := net.ResolveTCPAddr("tcp", ln.Addr().String())
+	for i := 0; i < numconn; i++ {
+		rx := make([]byte, bufsize)
+		tx := make([]byte, bufsize)
+		conn, err := net.DialTCP("tcp", nil, addr)
+		if err != nil {
+			b.Fatal("dial:", err)
+			return
+		}
+		w.Write(nil, conn, tx)
+		w.Read(nil, conn, rx)
+		defer conn.Close()
+	}
+
 	b.ReportAllocs()
-	b.SetBytes(int64(len(tx)))
+	b.SetBytes(int64(bufsize * numconn))
 	b.ResetTimer()
 
 	count := 0
-	target := len(tx) * numLoops
-	w.Write(nil, conn, tx)
-	w.Read(nil, conn, rx)
+	target := bufsize * b.N * numconn
 	for {
 		results, err := w.WaitIO()
 		if err != nil {
@@ -656,7 +652,7 @@ func benchmarkEcho(b *testing.B, bufsize int) {
 				if res.Error != nil {
 					b.Fatal("read:", res.Error)
 				}
-				err := w.Write(nil, res.Conn, tx)
+				err := w.Write(nil, res.Conn, res.Buffer)
 				if err != nil {
 					b.Log("wirte:", err)
 				}
@@ -669,7 +665,7 @@ func benchmarkEcho(b *testing.B, bufsize int) {
 					return
 				}
 				//log.Println("count:", count, "target:", target)
-				err := w.Read(nil, res.Conn, rx)
+				err := w.Read(nil, res.Conn, res.Buffer)
 				if err != nil {
 					b.Log("read:", err)
 				}

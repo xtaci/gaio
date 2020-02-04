@@ -593,19 +593,35 @@ func testDeadline(t *testing.T, par int) {
 }
 
 func BenchmarkEcho128B(b *testing.B) {
-	benchmarkEcho(b, 128, 100)
+	benchmarkEcho(b, 128, 1)
 }
 
 func BenchmarkEcho4K(b *testing.B) {
-	benchmarkEcho(b, 4096, 100)
+	benchmarkEcho(b, 4096, 1)
 }
 
 func BenchmarkEcho64K(b *testing.B) {
-	benchmarkEcho(b, 65536, 100)
+	benchmarkEcho(b, 65536, 1)
 }
 
 func BenchmarkEcho128K(b *testing.B) {
-	benchmarkEcho(b, 128*1024, 100)
+	benchmarkEcho(b, 128*1024, 1)
+}
+
+func BenchmarkEcho128BParallel(b *testing.B) {
+	benchmarkEcho(b, 128, 128)
+}
+
+func BenchmarkEcho4KParallel(b *testing.B) {
+	benchmarkEcho(b, 4096, 128)
+}
+
+func BenchmarkEcho64KParallel(b *testing.B) {
+	benchmarkEcho(b, 65536, 128)
+}
+
+func BenchmarkEcho128KParallel(b *testing.B) {
+	benchmarkEcho(b, 128*1024, 128)
 }
 
 func benchmarkEcho(b *testing.B, bufsize int, numconn int) {

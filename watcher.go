@@ -128,7 +128,7 @@ type Watcher struct {
 	dieOnce sync.Once
 }
 
-// NewWatcher creates a management object for monitoring file descriptors.
+// NewWatcherSize creates a management object for monitoring file descriptors.
 // 'bufsize' sets the internal swap buffer size for Read() with nil, 2 slices with'bufsize'
 // will be allocated for performance.
 func NewWatcherSize(bufsize int) (*Watcher, error) {

@@ -42,7 +42,6 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 				switch res.Operation {
 				case OpRead:
 					if res.Error != nil {
-						log.Println("read error:", res.Error, res.Size)
 						w.Free(res.Conn)
 						continue
 					}
@@ -57,7 +56,6 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 					w.Write(nil, res.Conn, res.Buffer[:res.Size])
 				case OpWrite:
 					if res.Error != nil {
-						log.Println("write error:", res.Error, res.Size)
 						w.Free(res.Conn)
 						continue
 					}

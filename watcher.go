@@ -368,7 +368,6 @@ func (w *Watcher) releaseConn(ident int) {
 
 // the core event loop of this watcher
 func (w *Watcher) loop() {
-
 	// defer function to release all resources
 	defer func() {
 		for ident := range w.descs {
@@ -413,12 +412,14 @@ func (w *Watcher) loop() {
 					break
 				}
 			}
+
 		case ptr := <-w.gc: // gc recycled net.Conn
 			if ident, ok := w.connIdents[ptr]; ok {
 				// since it's gc-ed, queue is impossible to hold net.Conn
 				// we don't have to send to chIOCompletion,just release here
 				w.releaseConn(ident)
 			}
+
 		case <-w.die:
 			return
 		}
@@ -429,7 +430,7 @@ func (w *Watcher) loop() {
 func (w *Watcher) handlePending(pending []*aiocb) {
 	for _, pcb := range pending {
 		ident, ok := w.connIdents[pcb.ptr]
-		// resource release
+		// resource releasing operation
 		if pcb.op == opDelete && ok {
 			w.releaseConn(ident)
 			continue
@@ -541,7 +542,7 @@ func (w *Watcher) handleEvents(pe pollerEvents) {
 	//log.Println(e)
 	results := w.swapResults[w.swapResultIdx][:0]
 	for _, e := range pe {
-		if e.err { // fd error
+		if e.err { // poller error, release explictly
 			w.releaseConn(e.ident)
 		}
 

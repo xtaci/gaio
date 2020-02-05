@@ -28,13 +28,13 @@ And by eliminating **one goroutine per one connection scheme** with **Edge-Trigg
 
 ## Features
 
-1. Only a fixed number of goroutines will be created per [gaio.Watcher](https://godoc.org/github.com/xtaci/gaio#Watcher)(the core object of this library).
+1. Designed for **>C10K** concurrent connections, **maximized parallelism**, and nice single connection throughput. 
 2. [Read(ctx, conn, buffer)](https://godoc.org/github.com/xtaci/gaio#Watcher.Read) can be called with `nil` buffer to make use of **internal swap buffer**.
-3. **Non-intrusive** design, this library works with [net.Listener](https://golang.org/pkg/net/#Listener) and [net.Conn](https://golang.org/pkg/net/#Conn). (with [syscall.RawConn](https://golang.org/pkg/syscall/#RawConn) support)
+3. **Non-intrusive** design, this library works with [net.Listener](https://golang.org/pkg/net/#Listener) and [net.Conn](https://golang.org/pkg/net/#Conn). (with [syscall.RawConn](https://golang.org/pkg/syscall/#RawConn) support), **easy to be integrated** into your existing software.
 4. **Amortized context switching cost** for tiny messages, able to handle frequent chat message exchanging.
 5. Application can decide **when to delegate** [net.Conn](https://golang.org/pkg/net/#Conn) to `gaio`, for example, you can delegate [net.Conn](https://golang.org/pkg/net/#Conn) to `gaio` after some handshaking procedure, or having some [net.TCPConn](https://golang.org/pkg/net/#TCPConn) settings done.
 6. Application can decide **when to submit** read or write requests, per-connection [back-pressure](https://en.wikipedia.org/wiki/Transmission_Control_Protocol#Flow_control) can be propagated to peer to slow down sending. This features is particular useful to transmit data from A to B, which B is slower than A.
-7. Tiny, less than 1000 LOC, easy to debug.
+7. Tiny, around 1000 LOC, easy to debug.
 8. Support for Linux, BSD.
 
 ## Conventions
@@ -269,6 +269,7 @@ Equation	Y = 8.613e-005*X + 0.08278
 ## References
 
 * https://zhuanlan.zhihu.com/p/102890337 -- gaio小记
+* https://en.wikipedia.org/wiki/C10k_problem -- C10K
 * https://golang.org/src/runtime/netpoll_epoll.go -- epoll in golang 
 * https://www.freebsd.org/cgi/man.cgi?query=kqueue&sektion=2 -- kqueue
 * https://idea.popcount.org/2017-02-20-epoll-is-fundamentally-broken-12/ -- epoll is fundamentally broken

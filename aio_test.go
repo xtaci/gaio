@@ -376,7 +376,6 @@ func testParallel(t *testing.T, par int, msgsize int) {
 	}
 	defer w.Close()
 
-	die := make(chan struct{})
 	go func() {
 		for i := 0; i < par; i++ {
 			data := make([]byte, msgsize)
@@ -384,7 +383,6 @@ func testParallel(t *testing.T, par int, msgsize int) {
 			if err != nil {
 				log.Fatal(err)
 			}
-			defer conn.Close()
 
 			// send
 			err = w.Write(nil, conn, data)
@@ -392,7 +390,6 @@ func testParallel(t *testing.T, par int, msgsize int) {
 				log.Fatal(err)
 			}
 		}
-		<-die
 	}()
 
 	nbytes := 0
@@ -427,7 +424,6 @@ func testParallel(t *testing.T, par int, msgsize int) {
 				nbytes += res.Size
 				if nbytes >= ntotal {
 					t.Log("completed:", nbytes)
-					close(die)
 					return
 				}
 			}
@@ -454,7 +450,6 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 	}
 	defer w.Close()
 
-	die := make(chan struct{})
 	go func() {
 		for i := 0; i < par; i++ {
 			data := make([]byte, msgsize)
@@ -462,7 +457,6 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 			if err != nil {
 				log.Fatal(err)
 			}
-			defer conn.Close()
 
 			// send
 			err = w.Write(nil, conn, data)
@@ -470,7 +464,6 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 				log.Fatal(err)
 			}
 		}
-		<-die
 	}()
 
 	nbytes := 0
@@ -514,7 +507,6 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 				nbytes += res.Size
 				if nbytes >= ntotal {
 					t.Log("completed:", nbytes)
-					close(die)
 					return
 				}
 			}

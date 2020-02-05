@@ -560,9 +560,6 @@ func (w *Watcher) handleEvents(pe pollerEvents) {
 						if !pcb.deadline.IsZero() {
 							heap.Remove(&w.timeouts, pcb.idx)
 						}
-						if pcb.err != nil || (pcb.size == 0 && pcb.err == nil) {
-							break
-						}
 					} else {
 						desc.status &^= fdRead
 						break
@@ -581,9 +578,6 @@ func (w *Watcher) handleEvents(pe pollerEvents) {
 						desc.writers.Remove(elem)
 						if !pcb.deadline.IsZero() {
 							heap.Remove(&w.timeouts, pcb.idx)
-						}
-						if pcb.err != nil {
-							break
 						}
 					} else {
 						desc.status &^= fdWrite

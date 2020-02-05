@@ -535,10 +535,6 @@ func (w *Watcher) handleEvents(pe pollerEvents) {
 	//log.Println(e)
 	var results []OpResult
 	for _, e := range pe {
-		if e.err { // poller error, release explictly
-			w.releaseConn(e.ident)
-		}
-
 		if desc, ok := w.descs[e.ident]; ok {
 			if e.r {
 				desc.status |= fdRead
@@ -584,6 +580,10 @@ func (w *Watcher) handleEvents(pe pollerEvents) {
 						break
 					}
 				}
+			}
+
+			if e.err { // poller error, release explicitly
+				w.releaseConn(e.ident)
 			}
 		}
 	}

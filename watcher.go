@@ -313,15 +313,22 @@ func (w *Watcher) tryWrite(fd int, pcb *aiocb) bool {
 	var ew error
 
 	if pcb.buffer != nil {
-		nw, ew = syscall.Write(fd, pcb.buffer[pcb.size:])
-		pcb.err = ew
-		if ew == syscall.EAGAIN {
-			return false
-		}
+		for {
+			nw, ew = syscall.Write(fd, pcb.buffer[pcb.size:])
+			pcb.err = ew
+			if ew == syscall.EAGAIN {
+				return false
+			}
 
-		// if ew is nil, accumulate bytes written
-		if ew == nil {
-			pcb.size += nw
+			if ew == syscall.EINTR {
+				continue
+			}
+
+			// if ew is nil, accumulate bytes written
+			if ew == nil {
+				pcb.size += nw
+			}
+			break
 		}
 	}
 

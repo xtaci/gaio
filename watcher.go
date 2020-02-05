@@ -113,8 +113,6 @@ type Watcher struct {
 
 	// IO-completion events to user
 	chNotifyCompletion chan []OpResult
-	swapResults        [][]OpResult
-	swapResultIdx      int
 
 	// lock for pending io operations
 	// aiocb is associated to fd
@@ -164,12 +162,6 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.swapBuffer = make([][]byte, 2)
 	for i := 0; i < len(w.swapBuffer); i++ {
 		w.swapBuffer[i] = make([]byte, bufsize)
-	}
-
-	// swapResults for batch notification
-	w.swapResults = make([][]OpResult, 2)
-	for i := 0; i < len(w.swapResults); i++ {
-		w.swapResults[i] = make([]OpResult, 0, maxEvents)
 	}
 
 	// init loop related data structures
@@ -545,7 +537,7 @@ func (w *Watcher) handleEvents(pe pollerEvents) {
 	// identified by 'e.ident', all library operation will be based on 'e.ident',
 	// then IO operation is impossible to misread or miswrite on re-created fd.
 	//log.Println(e)
-	results := w.swapResults[w.swapResultIdx][:0]
+	var results []OpResult
 	for _, e := range pe {
 		if e.err { // poller error, release explictly
 			w.releaseConn(e.ident)
@@ -563,8 +555,7 @@ func (w *Watcher) handleEvents(pe pollerEvents) {
 						if pcb.notifyCaller {
 							select {
 							case w.chNotifyCompletion <- results:
-								w.swapResultIdx = (w.swapResultIdx + 1) % len(w.swapResults)
-								results = w.swapResults[w.swapResultIdx][:0]
+								results = nil
 							case <-w.die:
 								return
 							}
@@ -611,7 +602,6 @@ func (w *Watcher) handleEvents(pe pollerEvents) {
 	if len(results) > 0 {
 		select {
 		case w.chNotifyCompletion <- results:
-			w.swapResultIdx = (w.swapResultIdx + 1) % len(w.swapResults)
 		case <-w.die:
 			return
 		}

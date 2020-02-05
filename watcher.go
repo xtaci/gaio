@@ -130,7 +130,7 @@ type Watcher struct {
 	// or in neither of them.
 	timeouts timedHeap
 	timer    *time.Timer
-	gc       chan uintptr // for garbage collector
+	gc       chan net.Conn // for garbage collector
 
 	die     chan struct{}
 	dieOnce sync.Once
@@ -163,7 +163,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	// init loop related data structures
 	w.descs = make(map[int]*fdDesc)
 	w.connIdents = make(map[uintptr]int)
-	w.gc = make(chan uintptr)
+	w.gc = make(chan net.Conn)
 	w.timer = time.NewTimer(0)
 
 	// watcher finalizer for system resources
@@ -406,7 +406,8 @@ func (w *Watcher) loop() {
 				}
 			}
 
-		case ptr := <-w.gc: // gc recycled net.Conn
+		case conn := <-w.gc: // gc recycled net.Conn
+			ptr := reflect.ValueOf(conn).Pointer()
 			if ident, ok := w.connIdents[ptr]; ok {
 				// since it's gc-ed, queue is impossible to hold net.Conn
 				// we don't have to send to chIOCompletion,just release here
@@ -469,7 +470,7 @@ func (w *Watcher) handlePending(pending []*aiocb) {
 				// if not it will never be GC-ed.
 				runtime.SetFinalizer(pcb.conn, func(c net.Conn) {
 					select {
-					case w.gc <- reflect.ValueOf(c).Pointer():
+					case w.gc <- c:
 					case <-w.die:
 					}
 				})

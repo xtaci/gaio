@@ -53,12 +53,6 @@ func (p *poller) Watch(fd int) error {
 
 func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 	events := make([]syscall.Kevent_t, maxEvents)
-	swapEvents := make([]pollerEvents, 2)
-	swapIdx := 0
-	for i := 0; i < len(swapEvents); i++ {
-		swapEvents[i] = make([]event, 0, maxEvents)
-	}
-
 	var changes []syscall.Kevent_t
 	for {
 		p.awaitingMutex.Lock()
@@ -81,10 +75,7 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 		}
 		changes = changes[:0]
 
-		pe := swapEvents[swapIdx]
-		pe = pe[:0]
-		swapIdx = (swapIdx + 1) % len(swapEvents)
-
+		pe := make([]event, 0, n)
 		for i := 0; i < n; i++ {
 			ev := &events[i]
 			if ev.Ident != 0 {

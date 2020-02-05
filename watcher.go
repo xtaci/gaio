@@ -96,10 +96,6 @@ type OpResult struct {
 	Error error
 }
 
-const (
-	eventQueueSize = 128
-)
-
 // Watcher will monitor events and process async-io request(s),
 type Watcher struct {
 	// poll fd
@@ -152,7 +148,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.pfd = pfd
 
 	// loop related chan
-	w.chEventNotify = make(chan pollerEvents, eventQueueSize)
+	w.chEventNotify = make(chan pollerEvents)
 	w.chPendingNotify = make(chan struct{}, 1)
 	w.chNotifyCompletion = make(chan []OpResult)
 	w.die = make(chan struct{})

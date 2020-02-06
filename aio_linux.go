@@ -78,7 +78,10 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 		p.awaitingMutex.Unlock()
 
 		n, err := syscall.EpollWait(p.pfd, events, -1)
-		if err != nil && err != syscall.EINTR {
+		if err == syscall.EINTR {
+			continue
+		}
+		if err != nil {
 			return
 		}
 

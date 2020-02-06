@@ -19,7 +19,16 @@ type event struct {
 // events from epoll_wait passing to loop,should be in batch for atomicity.
 // and batch processing is the key to amortize context switching costs for
 // tiny messages.
-type pollerEvents []event
+type pollerEvents struct {
+	events []event
+	done   chan struct{}
+}
+
+func newPollerEvents() *pollerEvents {
+	pe := new(pollerEvents)
+	pe.done = make(chan struct{}, 1)
+	return pe
+}
 
 // dupconn use RawConn to dup() file descriptor
 func dupconn(conn net.Conn) (newfd int, err error) {

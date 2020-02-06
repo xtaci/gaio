@@ -66,8 +66,10 @@ func (p *poller) Watch(fd int) error {
 	return err
 }
 
-func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
+func (p *poller) Wait(chEventNotify chan *pollerEvents, die chan struct{}) {
 	events := make([]syscall.EpollEvent, maxEvents)
+	pe := newPollerEvents()
+
 	for {
 		// check for new awaiting
 		p.awaitingMutex.Lock()
@@ -85,7 +87,8 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 			return
 		}
 
-		pe := make([]event, 0, n)
+		pe.events = pe.events[:0]
+
 		for i := 0; i < n; i++ {
 			ev := &events[i]
 			if int(ev.Fd) == p.efd {
@@ -109,12 +112,19 @@ func (p *poller) Wait(chEventNotify chan pollerEvents, die chan struct{}) {
 				if ev.Events == syscall.EPOLLERR {
 					e.err = true
 				}
-				pe = append(pe, e)
+				pe.events = append(pe.events, e)
 			}
 		}
 
+		// synchonrous waiting for event processing
 		select {
 		case chEventNotify <- pe:
+		case <-die:
+			return
+		}
+
+		select {
+		case <-pe.done:
 		case <-die:
 			return
 		}

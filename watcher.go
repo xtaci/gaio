@@ -64,15 +64,8 @@ type aiocb struct {
 	deadline     time.Time
 }
 
-// readable & writable bitmask
-const (
-	fdRead  byte = 1
-	fdWrite      = 2
-)
-
 // fdDesc contains all data structures associated to fd
 type fdDesc struct {
-	status  byte      // fd read/write status
 	readers list.List // all read/write requests
 	writers list.List
 	ptr     uintptr // pointer to net.Conn
@@ -102,7 +95,7 @@ type Watcher struct {
 	pfd *poller
 
 	// netpoll events
-	chEventNotify chan pollerEvents
+	chEventNotify chan *pollerEvents
 
 	// events from user
 	chPendingNotify chan struct{}
@@ -148,7 +141,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.pfd = pfd
 
 	// loop related chan
-	w.chEventNotify = make(chan pollerEvents)
+	w.chEventNotify = make(chan *pollerEvents)
 	w.chPendingNotify = make(chan struct{}, 1)
 	w.chNotifyCompletion = make(chan []OpResult)
 	w.die = make(chan struct{})
@@ -488,7 +481,7 @@ func (w *Watcher) handlePending(pending []*aiocb) {
 		switch pcb.op {
 		case OpRead:
 			// try immediately if readable/writable
-			if desc.readers.Len() == 0 && desc.status&fdRead > 0 {
+			if desc.readers.Len() == 0 {
 				if w.tryRead(ident, pcb) {
 					select {
 					case w.chNotifyCompletion <- []OpResult{{Operation: OpRead, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}}:
@@ -496,15 +489,13 @@ func (w *Watcher) handlePending(pending []*aiocb) {
 						return
 					}
 					continue
-				} else {
-					desc.status &^= fdRead
 				}
 			}
 			// enqueue for poller events
 			pcb.l = &desc.readers
 			pcb.elem = pcb.l.PushBack(pcb)
 		case OpWrite:
-			if desc.writers.Len() == 0 && desc.status&fdWrite > 0 {
+			if desc.writers.Len() == 0 {
 				if w.tryWrite(ident, pcb) {
 					select {
 					case w.chNotifyCompletion <- []OpResult{{Operation: OpWrite, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}}:
@@ -512,8 +503,6 @@ func (w *Watcher) handlePending(pending []*aiocb) {
 						return
 					}
 					continue
-				} else {
-					desc.status &^= fdWrite
 				}
 			}
 			pcb.l = &desc.writers
@@ -531,7 +520,16 @@ func (w *Watcher) handlePending(pending []*aiocb) {
 }
 
 // handle poller events
-func (w *Watcher) handleEvents(pe pollerEvents) {
+func (w *Watcher) handleEvents(pe *pollerEvents) {
+	defer func() {
+		// done, poller can wait again
+		select {
+		case pe.done <- struct{}{}:
+		case <-w.die:
+			return
+		}
+	}()
+
 	// suppose fd(s) being polled is closed by conn.Close() from outside after chanrecv,
 	// and a new conn has re-opened with the same handler number(fd). The read and write
 	// on this fd is fatal.
@@ -542,10 +540,9 @@ func (w *Watcher) handleEvents(pe pollerEvents) {
 	// then IO operation is impossible to misread or miswrite on re-created fd.
 	//log.Println(e)
 	var results []OpResult
-	for _, e := range pe {
+	for _, e := range pe.events {
 		if desc, ok := w.descs[e.ident]; ok {
 			if e.r {
-				desc.status |= fdRead
 				var next *list.Element
 				for elem := desc.readers.Front(); elem != nil; elem = next {
 					next = elem.Next()
@@ -565,14 +562,12 @@ func (w *Watcher) handleEvents(pe pollerEvents) {
 							heap.Remove(&w.timeouts, pcb.idx)
 						}
 					} else {
-						desc.status &^= fdRead
 						break
 					}
 				}
 			}
 
 			if e.w {
-				desc.status |= fdWrite
 				var next *list.Element
 				for elem := desc.writers.Front(); elem != nil; elem = next {
 					next = elem.Next()
@@ -584,7 +579,6 @@ func (w *Watcher) handleEvents(pe pollerEvents) {
 							heap.Remove(&w.timeouts, pcb.idx)
 						}
 					} else {
-						desc.status &^= fdWrite
 						break
 					}
 				}

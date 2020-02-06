@@ -583,10 +583,6 @@ func (w *Watcher) handleEvents(pe *pollerEvents) {
 					}
 				}
 			}
-
-			if e.err { // poller error, release explicitly
-				w.releaseConn(e.ident)
-			}
 		}
 	}
 

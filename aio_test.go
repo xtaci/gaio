@@ -46,21 +46,21 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 						continue
 					}
 
-					if res.Size == 0 {
-						w.Free(res.Conn)
-						continue
+					if res.Size > 0 {
+						// write the data, we won't start to read again until write completes.
+						// so we only need at most 1 shared read/write buffer for a connection to echo
+						w.Write(nil, res.Conn, res.Buffer[:res.Size])
 					}
-
-					// write the data, we won't start to read again until write completes.
-					// so we only need at most 1 shared read/write buffer for a connection to echo
-					w.Write(nil, res.Conn, res.Buffer[:res.Size])
 				case OpWrite:
 					if res.Error != nil {
 						w.Free(res.Conn)
 						continue
 					}
-					// write complete, start read again
-					w.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
+
+					if res.Size > 0 {
+						// write complete, start read again
+						w.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
+					}
 				}
 			}
 		}

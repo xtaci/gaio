@@ -16,6 +16,7 @@
 <img src="logo.png" alt="gaio" height="300px" /> 
 
 ## Introduction
+[中文介绍](https://zhuanlan.zhihu.com/p/102890337)
 
 For a typical golang network program, you would first `conn := lis.Accept()` to get a connection and `go func(net.Conn)` to start a goroutine for handling the incoming data, then you would `buf:=make([]byte, 4096)` to allocate some buffer and finally waits on `conn.Read(buf)`.
 

@@ -70,6 +70,7 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 		for {
 			conn, err := ln.AcceptTCP()
 			if err != nil {
+				log.Println(err)
 				w.Close()
 				return
 			}

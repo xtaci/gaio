@@ -89,8 +89,13 @@ type OpResult struct {
 	Error error
 }
 
-// Watcher will monitor events and process async-io request(s),
+// a wrapper for watcher for gc purpose
 type Watcher struct {
+	*watcher
+}
+
+// watcher will monitor events and process async-io request(s),
+type watcher struct {
 	// poll fd
 	pfd *poller
 
@@ -133,7 +138,7 @@ type Watcher struct {
 // 'bufsize' sets the internal swap buffer size for Read() with nil, 2 slices with'bufsize'
 // will be allocated for performance.
 func NewWatcherSize(bufsize int) (*Watcher, error) {
-	w := new(Watcher)
+	w := new(watcher)
 	pfd, err := openPoll()
 	if err != nil {
 		return nil, err
@@ -159,20 +164,20 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.gc = make(chan net.Conn)
 	w.timer = time.NewTimer(0)
 
-	// watcher finalizer for system resources
-	runtime.SetFinalizer(w, func(w *Watcher) {
-		close(w.die)
-		w.pfd.Close()
-	})
-
 	go w.pfd.Wait(w.chEventNotify, w.die)
 	go w.loop()
-	return w, nil
+
+	// watcher finalizer for system resources
+	wrapper := &Watcher{watcher: w}
+	runtime.SetFinalizer(wrapper, func(wrapper *Watcher) {
+		wrapper.Close()
+	})
+
+	return wrapper, nil
 }
 
 // Close stops monitoring on events for all connections
-func (w *Watcher) Close() (err error) {
-	runtime.SetFinalizer(w, nil)
+func (w *watcher) Close() (err error) {
 	w.dieOnce.Do(func() {
 		close(w.die)
 		err = w.pfd.Close()
@@ -181,7 +186,7 @@ func (w *Watcher) Close() (err error) {
 }
 
 // notify new operations pending
-func (w *Watcher) notifyPending() {
+func (w *watcher) notifyPending() {
 	select {
 	case w.chPendingNotify <- struct{}{}:
 	default:
@@ -190,7 +195,7 @@ func (w *Watcher) notifyPending() {
 
 // WaitIO blocks until any read/write completion, or error.
 // An internal 'buf' returned is safe to use until next WaitIO returns.
-func (w *Watcher) WaitIO() (r []OpResult, err error) {
+func (w *watcher) WaitIO() (r []OpResult, err error) {
 	select {
 	case r := <-w.chNotifyCompletion:
 		return r, nil
@@ -202,20 +207,20 @@ func (w *Watcher) WaitIO() (r []OpResult, err error) {
 // Read submits an async read request on 'fd' with context 'ctx', using buffer 'buf'.
 // 'buf' can be set to nil to use internal buffer.
 // 'ctx' is the user-defined value passed through the gaio watcher unchanged.
-func (w *Watcher) Read(ctx interface{}, conn net.Conn, buf []byte) error {
+func (w *watcher) Read(ctx interface{}, conn net.Conn, buf []byte) error {
 	return w.aioCreate(ctx, OpRead, conn, buf, zeroTime)
 }
 
 // ReadTimeout submits an async read request on 'fd' with context 'ctx', using buffer 'buf', and
 // expected to be completed before 'deadline'.
 // 'ctx' is the user-defined value passed through the gaio watcher unchanged.
-func (w *Watcher) ReadTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
+func (w *watcher) ReadTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
 	return w.aioCreate(ctx, OpRead, conn, buf, deadline)
 }
 
 // Write submits an async write request on 'fd' with context 'ctx', using buffer 'buf'.
 // 'ctx' is the user-defined value passed through the gaio watcher unchanged.
-func (w *Watcher) Write(ctx interface{}, conn net.Conn, buf []byte) error {
+func (w *watcher) Write(ctx interface{}, conn net.Conn, buf []byte) error {
 	if len(buf) == 0 {
 		return ErrEmptyBuffer
 	}
@@ -225,7 +230,7 @@ func (w *Watcher) Write(ctx interface{}, conn net.Conn, buf []byte) error {
 // WriteTimeout submits an async write request on 'fd' with context 'ctx', using buffer 'buf', and
 // expected to be completed before 'deadline', 'buf' can be set to nil to use internal buffer.
 // 'ctx' is the user-defined value passed through the gaio watcher unchanged.
-func (w *Watcher) WriteTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
+func (w *watcher) WriteTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
 	if len(buf) == 0 {
 		return ErrEmptyBuffer
 	}
@@ -234,12 +239,12 @@ func (w *Watcher) WriteTimeout(ctx interface{}, conn net.Conn, buf []byte, deadl
 
 // Free let the watcher to release resources related to this conn immediately,
 // like socket file descriptors.
-func (w *Watcher) Free(conn net.Conn) error {
+func (w *watcher) Free(conn net.Conn) error {
 	return w.aioCreate(nil, opDelete, conn, nil, zeroTime)
 }
 
 // core async-io creation
-func (w *Watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byte, deadline time.Time) error {
+func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byte, deadline time.Time) error {
 	select {
 	case <-w.die:
 		return ErrWatcherClosed
@@ -260,7 +265,7 @@ func (w *Watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 }
 
 // tryRead will try to read data on aiocb and notify
-func (w *Watcher) tryRead(fd int, pcb *aiocb) bool {
+func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 	buf := pcb.buffer
 
 	var useSwap bool
@@ -301,7 +306,7 @@ func (w *Watcher) tryRead(fd int, pcb *aiocb) bool {
 	return true
 }
 
-func (w *Watcher) tryWrite(fd int, pcb *aiocb) bool {
+func (w *watcher) tryWrite(fd int, pcb *aiocb) bool {
 	var nw int
 	var ew error
 
@@ -334,7 +339,7 @@ func (w *Watcher) tryWrite(fd int, pcb *aiocb) bool {
 }
 
 // release connection related resources
-func (w *Watcher) releaseConn(ident int) {
+func (w *watcher) releaseConn(ident int) {
 	if desc, ok := w.descs[ident]; ok {
 		// delete from heap
 		for e := desc.readers.Front(); e != nil; e = e.Next() {
@@ -359,7 +364,7 @@ func (w *Watcher) releaseConn(ident int) {
 }
 
 // the core event loop of this watcher
-func (w *Watcher) loop() {
+func (w *watcher) loop() {
 	// defer function to release all resources
 	defer func() {
 		for ident := range w.descs {
@@ -421,7 +426,7 @@ func (w *Watcher) loop() {
 }
 
 // for loop handling pending requests
-func (w *Watcher) handlePending(pending []*aiocb) {
+func (w *watcher) handlePending(pending []*aiocb) {
 	for _, pcb := range pending {
 		ident, ok := w.connIdents[pcb.ptr]
 		// resource releasing operation
@@ -520,7 +525,7 @@ func (w *Watcher) handlePending(pending []*aiocb) {
 }
 
 // handle poller events
-func (w *Watcher) handleEvents(pe *pollerEvents) {
+func (w *watcher) handleEvents(pe *pollerEvents) {
 	defer func() {
 		// done, poller can wait again
 		select {

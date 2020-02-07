@@ -443,6 +443,9 @@ func (w *Watcher) handlePending(pending []*aiocb) {
 				}
 				continue
 			} else {
+				// as we duplicated successfully, we're safe to
+				// close the original connection
+				pcb.conn.Close()
 				// assign idents
 				ident = dupfd
 
@@ -461,9 +464,6 @@ func (w *Watcher) handlePending(pending []*aiocb) {
 				desc = &fdDesc{ptr: pcb.ptr}
 				w.descs[ident] = desc
 				w.connIdents[pcb.ptr] = ident
-				// as we duplicated successfully, we're safe to
-				// close the original connection
-				pcb.conn.Close()
 
 				// the conn is still useful for GC finalizer.
 				// note finalizer function cannot hold reference to net.Conn,

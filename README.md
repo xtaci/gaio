@@ -42,10 +42,11 @@ And by eliminating **one goroutine per one connection scheme** with **Edge-Trigg
 
 1. Once you submit an async read/write requests with related [net.Conn](https://golang.org/pkg/net/#Conn) to [gaio.Watcher](https://godoc.org/github.com/xtaci/gaio#Watcher), this conn will be delegated to `gaio.Watcher` at first submit. Future use of this conn like [conn.Read](https://golang.org/pkg/net/#TCPConn.Read) or [conn.Write](https://golang.org/pkg/net/#TCPConn.Write) **will return error**, but TCP properties set by `SetReadBuffer()`, `SetWriteBuffer()`, `SetLinger()`, `SetKeepAlive()`, `SetNoDelay()` will be inherited.
 2. If you decide not to use this connection anymore, you could call [gaio.Free(net.Conn)](https://godoc.org/github.com/xtaci/gaio#Free) to close socket and free related resources immediately.
-3. If you forget to call [gaio.Free(net.Conn)](https://godoc.org/github.com/xtaci/gaio#Free),  runtime garbage collector will close any related resources if nowhere in the system holds the [net.Conn](https://golang.org/pkg/net/#Conn).
-4. For connection load-balance, you can create **multiple** [gaio.Watcher](https://godoc.org/github.com/xtaci/gaio#Watcher) with your own strategy to distribute [net.Conn](https://golang.org/pkg/net/#Conn).
-5. For acceptor load-balance, you can use [go-reuseport](https://github.com/libp2p/go-reuseport) as the listener.
-6. For read requests submitted with 'nil' buffer, the returning `[]byte` from `gaio.WaitIO()` is **SAFE** to use **before next call** to [gaio.WaitIO()](https://godoc.org/github.com/xtaci/gaio#Watcher.WaitIO) returned.
+3. If you forget to call [gaio.Free(net.Conn)](https://godoc.org/github.com/xtaci/gaio#Free),  runtime garbage collector will cleanup related system resources if nowhere in the system holds the [net.Conn](https://golang.org/pkg/net/#Conn).
+4. If you forget to call [Watcher.Close()](https://godoc.org/github.com/xtaci/gaio#Watcher.Close),  runtime garbage collector will cleanup **ALL** related system resources if nowhere in the system holds this `Watcher`.
+5. For connection *Load-Balance*, you can create **multiple** [gaio.Watcher](https://godoc.org/github.com/xtaci/gaio#Watcher) with your own strategy to distribute [net.Conn](https://golang.org/pkg/net/#Conn).
+6. For acceptor *Load-Balance*, you can use [go-reuseport](https://github.com/libp2p/go-reuseport) as the listener.
+7. For read requests submitted with 'nil' buffer, the returning `[]byte` from `gaio.WaitIO()` is **SAFE** to use **before next call** to [gaio.WaitIO()](https://godoc.org/github.com/xtaci/gaio#Watcher.WaitIO) returned.
 
 ## TL;DR
 

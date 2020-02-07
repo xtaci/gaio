@@ -5,8 +5,12 @@ import (
 	"syscall"
 )
 
-// poller wait max events count
-const maxEvents = 1024
+const (
+	// poller wait max events count
+	maxEvents = 1024
+	// suggested eventQueueSize
+	eventQueueSize = 128
+)
 
 // event represent a file descriptor event
 type event struct {
@@ -18,16 +22,7 @@ type event struct {
 // events from epoll_wait passing to loop,should be in batch for atomicity.
 // and batch processing is the key to amortize context switching costs for
 // tiny messages.
-type pollerEvents struct {
-	events []event
-	done   chan struct{}
-}
-
-func newPollerEvents() *pollerEvents {
-	pe := new(pollerEvents)
-	pe.done = make(chan struct{}, 1)
-	return pe
-}
+type pollerEvents []event
 
 // dupconn use RawConn to dup() file descriptor
 func dupconn(conn net.Conn) (newfd int, err error) {

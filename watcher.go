@@ -100,7 +100,7 @@ type watcher struct {
 	pfd *poller
 
 	// netpoll events
-	chEventNotify chan *pollerEvents
+	chEventNotify chan pollerEvents
 
 	// events from user
 	chPendingNotify chan struct{}
@@ -146,7 +146,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.pfd = pfd
 
 	// loop related chan
-	w.chEventNotify = make(chan *pollerEvents)
+	w.chEventNotify = make(chan pollerEvents, eventQueueSize)
 	w.chPendingNotify = make(chan struct{}, 1)
 	w.chNotifyCompletion = make(chan []OpResult)
 	w.die = make(chan struct{})
@@ -164,7 +164,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.gc = make(chan net.Conn)
 	w.timer = time.NewTimer(0)
 
-	go w.pfd.Wait(w.chEventNotify, w.die)
+	go w.pfd.Wait(w.chEventNotify)
 	go w.loop()
 
 	// watcher finalizer for system resources
@@ -286,6 +286,7 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 		if pcb.err == syscall.EINTR {
 			continue
 		}
+
 		break
 	}
 
@@ -485,7 +486,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 		// operations splitted into different buckets
 		switch pcb.op {
 		case OpRead:
-			// try immediately if readable/writable
+			// try immediately queue is empty
 			if desc.readers.Len() == 0 {
 				if w.tryRead(ident, pcb) {
 					select {
@@ -525,16 +526,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 }
 
 // handle poller events
-func (w *watcher) handleEvents(pe *pollerEvents) {
-	defer func() {
-		// done, poller can wait again
-		select {
-		case pe.done <- struct{}{}:
-		case <-w.die:
-			return
-		}
-	}()
-
+func (w *watcher) handleEvents(pe pollerEvents) {
 	// suppose fd(s) being polled is closed by conn.Close() from outside after chanrecv,
 	// and a new conn has re-opened with the same handler number(fd). The read and write
 	// on this fd is fatal.
@@ -545,7 +537,7 @@ func (w *watcher) handleEvents(pe *pollerEvents) {
 	// then IO operation is impossible to misread or miswrite on re-created fd.
 	//log.Println(e)
 	var results []OpResult
-	for _, e := range pe.events {
+	for _, e := range pe {
 		if desc, ok := w.descs[e.ident]; ok {
 			if e.r {
 				var next *list.Element

@@ -128,7 +128,10 @@ type watcher struct {
 	// or in neither of them.
 	timeouts timedHeap
 	timer    *time.Timer
-	gc       chan net.Conn // for garbage collector
+	// for garbage collector
+	gc       []net.Conn
+	gcMutex  sync.Mutex
+	gcNotify chan struct{}
 
 	die     chan struct{}
 	dieOnce sync.Once
@@ -161,7 +164,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	// init loop related data structures
 	w.descs = make(map[int]*fdDesc)
 	w.connIdents = make(map[uintptr]int)
-	w.gc = make(chan net.Conn)
+	w.gcNotify = make(chan struct{}, 1)
 	w.timer = time.NewTimer(0)
 
 	go w.pfd.Wait(w.chEventNotify)
@@ -412,13 +415,19 @@ func (w *watcher) loop() {
 				}
 			}
 
-		case conn := <-w.gc: // gc recycled net.Conn
-			ptr := reflect.ValueOf(conn).Pointer()
-			if ident, ok := w.connIdents[ptr]; ok {
-				// since it's gc-ed, queue is impossible to hold net.Conn
-				// we don't have to send to chIOCompletion,just release here
-				w.releaseConn(ident)
+		case <-w.gcNotify: // gc recycled net.Conn
+			w.gcMutex.Lock()
+			for i, c := range w.gc {
+				ptr := reflect.ValueOf(c).Pointer()
+				if ident, ok := w.connIdents[ptr]; ok {
+					// since it's gc-ed, queue is impossible to hold net.Conn
+					// we don't have to send to chIOCompletion,just release here
+					w.releaseConn(ident)
+				}
+				w.gc[i] = nil
 			}
+			w.gc = w.gc[:0]
+			w.gcMutex.Unlock()
 
 		case <-w.die:
 			return
@@ -475,9 +484,14 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				// note finalizer function cannot hold reference to net.Conn,
 				// if not it will never be GC-ed.
 				runtime.SetFinalizer(pcb.conn, func(c net.Conn) {
+					w.gcMutex.Lock()
+					w.gc = append(w.gc, c)
+					w.gcMutex.Unlock()
+
+					// notify gc processor
 					select {
-					case w.gc <- c:
-					case <-w.die:
+					case w.gcNotify <- struct{}{}:
+					default:
 					}
 				})
 			}

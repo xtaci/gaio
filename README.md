@@ -269,6 +269,7 @@ Equation	Y = 8.613e-005*X + 0.08278
 ## References
 
 * https://zhuanlan.zhihu.com/p/102890337 -- gaio小记
+* https://github.com/golang/go/issues/15735 -- net: add mechanism to wait for readability on a TCPConn
 * https://en.wikipedia.org/wiki/C10k_problem -- C10K
 * https://golang.org/src/runtime/netpoll_epoll.go -- epoll in golang 
 * https://www.freebsd.org/cgi/man.cgi?query=kqueue&sektion=2 -- kqueue

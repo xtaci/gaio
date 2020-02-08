@@ -89,8 +89,9 @@ type OpResult struct {
 	Error error
 }
 
-// a wrapper for watcher for gc purpose
+// Watcher will monitor events and process async-io request(s),
 type Watcher struct {
+	// a wrapper for watcher for gc purpose
 	*watcher
 }
 

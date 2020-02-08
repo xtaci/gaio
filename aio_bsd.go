@@ -8,7 +8,9 @@ import (
 )
 
 type poller struct {
-	fd int
+	mu sync.Mutex // mutex to protect fd closing
+	fd int        // kqueue fd
+
 	// awaiting for poll
 	awaiting      []int
 	awaitingMutex sync.Mutex
@@ -56,19 +58,28 @@ func (p *poller) Watch(fd int) error {
 
 // wakeup interrupt kevent
 func (p *poller) wakeup() error {
-	// notify poller
-	_, err := syscall.Kevent(p.fd, []syscall.Kevent_t{{
-		Ident:  0,
-		Filter: syscall.EVFILT_USER,
-		Fflags: syscall.NOTE_TRIGGER,
-	}}, nil, nil)
-	return err
+	p.mu.Lock()
+	if p.fd != -1 {
+		// notify poller
+		_, err := syscall.Kevent(p.fd, []syscall.Kevent_t{{
+			Ident:  0,
+			Filter: syscall.EVFILT_USER,
+			Fflags: syscall.NOTE_TRIGGER,
+		}}, nil, nil)
+		p.mu.Unlock()
+		return err
+	}
+	p.mu.Unlock()
+	return ErrPollerClosed
 }
 
 func (p *poller) Wait(chEventNotify chan pollerEvents) {
 	events := make([]syscall.Kevent_t, maxEvents)
 	defer func() {
+		p.mu.Lock()
 		syscall.Close(p.fd)
+		p.fd = -1
+		p.mu.Unlock()
 	}()
 
 	// kqueue eventloop

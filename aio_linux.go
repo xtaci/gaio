@@ -12,8 +12,9 @@ import (
 const _EPOLLET = 0x80000000
 
 type poller struct {
-	pfd    int // epoll fd
-	efd    int // eventfd
+	mu     sync.Mutex // mutex to protect fd closing
+	pfd    int        // epoll fd
+	efd    int        // eventfd
 	efdbuf []byte
 
 	// awaiting for poll
@@ -73,17 +74,28 @@ func (p *poller) Watch(fd int) error {
 
 // wakeup interrupt epoll_wait
 func (p *poller) wakeup() error {
-	var x uint64 = 1
-	_, err := syscall.Write(p.efd, (*(*[8]byte)(unsafe.Pointer(&x)))[:])
-	return err
+	p.mu.Lock()
+
+	if p.efd != -1 {
+		var x uint64 = 1
+		_, err := syscall.Write(p.efd, (*(*[8]byte)(unsafe.Pointer(&x)))[:])
+		p.mu.Unlock()
+		return err
+	}
+	p.mu.Unlock()
+	return ErrPollerClosed
 }
 
 func (p *poller) Wait(chEventNotify chan pollerEvents) {
 	events := make([]syscall.EpollEvent, maxEvents)
 	// close poller fd & eventfd in defer
 	defer func() {
+		p.mu.Lock()
 		syscall.Close(p.pfd)
 		syscall.Close(p.efd)
+		p.pfd = -1
+		p.efd = -1
+		p.mu.Unlock()
 	}()
 
 	// epoll eventloop

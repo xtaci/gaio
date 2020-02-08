@@ -23,6 +23,8 @@ var (
 	ErrNoRawConn = errors.New("net.Conn does implement net.RawConn")
 	// ErrWatcherClosed means the watcher is closed
 	ErrWatcherClosed = errors.New("watcher closed")
+	// ErrPollerClosed suggest that poller has closed
+	ErrPollerClosed = errors.New("poller closed")
 	// ErrConnClosed means the user called Free() on related connection
 	ErrConnClosed = errors.New("connection closed")
 	// ErrDeadline means the specific operation has exceeded deadline before completion

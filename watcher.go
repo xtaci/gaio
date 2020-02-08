@@ -137,6 +137,16 @@ type watcher struct {
 	dieOnce sync.Once
 }
 
+const (
+	defaultInternalBufferSize = 65536
+)
+
+// NewWatcher creates a management object for monitoring file descriptors
+// with default internal buffer size - 64KB
+func NewWatcher() (*Watcher, error) {
+	return NewWatcherSize(defaultInternalBufferSize)
+}
+
 // NewWatcherSize creates a management object for monitoring file descriptors.
 // 'bufsize' sets the internal swap buffer size for Read() with nil, 2 slices with'bufsize'
 // will be allocated for performance.

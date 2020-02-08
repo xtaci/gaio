@@ -145,10 +145,6 @@ func TestDeadline(t *testing.T) {
 	testSingleDeadline(t, w)
 }
 
-func TestDeadlineDefaultWatcher(t *testing.T) {
-	testSingleDeadline(t, defaultWatcher)
-}
-
 func testSingleDeadline(t *testing.T, w *Watcher) {
 	ln := echoServer(t, 1024)
 	defer ln.Close()
@@ -252,10 +248,6 @@ func TestEchoHuge(t *testing.T) {
 		t.Fatal("incorrect receiving")
 	}
 	t.Log("bytes compare successful")
-}
-
-func TestBidirectionDefaultWatcher(t *testing.T) {
-	testBidirectionWatcher(t, defaultWatcher)
 }
 
 func TestBidirectionWatcher(t *testing.T) {

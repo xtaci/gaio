@@ -9,7 +9,7 @@ const (
 	// poller wait max events count
 	maxEvents = 1024
 	// suggested eventQueueSize
-	eventQueueSize = 128
+	eventQueueSize = 1
 )
 
 // event represent a file descriptor event

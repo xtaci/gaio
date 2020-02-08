@@ -19,7 +19,7 @@ import (
 
 var (
 	// ErrUnsupported means the watcher cannot support this type of connection
-	ErrUnsupported = errors.New("unsupported connection, must be pointer")
+	ErrUnsupported = errors.New("unsupported connection type")
 	// ErrNoRawConn means the connection has not implemented SyscallConn
 	ErrNoRawConn = errors.New("net.Conn does implement net.RawConn")
 	// ErrWatcherClosed means the watcher is closed
@@ -286,7 +286,7 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 		return ErrWatcherClosed
 	default:
 		var ptr uintptr
-		if reflect.TypeOf(conn).Kind() == reflect.Ptr {
+		if conn != nil && reflect.TypeOf(conn).Kind() == reflect.Ptr {
 			ptr = reflect.ValueOf(conn).Pointer()
 		} else {
 			return ErrUnsupported

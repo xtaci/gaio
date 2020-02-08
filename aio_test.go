@@ -180,6 +180,12 @@ func TestUnsupportedConn(t *testing.T) {
 	}
 	defer w.Close()
 
+	// nil conn
+	if w.Read(nil, nil, nil) != ErrUnsupported {
+		t.Fatal("incorrect empty conn handling")
+	}
+
+	//
 	p1, p2 := net.Pipe()
 	w.Write(nil, p1, make([]byte, 1))
 	w.Read(nil, p2, make([]byte, 1))

@@ -8,6 +8,7 @@ import (
 	"container/heap"
 	"container/list"
 	"errors"
+	"io"
 	"net"
 	"reflect"
 	"runtime"
@@ -301,6 +302,10 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 		// pressed ^Z.
 		if pcb.err == syscall.EINTR {
 			continue
+		}
+
+		if pcb.size == 0 && pcb.err == nil {
+			pcb.err = io.EOF
 		}
 
 		break

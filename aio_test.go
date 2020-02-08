@@ -145,6 +145,73 @@ func TestDeadline(t *testing.T) {
 	testSingleDeadline(t, w)
 }
 
+func TestEmptyBuffer(t *testing.T) {
+	ln := echoServer(t, 1)
+	defer ln.Close()
+
+	w, err := NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	if w.Write(nil, conn, nil) != ErrEmptyBuffer {
+		t.Fatal("incorrect empty buffer handling in Write")
+	}
+
+	if w.WriteTimeout(nil, conn, nil, time.Now().Add(time.Second)) != ErrEmptyBuffer {
+		t.Fatal("incorrect empty buffer handling in WriteTimeout")
+	}
+}
+
+func TestUnsupportedConn(t *testing.T) {
+	ln := echoServer(t, 1)
+	defer ln.Close()
+
+	w, err := NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	p1, p2 := net.Pipe()
+	w.Write(nil, p1, make([]byte, 1))
+	w.Read(nil, p2, make([]byte, 1))
+
+	for {
+		results, err := w.WaitIO()
+		if err != nil {
+			t.Log(err)
+		}
+
+		var count int
+		for _, res := range results {
+			switch res.Operation {
+			case OpRead:
+				if res.Error == ErrUnsupported {
+					count++
+					if count == 2 {
+						return
+					}
+				}
+			case OpWrite:
+				if res.Error == ErrUnsupported {
+					count++
+					if count == 2 {
+						return
+					}
+				}
+			}
+		}
+	}
+}
+
 func testSingleDeadline(t *testing.T, w *Watcher) {
 	ln := echoServer(t, 1024)
 	defer ln.Close()

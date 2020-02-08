@@ -186,6 +186,59 @@ func TestEchoHuge(t *testing.T) {
 	t.Log("bytes compare successful")
 }
 
+func TestBidirectionDefaultWatcher(t *testing.T) {
+	ln := echoServer(t, 65536)
+	defer ln.Close()
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer time.Sleep(2 * time.Second)
+
+	tx := []byte("hello world")
+	go func() {
+		// send
+		err = Write(nil, conn, tx)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// read will use internal buffer
+		err = Read(nil, conn, nil)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	for {
+		results, err := WaitIO()
+		if err != nil {
+			t.Log(err)
+			return
+		}
+
+		for _, res := range results {
+			switch res.Operation {
+			case OpWrite:
+				// recv
+				if res.Error != nil {
+					t.Fatal(res.Error)
+				}
+
+				t.Log("written:", res.Error, res.Size)
+				err := Read(nil, conn, tx)
+				if err != nil {
+					t.Fatal(err)
+				}
+			case OpRead:
+				t.Log("read:", res.Error, res.Size)
+				return
+			}
+		}
+	}
+}
+
 func TestBidirectionWatcher(t *testing.T) {
 	ln := echoServer(t, 65536)
 	defer ln.Close()

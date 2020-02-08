@@ -90,6 +90,29 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 	return ln
 }
 
+// simulate a server hangup, no read/write
+func hangupServer(t testing.TB, bufsize int) net.Listener {
+	tcpaddr, _ := net.ResolveTCPAddr("tcp", "localhost:0")
+	ln, err := net.ListenTCP("tcp", tcpaddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		var conns []net.Conn
+		for {
+			conn, err := ln.AcceptTCP()
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			// hold reference to conn only
+			conns = append(conns, conn)
+		}
+	}()
+	return ln
+}
+
 func TestEchoTiny(t *testing.T) {
 	ln := echoServer(t, 1)
 	defer ln.Close()
@@ -115,6 +138,18 @@ func TestEchoTiny(t *testing.T) {
 }
 
 func TestDeadline(t *testing.T) {
+	w, err := NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	testSingleDeadline(t, w)
+}
+
+func TestDeadlineDefaultWatcher(t *testing.T) {
+	testSingleDeadline(t, defaultWatcher)
+}
+
+func testSingleDeadline(t *testing.T, w *Watcher) {
 	ln := echoServer(t, 1024)
 	defer ln.Close()
 	conn, err := net.Dial("tcp", ln.Addr().String())
@@ -122,11 +157,6 @@ func TestDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-
-	w, err := NewWatcher()
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	go func() {
 		// read with timeout
@@ -136,23 +166,61 @@ func TestDeadline(t *testing.T) {
 		}
 	}()
 
+READTEST:
 	for {
 		results, err := w.WaitIO()
 		if err != nil {
 			t.Log(err)
-			return
+			break READTEST
 		}
 
 		for _, res := range results {
 			switch res.Operation {
 			case OpRead:
-				if res.Error != ErrDeadline {
-					t.Fatal(res.Error, "mismatch")
+				if res.Error == ErrDeadline {
+					t.Log("read deadline", res.Error)
+					break READTEST
 				}
-				return
 			}
 		}
 	}
+
+	hangup := hangupServer(t, 1024)
+	defer hangup.Close()
+
+	buf := make([]byte, 1024*1024)
+	go func() {
+		// write with timeout
+		err = w.WriteTimeout(nil, conn, buf, time.Now().Add(time.Second))
+		if err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+WRITETEST:
+	for {
+		results, err := w.WaitIO()
+		if err != nil {
+			t.Log(err)
+			break WRITETEST
+		}
+
+		for _, res := range results {
+			switch res.Operation {
+			case OpWrite:
+				err = w.WriteTimeout(nil, conn, buf, time.Now().Add(time.Second))
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				if res.Error == ErrDeadline {
+					t.Log("write deadline", res.Error)
+					break WRITETEST
+				}
+			}
+		}
+	}
+
 }
 
 func TestEchoHuge(t *testing.T) {

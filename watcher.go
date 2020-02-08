@@ -110,7 +110,10 @@ type watcher struct {
 	chPendingNotify chan struct{}
 
 	// IO-completion events to user
-	chNotifyCompletion chan []OpResult
+	chNotifyCompletion chan struct{}
+	hangup             chan struct{} // blocking delivery will hangup on this
+	results            []OpResult    // for result delivery
+	resultsMutex       sync.Mutex
 
 	// lock for pending io operations
 	// aiocb is associated to fd
@@ -165,7 +168,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	// loop related chan
 	w.chEventNotify = make(chan pollerEvents, eventQueueSize)
 	w.chPendingNotify = make(chan struct{}, 1)
-	w.chNotifyCompletion = make(chan []OpResult)
+	w.chNotifyCompletion = make(chan struct{}, 1)
 	w.die = make(chan struct{})
 
 	// swapBuffer for shared reading
@@ -213,11 +216,26 @@ func (w *watcher) notifyPending() {
 // WaitIO blocks until any read/write completion, or error.
 // An internal 'buf' returned is safe to use until next WaitIO returns.
 func (w *watcher) WaitIO() (r []OpResult, err error) {
-	select {
-	case r := <-w.chNotifyCompletion:
-		return r, nil
-	case <-w.die:
-		return r, ErrWatcherClosed
+	for {
+		w.resultsMutex.Lock()
+		if len(w.results) > 0 {
+			r = w.results
+			w.results = nil
+			if w.hangup != nil {
+				close(w.hangup)
+				w.hangup = nil
+			}
+			w.resultsMutex.Unlock()
+			return r, nil
+		}
+		w.resultsMutex.Unlock()
+
+		// 0 results, wait for completion signal
+		select {
+		case <-w.chNotifyCompletion:
+		case <-w.die:
+			return r, ErrWatcherClosed
+		}
 	}
 }
 
@@ -386,6 +404,34 @@ func (w *watcher) releaseConn(ident int) {
 	}
 }
 
+// deliver function will try best to aggregate results for batch delivery
+func (w *watcher) deliver(r OpResult, block bool) {
+	var hangup chan struct{}
+	w.resultsMutex.Lock()
+	w.results = append(w.results, r)
+	if block {
+		hangup = make(chan struct{})
+		w.hangup = hangup
+	}
+	w.resultsMutex.Unlock()
+
+	// trigger event notification
+	select {
+	case w.chNotifyCompletion <- struct{}{}:
+	default:
+	}
+
+	// wait on hangup if this is an blocking operation
+	if block {
+		select {
+		case <-hangup:
+			return
+		case <-w.die:
+			return
+		}
+	}
+}
+
 // the core event loop of this watcher
 func (w *watcher) loop() {
 	// defer function to release all resources
@@ -423,11 +469,7 @@ func (w *watcher) loop() {
 					heap.Pop(&w.timeouts)
 
 					// ErrDeadline
-					select {
-					case w.chNotifyCompletion <- []OpResult{{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrDeadline, Context: pcb.ctx}}:
-					case <-w.die:
-						return
-					}
+					w.deliver(OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrDeadline, Context: pcb.ctx}, false)
 				} else {
 					w.timer.Reset(pcb.deadline.Sub(now))
 					break
@@ -470,11 +512,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			desc = w.descs[ident]
 		} else {
 			if dupfd, err := dupconn(pcb.conn); err != nil {
-				select {
-				case w.chNotifyCompletion <- []OpResult{{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: err, Context: pcb.ctx}}:
-				case <-w.die:
-					return
-				}
+				w.deliver(OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: err, Context: pcb.ctx}, false)
 				continue
 			} else {
 				// as we duplicated successfully, we're safe to
@@ -486,11 +524,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				// unexpected situation, should notify caller if we cannot dup(2)
 				werr := w.pfd.Watch(ident)
 				if werr != nil {
-					select {
-					case w.chNotifyCompletion <- []OpResult{{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: werr, Context: pcb.ctx}}:
-					case <-w.die:
-						return
-					}
+					w.deliver(OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: werr, Context: pcb.ctx}, false)
 					continue
 				}
 
@@ -522,11 +556,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			// try immediately queue is empty
 			if desc.readers.Len() == 0 {
 				if w.tryRead(ident, pcb) {
-					select {
-					case w.chNotifyCompletion <- []OpResult{{Operation: OpRead, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}}:
-					case <-w.die:
-						return
-					}
+					w.deliver(OpResult{Operation: OpRead, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}, pcb.notifyCaller)
 					continue
 				}
 			}
@@ -536,11 +566,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 		case OpWrite:
 			if desc.writers.Len() == 0 {
 				if w.tryWrite(ident, pcb) {
-					select {
-					case w.chNotifyCompletion <- []OpResult{{Operation: OpWrite, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}}:
-					case <-w.die:
-						return
-					}
+					w.deliver(OpResult{Operation: OpWrite, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}, false)
 					continue
 				}
 			}
@@ -569,7 +595,6 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	// identified by 'e.ident', all library operation will be based on 'e.ident',
 	// then IO operation is impossible to misread or miswrite on re-created fd.
 	//log.Println(e)
-	var results []OpResult
 	for _, e := range pe {
 		if desc, ok := w.descs[e.ident]; ok {
 			if e.r {
@@ -578,15 +603,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 					next = elem.Next()
 					pcb := elem.Value.(*aiocb)
 					if w.tryRead(e.ident, pcb) {
-						results = append(results, OpResult{Operation: OpRead, Conn: pcb.conn, Buffer: pcb.buffer, IsSwapBuffer: pcb.useSwap, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
-						if pcb.notifyCaller {
-							select {
-							case w.chNotifyCompletion <- results:
-								results = nil
-							case <-w.die:
-								return
-							}
-						}
+						w.deliver(OpResult{Operation: OpRead, Conn: pcb.conn, Buffer: pcb.buffer, IsSwapBuffer: pcb.useSwap, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}, pcb.notifyCaller)
 						desc.readers.Remove(elem)
 						if !pcb.deadline.IsZero() {
 							heap.Remove(&w.timeouts, pcb.idx)
@@ -603,7 +620,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 					next = elem.Next()
 					pcb := elem.Value.(*aiocb)
 					if w.tryWrite(e.ident, pcb) {
-						results = append(results, OpResult{Operation: OpWrite, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+						w.deliver(OpResult{Operation: OpWrite, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}, false)
 						desc.writers.Remove(elem)
 						if !pcb.deadline.IsZero() {
 							heap.Remove(&w.timeouts, pcb.idx)
@@ -613,15 +630,6 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 					}
 				}
 			}
-		}
-	}
-
-	// batch notification
-	if len(results) > 0 {
-		select {
-		case w.chNotifyCompletion <- results:
-		case <-w.die:
-			return
 		}
 	}
 }

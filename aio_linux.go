@@ -9,7 +9,10 @@ import (
 )
 
 // _EPOLLET value is incorrect in syscall
-const _EPOLLET = 0x80000000
+const (
+	_EPOLLET      = 0x80000000
+	_EFD_NONBLOCK = 0x800
+)
 
 type poller struct {
 	mu     sync.Mutex // mutex to protect fd closing
@@ -31,7 +34,7 @@ func openPoll() (*poller, error) {
 	if err != nil {
 		return nil, err
 	}
-	r0, _, e0 := syscall.Syscall(syscall.SYS_EVENTFD2, 0, 0, 0)
+	r0, _, e0 := syscall.Syscall(syscall.SYS_EVENTFD2, 0, _EFD_NONBLOCK, 0)
 	if e0 != 0 {
 		syscall.Close(fd)
 		return nil, err
@@ -75,9 +78,9 @@ func (p *poller) Watch(fd int) error {
 // wakeup interrupt epoll_wait
 func (p *poller) wakeup() error {
 	p.mu.Lock()
-
 	if p.efd != -1 {
 		var x uint64 = 1
+		// eventfd has set with EFD_NONBLOCK
 		_, err := syscall.Write(p.efd, (*(*[8]byte)(unsafe.Pointer(&x)))[:])
 		p.mu.Unlock()
 		return err

@@ -156,7 +156,7 @@ func testSingleDeadline(t *testing.T, w *Watcher) {
 
 	go func() {
 		// read with timeout
-		err = w.ReadTimeout(nil, conn, nil, time.Now().Add(time.Second))
+		err := w.ReadTimeout(nil, conn, nil, time.Now().Add(time.Second))
 		if err != nil {
 			log.Fatal(err)
 		}

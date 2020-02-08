@@ -219,8 +219,9 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 	for {
 		w.resultsMutex.Lock()
 		if len(w.results) > 0 {
-			r = w.results
-			w.results = nil
+			r = make([]OpResult, len(w.results))
+			copy(r, w.results)
+			w.results = w.results[:0]
 			if w.hangup != nil {
 				close(w.hangup)
 				w.hangup = nil

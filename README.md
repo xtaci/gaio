@@ -41,12 +41,12 @@ And by eliminating **one goroutine per one connection scheme** with **Edge-Trigg
 ## Conventions
 
 1. Once you submit an async read/write requests with related [net.Conn](https://golang.org/pkg/net/#Conn) to [gaio.Watcher](https://godoc.org/github.com/xtaci/gaio#Watcher), this conn will be delegated to `gaio.Watcher` at first submit. Future use of this conn like [conn.Read](https://golang.org/pkg/net/#TCPConn.Read) or [conn.Write](https://golang.org/pkg/net/#TCPConn.Write) **will return error**, but TCP properties set by `SetReadBuffer()`, `SetWriteBuffer()`, `SetLinger()`, `SetKeepAlive()`, `SetNoDelay()` will be inherited.
-2. If you decide not to use this connection anymore, you could call [gaio.Free(net.Conn)](https://godoc.org/github.com/xtaci/gaio#Free) to close socket and free related resources immediately.
-3. If you forget to call [gaio.Free(net.Conn)](https://godoc.org/github.com/xtaci/gaio#Free),  runtime garbage collector will cleanup related system resources if nowhere in the system holds the [net.Conn](https://golang.org/pkg/net/#Conn).
+2. If you decide not to use this connection anymore, you could call [Watcher.Free(net.Conn)](https://godoc.org/github.com/xtaci/Watcher#Free) to close socket and free related resources immediately.
+3. If you forget to call [Watcher.Free(net.Conn)](https://godoc.org/github.com/xtaci/Watcher#Free),  runtime garbage collector will cleanup related system resources if nowhere in the system holds the [net.Conn](https://golang.org/pkg/net/#Conn).
 4. If you forget to call [Watcher.Close()](https://godoc.org/github.com/xtaci/gaio#Watcher.Close),  runtime garbage collector will cleanup **ALL** related system resources if nowhere in the system holds this `Watcher`.
 5. For connection *Load-Balance*, you can create **multiple** [gaio.Watcher](https://godoc.org/github.com/xtaci/gaio#Watcher) with your own strategy to distribute [net.Conn](https://golang.org/pkg/net/#Conn).
 6. For acceptor *Load-Balance*, you can use [go-reuseport](https://github.com/libp2p/go-reuseport) as the listener.
-7. For read requests submitted with 'nil' buffer, the returning `[]byte` from `gaio.WaitIO()` is **SAFE** to use **before next call** to [gaio.WaitIO()](https://godoc.org/github.com/xtaci/gaio#Watcher.WaitIO) returned.
+7. For read requests submitted with 'nil' buffer, the returning `[]byte` from `Watcher.WaitIO()` is **SAFE** to use **before next call** to [Watcher.WaitIO()](https://godoc.org/github.com/xtaci/gaio#Watcher.WaitIO) returned.
 
 ## TL;DR
 
@@ -62,10 +62,10 @@ import (
 
 // this goroutine will wait for all io events, and sents back everything it received
 // in async way
-func echoServer() {
+func echoServer(w *gaio.Watcher) {
         for {
                 // loop wait for any IO events
-                results, err := gaio.WaitIO()
+                results, err := w.WaitIO()
                 if err != nil {
                         log.Println(err)
                         return
@@ -77,12 +77,12 @@ func echoServer() {
                                 if res.Error == nil {
                                         // send back everything, we won't start to read again until write completes.
                                         // submit an async write request
-                                        gaio.Write(nil, res.Conn, res.Buffer[:res.Size])
+                                        w.Write(nil, res.Conn, res.Buffer[:res.Size])
                                 }
                         case gaio.OpWrite: // write completion event
                                 if res.Error == nil {
                                         // since write has completed, let's start read on this conn again
-                                        gaio.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
+                                        w.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
                                 }
                         }
                 }
@@ -90,7 +90,13 @@ func echoServer() {
 }
 
 func main() {
-        go echoServer()
+        w, err := gaio.NewWatcher()
+        if err != nil {
+              log.Fatal(err)
+        }
+        defer w.Close()
+	
+        go echoServer(w)
 
         ln, err := net.Listen("tcp", "localhost:0")
         if err != nil {
@@ -107,7 +113,7 @@ func main() {
                 log.Println("new client", conn.RemoteAddr())
 
                 // submit the first async read IO request
-                err = gaio.Read(nil, conn, make([]byte, 128))
+                err = w.Read(nil, conn, make([]byte, 128))
                 if err != nil {
                         log.Println(err)
                         return

@@ -60,7 +60,7 @@ func (p *poller) Close() error {
 	p.dieOnce.Do(func() {
 		close(p.die)
 	})
-	return nil
+	return p.wakeup()
 }
 
 func (p *poller) Watch(fd int) error {
@@ -68,7 +68,11 @@ func (p *poller) Watch(fd int) error {
 	p.awaiting = append(p.awaiting, fd)
 	p.awaitingMutex.Unlock()
 
-	// interrupt epoll_wait
+	return p.wakeup()
+}
+
+// wakeup interrupt epoll_wait
+func (p *poller) wakeup() error {
 	var x uint64 = 1
 	_, err := syscall.Write(p.efd, (*(*[8]byte)(unsafe.Pointer(&x)))[:])
 	return err

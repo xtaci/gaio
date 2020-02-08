@@ -43,7 +43,7 @@ func (p *poller) Close() error {
 	p.dieOnce.Do(func() {
 		close(p.die)
 	})
-	return nil
+	return p.wakeup()
 }
 
 func (p *poller) Watch(fd int) error {
@@ -51,6 +51,11 @@ func (p *poller) Watch(fd int) error {
 	p.awaiting = append(p.awaiting, fd)
 	p.awaitingMutex.Unlock()
 
+	return p.wakeup()
+}
+
+// wakeup interrupt kevent
+func (p *poller) wakeup() error {
 	// notify poller
 	_, err := syscall.Kevent(p.fd, []syscall.Kevent_t{{
 		Ident:  0,

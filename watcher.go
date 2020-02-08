@@ -304,6 +304,7 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 			continue
 		}
 
+		// proper setting of EOF
 		if pcb.size == 0 && pcb.err == nil {
 			pcb.err = io.EOF
 		}

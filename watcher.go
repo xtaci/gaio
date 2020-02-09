@@ -112,7 +112,8 @@ type watcher struct {
 	// IO-completion events to user
 	chNotifyCompletion chan struct{}
 	hangup             chan struct{} // blocking delivery will hangup on this
-	results            []OpResult    // for result delivery
+	results            [][]OpResult  // swap buffer for result delivery
+	resultsIdx         int
 	resultsMutex       sync.Mutex
 
 	// lock for pending io operations
@@ -121,10 +122,10 @@ type watcher struct {
 	pendingMutex sync.Mutex
 
 	// internal buffer for reading
-	swapSize       int // swap buffer capacity
-	swapBuffer     [][]byte
-	bufferOffset   int // bufferOffset for current using one
-	nextSwapBuffer int
+	swapSize      int // swap buffer capacity
+	swapBuffer    [][]byte
+	swapBufferIdx int
+	bufferOffset  int // bufferOffset for current using one
 
 	// loop related data structure
 	descs      map[int]*fdDesc // all descriptors
@@ -178,6 +179,9 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 		w.swapBuffer[i] = make([]byte, bufsize)
 	}
 
+	// results swap for WaitIO
+	w.results = make([][]OpResult, 2)
+
 	// init loop related data structures
 	w.descs = make(map[int]*fdDesc)
 	w.connIdents = make(map[uintptr]int)
@@ -214,14 +218,14 @@ func (w *watcher) notifyPending() {
 }
 
 // WaitIO blocks until any read/write completion, or error.
-// An internal 'buf' returned is safe to use until next WaitIO returns.
+// An internal 'buf' returned  and []OpResult are safe to use until next WaitIO returns.
 func (w *watcher) WaitIO() (r []OpResult, err error) {
 	for {
 		w.resultsMutex.Lock()
-		if len(w.results) > 0 {
-			r = make([]OpResult, len(w.results))
-			copy(r, w.results)
-			w.results = w.results[:0]
+		if len(w.results[w.resultsIdx]) > 0 {
+			r = w.results[w.resultsIdx]
+			w.resultsIdx = (w.resultsIdx + 1) % len(w.results)
+			w.results[w.resultsIdx] = w.results[w.resultsIdx][:0]
 			if w.hangup != nil {
 				close(w.hangup)
 				w.hangup = nil
@@ -306,7 +310,7 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 
 	var useSwap bool
 	if buf == nil { // internal buffer
-		buf = w.swapBuffer[w.nextSwapBuffer][w.bufferOffset:]
+		buf = w.swapBuffer[w.swapBufferIdx][w.bufferOffset:]
 		useSwap = true
 	}
 
@@ -339,7 +343,7 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 
 		// current buffer exhausted, notify caller and swap buffer
 		if w.bufferOffset == w.swapSize {
-			w.nextSwapBuffer = (w.nextSwapBuffer + 1) % len(w.swapBuffer)
+			w.swapBufferIdx = (w.swapBufferIdx + 1) % len(w.swapBuffer)
 			w.bufferOffset = 0
 			pcb.notifyCaller = true
 		}
@@ -409,7 +413,7 @@ func (w *watcher) releaseConn(ident int) {
 func (w *watcher) deliver(pcb *aiocb) {
 	var hangup chan struct{}
 	w.resultsMutex.Lock()
-	w.results = append(w.results, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+	w.results[w.resultsIdx] = append(w.results[w.resultsIdx], OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
 	if pcb.notifyCaller {
 		hangup = make(chan struct{})
 		w.hangup = hangup

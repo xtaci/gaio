@@ -218,7 +218,7 @@ func (w *watcher) notifyPending() {
 }
 
 // WaitIO blocks until any read/write completion, or error.
-// An internal 'buf' returned  and []OpResult are safe to use until next WaitIO returns.
+// An internal 'buf' returned or 'r []OpResult' are safe to use BEFORE next call to WaitIO().
 func (w *watcher) WaitIO() (r []OpResult, err error) {
 	for {
 		w.resultsMutex.Lock()

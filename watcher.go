@@ -406,11 +406,11 @@ func (w *watcher) releaseConn(ident int) {
 }
 
 // deliver function will try best to aggregate results for batch delivery
-func (w *watcher) deliver(r OpResult, block bool) {
+func (w *watcher) deliver(pcb *aiocb) {
 	var hangup chan struct{}
 	w.resultsMutex.Lock()
-	w.results = append(w.results, r)
-	if block {
+	w.results = append(w.results, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+	if pcb.notifyCaller {
 		hangup = make(chan struct{})
 		w.hangup = hangup
 	}
@@ -423,7 +423,7 @@ func (w *watcher) deliver(r OpResult, block bool) {
 	}
 
 	// wait on hangup if this is an blocking operation
-	if block {
+	if pcb.notifyCaller {
 		select {
 		case <-hangup:
 			return
@@ -468,9 +468,9 @@ func (w *watcher) loop() {
 					// remove from list & heap together
 					pcb.l.Remove(pcb.elem)
 					heap.Pop(&w.timeouts)
-
 					// ErrDeadline
-					w.deliver(OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: ErrDeadline, Context: pcb.ctx}, false)
+					pcb.err = ErrDeadline
+					w.deliver(pcb)
 				} else {
 					w.timer.Reset(pcb.deadline.Sub(now))
 					break
@@ -513,7 +513,8 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			desc = w.descs[ident]
 		} else {
 			if dupfd, err := dupconn(pcb.conn); err != nil {
-				w.deliver(OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: err, Context: pcb.ctx}, false)
+				pcb.err = err
+				w.deliver(pcb)
 				continue
 			} else {
 				// as we duplicated successfully, we're safe to
@@ -525,7 +526,8 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				// unexpected situation, should notify caller if we cannot dup(2)
 				werr := w.pfd.Watch(ident)
 				if werr != nil {
-					w.deliver(OpResult{Operation: pcb.op, Conn: pcb.conn, Buffer: pcb.buffer, Size: 0, Error: werr, Context: pcb.ctx}, false)
+					pcb.err = werr
+					w.deliver(pcb)
 					continue
 				}
 
@@ -557,7 +559,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			// try immediately queue is empty
 			if desc.readers.Len() == 0 {
 				if w.tryRead(ident, pcb) {
-					w.deliver(OpResult{Operation: OpRead, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}, pcb.notifyCaller)
+					w.deliver(pcb)
 					continue
 				}
 			}
@@ -567,7 +569,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 		case OpWrite:
 			if desc.writers.Len() == 0 {
 				if w.tryWrite(ident, pcb) {
-					w.deliver(OpResult{Operation: OpWrite, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}, false)
+					w.deliver(pcb)
 					continue
 				}
 			}
@@ -604,7 +606,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 					next = elem.Next()
 					pcb := elem.Value.(*aiocb)
 					if w.tryRead(e.ident, pcb) {
-						w.deliver(OpResult{Operation: OpRead, Conn: pcb.conn, Buffer: pcb.buffer, IsSwapBuffer: pcb.useSwap, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}, pcb.notifyCaller)
+						w.deliver(pcb)
 						desc.readers.Remove(elem)
 						if !pcb.deadline.IsZero() {
 							heap.Remove(&w.timeouts, pcb.idx)
@@ -621,7 +623,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 					next = elem.Next()
 					pcb := elem.Value.(*aiocb)
 					if w.tryWrite(e.ident, pcb) {
-						w.deliver(OpResult{Operation: OpWrite, Conn: pcb.conn, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx}, false)
+						w.deliver(pcb)
 						desc.writers.Remove(elem)
 						if !pcb.deadline.IsZero() {
 							heap.Remove(&w.timeouts, pcb.idx)

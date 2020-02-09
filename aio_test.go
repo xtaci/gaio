@@ -726,6 +726,10 @@ func BenchmarkEcho128B(b *testing.B) {
 	benchmarkEcho(b, 128, 1)
 }
 
+func BenchmarkEcho1K(b *testing.B) {
+	benchmarkEcho(b, 1024, 1)
+}
+
 func BenchmarkEcho4K(b *testing.B) {
 	benchmarkEcho(b, 4096, 1)
 }

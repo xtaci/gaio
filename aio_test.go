@@ -746,6 +746,10 @@ func BenchmarkEcho128BParallel(b *testing.B) {
 	benchmarkEcho(b, 128, 128)
 }
 
+func BenchmarkEcho1KParallel(b *testing.B) {
+	benchmarkEcho(b, 1024, 128)
+}
+
 func BenchmarkEcho4KParallel(b *testing.B) {
 	benchmarkEcho(b, 4096, 128)
 }

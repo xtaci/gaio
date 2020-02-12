@@ -253,7 +253,7 @@ func (w *watcher) Read(ctx interface{}, conn net.Conn, buf []byte) error {
 }
 
 // ReadTimeout submits an async read request on 'fd' with context 'ctx', using buffer 'buf', and
-// expects to fill the buffer before 'deadline'.
+// expects to read some bytes into the buffer before 'deadline'.
 // 'ctx' is the user-defined value passed through the gaio watcher unchanged.
 func (w *watcher) ReadTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
 	return w.aioCreate(ctx, OpRead, conn, buf, deadline, false)

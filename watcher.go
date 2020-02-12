@@ -253,16 +253,16 @@ func (w *watcher) Read(ctx interface{}, conn net.Conn, buf []byte) error {
 }
 
 // ReadTimeout submits an async read request on 'fd' with context 'ctx', using buffer 'buf', and
-// expected to be completed before 'deadline'.
+// expects to fill the buffer before 'deadline'.
 // 'ctx' is the user-defined value passed through the gaio watcher unchanged.
 func (w *watcher) ReadTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
 	return w.aioCreate(ctx, OpRead, conn, buf, deadline, false)
 }
 
 // ReadFull submits an async read request on 'fd' with context 'ctx', using buffer 'buf', and
-// expected to be completed before 'deadline'.
+// expects to fill the buffer before 'deadline'.
 // 'ctx' is the user-defined value passed through the gaio watcher unchanged.
-// 'buf' can't be nil in ReadFull
+// 'buf' can't be nil in ReadFull.
 func (w *watcher) ReadFull(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
 	if len(buf) == 0 {
 		return ErrEmptyBuffer
@@ -280,7 +280,7 @@ func (w *watcher) Write(ctx interface{}, conn net.Conn, buf []byte) error {
 }
 
 // WriteTimeout submits an async write request on 'fd' with context 'ctx', using buffer 'buf', and
-// expected to be completed before 'deadline', 'buf' can be set to nil to use internal buffer.
+// expects to complete writing the buffer before 'deadline', 'buf' can be set to nil to use internal buffer.
 // 'ctx' is the user-defined value passed through the gaio watcher unchanged.
 func (w *watcher) WriteTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
 	if len(buf) == 0 {

@@ -61,6 +61,7 @@ type aiocb struct {
 	err          error       // error for last operation
 	size         int         // size received or sent
 	buffer       []byte
+	readFull     bool // requests will read full or error
 	useSwap      bool // mark if the buffer is internal swap buffer
 	notifyCaller bool // mark if the caller have to wakeup caller to swap buffer.
 	idx          int  // index for heap op
@@ -248,14 +249,25 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 // 'buf' can be set to nil to use internal buffer.
 // 'ctx' is the user-defined value passed through the gaio watcher unchanged.
 func (w *watcher) Read(ctx interface{}, conn net.Conn, buf []byte) error {
-	return w.aioCreate(ctx, OpRead, conn, buf, zeroTime)
+	return w.aioCreate(ctx, OpRead, conn, buf, zeroTime, false)
 }
 
 // ReadTimeout submits an async read request on 'fd' with context 'ctx', using buffer 'buf', and
 // expected to be completed before 'deadline'.
 // 'ctx' is the user-defined value passed through the gaio watcher unchanged.
 func (w *watcher) ReadTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
-	return w.aioCreate(ctx, OpRead, conn, buf, deadline)
+	return w.aioCreate(ctx, OpRead, conn, buf, deadline, false)
+}
+
+// ReadFull submits an async read request on 'fd' with context 'ctx', using buffer 'buf', and
+// expected to be completed before 'deadline'.
+// 'ctx' is the user-defined value passed through the gaio watcher unchanged.
+// 'buf' can't be nil in ReadFull
+func (w *watcher) ReadFull(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
+	if len(buf) == 0 {
+		return ErrEmptyBuffer
+	}
+	return w.aioCreate(ctx, OpRead, conn, buf, deadline, true)
 }
 
 // Write submits an async write request on 'fd' with context 'ctx', using buffer 'buf'.
@@ -264,7 +276,7 @@ func (w *watcher) Write(ctx interface{}, conn net.Conn, buf []byte) error {
 	if len(buf) == 0 {
 		return ErrEmptyBuffer
 	}
-	return w.aioCreate(ctx, OpWrite, conn, buf, zeroTime)
+	return w.aioCreate(ctx, OpWrite, conn, buf, zeroTime, false)
 }
 
 // WriteTimeout submits an async write request on 'fd' with context 'ctx', using buffer 'buf', and
@@ -274,17 +286,17 @@ func (w *watcher) WriteTimeout(ctx interface{}, conn net.Conn, buf []byte, deadl
 	if len(buf) == 0 {
 		return ErrEmptyBuffer
 	}
-	return w.aioCreate(ctx, OpWrite, conn, buf, deadline)
+	return w.aioCreate(ctx, OpWrite, conn, buf, deadline, false)
 }
 
 // Free let the watcher to release resources related to this conn immediately,
 // like socket file descriptors.
 func (w *watcher) Free(conn net.Conn) error {
-	return w.aioCreate(nil, opDelete, conn, nil, zeroTime)
+	return w.aioCreate(nil, opDelete, conn, nil, zeroTime, false)
 }
 
 // core async-io creation
-func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byte, deadline time.Time) error {
+func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byte, deadline time.Time, readfull bool) error {
 	select {
 	case <-w.die:
 		return ErrWatcherClosed
@@ -296,7 +308,7 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 			return ErrUnsupported
 		}
 		w.pendingMutex.Lock()
-		w.pending = append(w.pending, &aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline})
+		w.pending = append(w.pending, &aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull})
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()
@@ -316,40 +328,57 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 
 	for {
 		// return values are stored in pcb
-		pcb.size, pcb.err = syscall.Read(fd, buf)
-		if pcb.err == syscall.EAGAIN {
+		nr, er := syscall.Read(fd, buf[pcb.size:])
+		pcb.err = er
+		if er == syscall.EAGAIN {
 			return false
 		}
 
 		// On MacOS we can see EINTR here if the user
 		// pressed ^Z.
-		if pcb.err == syscall.EINTR {
+		if er == syscall.EINTR {
 			continue
 		}
 
+		// if er is nil, accumulate bytes read
+		if er == nil {
+			pcb.size += nr
+		}
+
 		// proper setting of EOF
-		if pcb.size == 0 && pcb.err == nil {
+		if nr == 0 && er == nil {
 			pcb.err = io.EOF
 		}
 
 		break
 	}
 
-	// IO completed successfully with internal buffer
-	if useSwap && pcb.err == nil {
-		pcb.buffer = buf[:pcb.size] // set len to pcb.size
-		pcb.useSwap = true
-		w.bufferOffset += pcb.size
-
-		// current buffer exhausted, notify caller and swap buffer
-		if w.bufferOffset == w.swapSize {
-			w.swapBufferIdx = (w.swapBufferIdx + 1) % len(w.swapBuffer)
-			w.bufferOffset = 0
-			pcb.notifyCaller = true
-		}
+	completed := false
+	if pcb.err != nil {
+		completed = true
+	} else if pcb.size == len(pcb.buffer) {
+		completed = true
+	} else if !pcb.readFull {
+		completed = true
 	}
 
-	return true
+	if completed {
+		// IO completed successfully with internal buffer
+		if useSwap && pcb.err == nil {
+			pcb.buffer = buf[:pcb.size] // set len to pcb.size
+			pcb.useSwap = true
+			w.bufferOffset += pcb.size
+
+			// current buffer exhausted, notify caller and swap buffer
+			if w.bufferOffset == w.swapSize {
+				w.swapBufferIdx = (w.swapBufferIdx + 1) % len(w.swapBuffer)
+				w.bufferOffset = 0
+				pcb.notifyCaller = true
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func (w *watcher) tryWrite(fd int, pcb *aiocb) bool {

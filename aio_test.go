@@ -383,6 +383,72 @@ func testBidirectionWatcher(t *testing.T, w *Watcher) {
 	}
 }
 
+func TestReadFull(t *testing.T) {
+	ln := echoServer(t, 65536)
+	defer ln.Close()
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w, err := NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	// 100 MB random
+	tx := make([]byte, 100*1024*1024)
+	rx := make([]byte, len(tx))
+	_, err = io.ReadFull(rand.Reader, tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		// send
+		err = w.Write(nil, conn, tx)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	// submit read full
+	err = w.ReadFull(nil, conn, rx, time.Time{})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for {
+		results, err := w.WaitIO()
+		if err != nil {
+			t.Log(err)
+			return
+		}
+
+		for _, res := range results {
+			switch res.Operation {
+			case OpWrite:
+				// recv
+				if res.Error != nil {
+					t.Fatal(res.Error)
+				}
+
+				t.Log("written:", res.Error, res.Size)
+			case OpRead:
+				t.Log("read:", res.Error, res.Size)
+				if res.Size != len(rx) {
+					t.Fatal("readfull mismatch", res.Size, len(rx))
+				}
+				if !bytes.Equal(tx, rx) {
+					t.Fatal("readfull content mismatch")
+				}
+				return
+			}
+		}
+	}
+}
+
 func TestSocketClose(t *testing.T) {
 	ln := echoServer(t, 1024)
 	defer ln.Close()

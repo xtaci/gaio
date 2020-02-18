@@ -407,8 +407,7 @@ func TestReadFull(t *testing.T) {
 
 	go func() {
 		// send
-		err = w.Write(nil, conn, tx)
-		if err != nil {
+		if err := w.Write(nil, conn, tx); err != nil {
 			log.Fatal(err)
 		}
 	}()

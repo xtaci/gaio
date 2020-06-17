@@ -452,6 +452,8 @@ func (w *watcher) loop() {
 			}
 			w.gc = w.gc[:0]
 			w.gcMutex.Unlock()
+		case <-w.die:
+			return
 		}
 	}
 }

@@ -399,6 +399,13 @@ func (w *watcher) loop() {
 
 	var pending []*aiocb
 	for {
+		// Prevents execution of the timer
+		select {
+		case <-w.die:
+			return
+		default:
+		}
+
 		select {
 		case <-w.chPendingNotify:
 			// copy from w.pending to local pending
@@ -445,9 +452,6 @@ func (w *watcher) loop() {
 			}
 			w.gc = w.gc[:0]
 			w.gcMutex.Unlock()
-
-		case <-w.die:
-			return
 		}
 	}
 }

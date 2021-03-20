@@ -142,7 +142,7 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 				if ev.Ident != 0 {
 					e := event{ident: int(ev.Ident)}
 					if ev.Filter == syscall.EVFILT_READ {
-						e.r = true
+						e.ev |= EV_READ
 						// https://golang.org/src/runtime/netpoll_kqueue.go
 						// On some systems when the read end of a pipe
 						// is closed the write end will not get a
@@ -154,10 +154,10 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 						// and the appropriate thing will happen based
 						// on what that write returns (success, EPIPE, EAGAIN).
 						if ev.Flags&syscall.EV_EOF != 0 {
-							e.w = true
+							e.ev |= EV_WRITE
 						}
 					} else if ev.Filter == syscall.EVFILT_WRITE {
-						e.w = true
+						e.ev |= EV_WRITE
 					}
 
 					pe = append(pe, e)

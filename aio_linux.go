@@ -164,10 +164,10 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 					// ing simple code to detect peer shutdown when using Edge Trig-
 					// gered monitoring.)
 					if ev.Events&(syscall.EPOLLIN|syscall.EPOLLERR|syscall.EPOLLHUP|syscall.EPOLLRDHUP) != 0 {
-						e.r = true
+						e.ev |= EV_READ
 					}
 					if ev.Events&(syscall.EPOLLOUT|syscall.EPOLLERR|syscall.EPOLLHUP) != 0 {
-						e.w = true
+						e.ev |= EV_WRITE
 					}
 
 					pe = append(pe, e)

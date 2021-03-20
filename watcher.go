@@ -555,7 +555,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	//log.Println(e)
 	for _, e := range pe {
 		if desc, ok := w.descs[e.ident]; ok {
-			if e.r {
+			if e.ev&EV_READ != 0 {
 				var next *list.Element
 				for elem := desc.readers.Front(); elem != nil; elem = next {
 					next = elem.Next()
@@ -572,7 +572,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 				}
 			}
 
-			if e.w {
+			if e.ev&EV_WRITE != 0 {
 				var next *list.Element
 				for elem := desc.writers.Front(); elem != nil; elem = next {
 					next = elem.Next()

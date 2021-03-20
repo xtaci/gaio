@@ -49,11 +49,15 @@ const (
 	opDelete
 )
 
+const (
+	EV_READ  = 0x1
+	EV_WRITE = 0x2
+)
+
 // event represent a file descriptor event
 type event struct {
-	ident int  // identifier of this event, usually file descriptor
-	r     bool // readable
-	w     bool // writable
+	ident int // identifier of this event, usually file descriptor
+	ev    int // event mark
 }
 
 // events from epoll_wait passing to loop,should be in batch for atomicity.

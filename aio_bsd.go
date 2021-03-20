@@ -136,7 +136,7 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 			changes = changes[:0]
 
 			// event processing
-			var pe pollerEvents
+			pe := make([]event, 0, n)
 			for i := 0; i < n; i++ {
 				ev := &events[i]
 				if ev.Ident != 0 {

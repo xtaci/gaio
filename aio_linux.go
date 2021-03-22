@@ -130,6 +130,9 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 	// make a cached array for reusing
 	var cacheIndex uint
 	cachedEvents := make([]pollerEvents, cap(chEventNotify)+1)
+	for k := range cachedEvents {
+		cachedEvents[k] = make([]event, 1024)
+	}
 
 	// epoll eventloop
 	for {
@@ -156,7 +159,7 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 			// load from cache
 			pe := cachedEvents[cacheIndex]
 			if cap(pe) < n {
-				pe = make([]event, 0, n)
+				pe = make([]event, 0, 2*n)
 				cachedEvents[cacheIndex] = pe
 			}
 			pe = pe[:0]

@@ -129,7 +129,7 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 
 	// make a cached array for reusing
 	var cacheIndex uint
-	cachedEvents := make([]pollerEvents, cap(chEventNotify)+1)
+	cachedEvents := make([]pollerEvents, cap(chEventNotify)+2)
 	for k := range cachedEvents {
 		cachedEvents[k] = make([]event, 1024)
 	}

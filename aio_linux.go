@@ -127,6 +127,10 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 		p.mu.Unlock()
 	}()
 
+	// make a cached array for reusing
+	var cacheIndex uint
+	cachedEvents := make([]pollerEvents, cap(chEventNotify)+1)
+
 	// epoll eventloop
 	for {
 		select {
@@ -149,8 +153,15 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 				return
 			}
 
+			// load from cache
+			pe := cachedEvents[cacheIndex]
+			if cap(pe) < n {
+				pe = make([]event, 0, n)
+				cachedEvents[cacheIndex] = pe
+			}
+			pe = pe[:0]
+
 			// event processing
-			pe := make([]event, 0, n)
 			for i := 0; i < n; i++ {
 				ev := &events[i]
 				if int(ev.Fd) == p.efd {
@@ -179,6 +190,9 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 			case <-p.die:
 				return
 			}
+
+			// mov index
+			cacheIndex = (cacheIndex + 1) % uint(len(cachedEvents))
 		}
 	}
 }

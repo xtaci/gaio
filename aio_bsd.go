@@ -9,6 +9,7 @@ import (
 )
 
 type poller struct {
+	poolGeneric
 	mu sync.Mutex // mutex to protect fd closing
 	fd int        // kqueue fd
 
@@ -100,6 +101,7 @@ func (p *poller) wakeup() error {
 }
 
 func (p *poller) Wait(chEventNotify chan pollerEvents) {
+	p.initCache(cap(chEventNotify) + 2)
 	events := make([]syscall.Kevent_t, maxEvents)
 	defer func() {
 		p.mu.Lock()
@@ -135,8 +137,9 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 			}
 			changes = changes[:0]
 
+			// load from cache
+			pe := p.loadCache(n)
 			// event processing
-			pe := make([]event, 0, n)
 			for i := 0; i < n; i++ {
 				ev := &events[i]
 				if ev.Ident != 0 {

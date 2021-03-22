@@ -65,6 +65,30 @@ type event struct {
 // tiny messages.
 type pollerEvents []event
 
+// generic poll struct
+type poolGeneric struct {
+	cachedEvents []pollerEvents
+	cacheIndex   uint
+}
+
+func (pg *poolGeneric) initCache(numCache int) {
+	pg.cachedEvents = make([]pollerEvents, numCache)
+	for k := range pg.cachedEvents {
+		pg.cachedEvents[k] = make([]event, 1024)
+	}
+}
+
+func (pg *poolGeneric) loadCache(size int) pollerEvents {
+	pe := pg.cachedEvents[pg.cacheIndex]
+	if cap(pe) < size {
+		pe = make([]event, 0, 2*size)
+		pg.cachedEvents[pg.cacheIndex] = pe
+	}
+	pe = pe[:0]
+	pg.cacheIndex = (pg.cacheIndex + 1) % uint(len(pg.cachedEvents))
+	return pe
+}
+
 // OpResult is the result of an aysnc-io
 type OpResult struct {
 	// Operation Type

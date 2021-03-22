@@ -16,6 +16,7 @@ const (
 )
 
 type poller struct {
+	poolGeneric
 	mu     sync.Mutex // mutex to protect fd closing
 	pfd    int        // epoll fd
 	efd    int        // eventfd
@@ -116,6 +117,7 @@ func (p *poller) wakeup() error {
 }
 
 func (p *poller) Wait(chEventNotify chan pollerEvents) {
+	p.initCache(cap(chEventNotify) + 2)
 	events := make([]syscall.EpollEvent, maxEvents)
 	// close poller fd & eventfd in defer
 	defer func() {
@@ -126,13 +128,6 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 		p.efd = -1
 		p.mu.Unlock()
 	}()
-
-	// make a cached array for reusing
-	var cacheIndex uint
-	cachedEvents := make([]pollerEvents, cap(chEventNotify)+2)
-	for k := range cachedEvents {
-		cachedEvents[k] = make([]event, 1024)
-	}
 
 	// epoll eventloop
 	for {
@@ -157,13 +152,7 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 			}
 
 			// load from cache
-			pe := cachedEvents[cacheIndex]
-			if cap(pe) < n {
-				pe = make([]event, 0, 2*n)
-				cachedEvents[cacheIndex] = pe
-			}
-			pe = pe[:0]
-
+			pe := p.loadCache(n)
 			// event processing
 			for i := 0; i < n; i++ {
 				ev := &events[i]
@@ -193,9 +182,6 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 			case <-p.die:
 				return
 			}
-
-			// mov index
-			cacheIndex = (cacheIndex + 1) % uint(len(cachedEvents))
 		}
 	}
 }

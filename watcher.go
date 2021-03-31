@@ -45,8 +45,9 @@ type watcher struct {
 
 	// lock for pending io operations
 	// aiocb is associated to fd
-	pending      []*aiocb
-	pendingMutex sync.Mutex
+	pendingCreate     []*aiocb
+	pendingProcessing []*aiocb // swaped pending
+	pendingMutex      sync.Mutex
 
 	// internal buffer for reading
 	swapSize      int // swap buffer capacity
@@ -90,7 +91,9 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.pfd = pfd
 
 	// loop related chan
-	w.chEventNotify = make(chan pollerEvents, eventQueueSize)
+	w.pendingCreate = make([]*aiocb, 0, maxEvents)
+	w.pendingProcessing = make([]*aiocb, 0, maxEvents)
+	w.chEventNotify = make(chan pollerEvents)
 	w.chPendingNotify = make(chan struct{}, 1)
 	w.chNotifyCompletion = make(chan struct{}, 1)
 	w.die = make(chan struct{})
@@ -230,7 +233,7 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 			return ErrUnsupported
 		}
 		w.pendingMutex.Lock()
-		w.pending = append(w.pending, &aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull})
+		w.pendingCreate = append(w.pendingCreate, &aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull})
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()
@@ -397,20 +400,15 @@ func (w *watcher) loop() {
 		}
 	}()
 
-	var pending []*aiocb
 	for {
 		select {
 		case <-w.chPendingNotify:
-			// copy from w.pending to local pending
+			// swap w.pending with w.pending2
 			w.pendingMutex.Lock()
-			if cap(pending) < cap(w.pending) {
-				pending = make([]*aiocb, 0, cap(w.pending))
-			}
-			pending = pending[:len(w.pending)]
-			copy(pending, w.pending)
-			w.pending = w.pending[:0]
+			w.pendingCreate, w.pendingProcessing = w.pendingProcessing, w.pendingCreate
+			w.pendingCreate = w.pendingCreate[:0]
 			w.pendingMutex.Unlock()
-			w.handlePending(pending)
+			w.handlePending(w.pendingProcessing)
 
 		case pe := <-w.chEventNotify: // poller events
 			w.handleEvents(pe)

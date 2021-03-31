@@ -18,6 +18,17 @@ import (
 	"time"
 )
 
+var (
+	aiocbPool sync.Pool
+	emptycb   aiocb
+)
+
+func init() {
+	aiocbPool.New = func() interface{} {
+		return new(aiocb)
+	}
+}
+
 // fdDesc contains all data structures associated to fd
 type fdDesc struct {
 	readers list.List // all read/write requests
@@ -42,7 +53,6 @@ type watcher struct {
 	results            [][]OpResult    // swap buffer for result delivery
 	resultsIdx         int
 	resultsMutex       sync.Mutex
-	aioResults         []*aiocb
 
 	// lock for pending io operations
 	// aiocb is associated to fd
@@ -108,7 +118,6 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 
 	// results swap for WaitIO
 	w.results = make([][]OpResult, 2)
-	w.aioResults = make([]*aiocb, 0, maxEvents)
 
 	// init loop related data structures
 	w.descs = make(map[int]*fdDesc)
@@ -234,8 +243,11 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 		} else {
 			return ErrUnsupported
 		}
+
+		cb := aiocbPool.Get().(*aiocb)
+		*cb = aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull}
 		w.pendingMutex.Lock()
-		w.pendingCreate = append(w.pendingCreate, &aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull})
+		w.pendingCreate = append(w.pendingCreate, cb)
 		w.pendingMutex.Unlock()
 
 		w.notifyPending()
@@ -365,22 +377,16 @@ func (w *watcher) releaseConn(ident int) {
 	}
 }
 
-func (w *watcher) deliver(pcb *aiocb) {
-	w.deliverBatch([]*aiocb{pcb})
-}
-
 // deliver function will try best to aggregate results for batch delivery
-func (w *watcher) deliverBatch(pcbs []*aiocb) {
+func (w *watcher) deliver(pcb *aiocb) {
 	var hangup chan struct{}
 
 	w.resultsMutex.Lock()
-	for _, pcb := range pcbs {
-		w.results[w.resultsIdx] = append(w.results[w.resultsIdx], OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
-		if pcb.notifyCaller {
-			if hangup == nil {
-				hangup = make(chan struct{})
-				w.hangups = append(w.hangups, hangup)
-			}
+	w.results[w.resultsIdx] = append(w.results[w.resultsIdx], OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+	if pcb.notifyCaller {
+		if hangup == nil {
+			hangup = make(chan struct{})
+			w.hangups = append(w.hangups, hangup)
 		}
 	}
 	w.resultsMutex.Unlock()
@@ -562,7 +568,6 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	// identified by 'e.ident', all library operation will be based on 'e.ident',
 	// then IO operation is impossible to misread or miswrite on re-created fd.
 	//log.Println(e)
-	w.aioResults = w.aioResults[:0]
 	for _, e := range pe {
 		if desc, ok := w.descs[e.ident]; ok {
 			if e.ev&EV_READ != 0 {
@@ -571,11 +576,13 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 					next = elem.Next()
 					pcb := elem.Value.(*aiocb)
 					if w.tryRead(e.ident, pcb) {
-						w.aioResults = append(w.aioResults, pcb)
+						w.deliver(pcb)
 						desc.readers.Remove(elem)
 						if !pcb.deadline.IsZero() {
 							heap.Remove(&w.timeouts, pcb.idx)
 						}
+						// recycle
+						aiocbPool.Put(pcb)
 					} else {
 						break
 					}
@@ -588,11 +595,13 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 					next = elem.Next()
 					pcb := elem.Value.(*aiocb)
 					if w.tryWrite(e.ident, pcb) {
-						w.aioResults = append(w.aioResults, pcb)
+						w.deliver(pcb)
 						desc.writers.Remove(elem)
 						if !pcb.deadline.IsZero() {
 							heap.Remove(&w.timeouts, pcb.idx)
 						}
+						// recycle
+						aiocbPool.Put(pcb)
 					} else {
 						break
 					}
@@ -600,6 +609,4 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 			}
 		}
 	}
-
-	w.deliverBatch(w.aioResults)
 }

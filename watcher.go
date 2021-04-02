@@ -21,7 +21,6 @@ import (
 
 var (
 	aiocbPool sync.Pool
-	emptycb   aiocb
 )
 
 func init() {
@@ -537,7 +536,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 		if !pcb.deadline.IsZero() {
 			heap.Push(&w.timeouts, pcb)
 			if w.timeouts.Len() == 1 {
-				w.timer.Reset(pcb.deadline.Sub(time.Now()))
+				w.timer.Reset(time.Until(pcb.deadline))
 			}
 		}
 	}

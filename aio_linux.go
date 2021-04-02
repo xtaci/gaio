@@ -138,7 +138,7 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 			// check for new awaiting
 			p.awaitingMutex.Lock()
 			for _, fd := range p.awaiting {
-				syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
+				_ = syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
 			}
 			p.awaiting = p.awaiting[:0]
 			p.awaitingMutex.Unlock()
@@ -157,7 +157,7 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 			for i := 0; i < n; i++ {
 				ev := &events[i]
 				if int(ev.Fd) == p.efd {
-					syscall.Read(p.efd, p.efdbuf) // simply consume
+					_, _ = syscall.Read(p.efd, p.efdbuf) // simply consume
 				} else {
 					e := event{ident: int(ev.Fd)}
 

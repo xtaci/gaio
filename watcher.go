@@ -14,7 +14,6 @@ import (
 	"reflect"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -59,8 +58,6 @@ type watcher struct {
 	pendingCreate     []*aiocb
 	pendingProcessing []*aiocb // swaped pending
 	pendingMutex      sync.Mutex
-
-	fastIO int32
 
 	// internal buffer for reading
 	swapSize        int // swap buffer capacity
@@ -247,14 +244,8 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 
 		w.pendingMutex.Lock()
 		w.pendingCreate = append(w.pendingCreate, cb)
-		if atomic.CompareAndSwapInt32(&w.fastIO, 0, 1) {
-			w.handlePending(w.pendingCreate)
-			w.pendingCreate = w.pendingCreate[:0]
-			atomic.CompareAndSwapInt32(&w.fastIO, 1, 0)
-		} else {
-			w.notifyPending()
-		}
 		w.pendingMutex.Unlock()
+		w.notifyPending()
 
 		return nil
 	}
@@ -412,8 +403,6 @@ func (w *watcher) loop() {
 	for {
 		select {
 		case <-w.chPendingNotify:
-			for !atomic.CompareAndSwapInt32(&w.fastIO, 0, 1) {
-			}
 			// pending buffer swap
 			w.pendingMutex.Lock()
 			w.pendingCreate, w.pendingProcessing = w.pendingProcessing, w.pendingCreate
@@ -422,13 +411,9 @@ func (w *watcher) loop() {
 			w.handlePending(w.pendingProcessing)
 
 		case pe := <-w.chEventNotify: // poller events
-			for !atomic.CompareAndSwapInt32(&w.fastIO, 0, 1) {
-			}
 			w.handleEvents(pe)
 
 		case <-w.timer.C: // timeout heap
-			for !atomic.CompareAndSwapInt32(&w.fastIO, 0, 1) {
-			}
 			for w.timeouts.Len() > 0 {
 				now := time.Now()
 				pcb := w.timeouts[0]
@@ -445,8 +430,6 @@ func (w *watcher) loop() {
 			}
 
 		case <-w.gcNotify: // gc recycled net.Conn
-			for !atomic.CompareAndSwapInt32(&w.fastIO, 0, 1) {
-			}
 			w.gcMutex.Lock()
 			for i, c := range w.gc {
 				ptr := reflect.ValueOf(c).Pointer()
@@ -462,9 +445,6 @@ func (w *watcher) loop() {
 
 		case <-w.die:
 			return
-		}
-
-		for atomic.CompareAndSwapInt32(&w.fastIO, 1, 0) {
 		}
 	}
 }

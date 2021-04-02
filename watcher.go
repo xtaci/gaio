@@ -376,18 +376,18 @@ func (w *watcher) deliver(pcb *aiocb) {
 	w.resultsFront = append(w.resultsFront, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
 	w.resultsMutex.Unlock()
 
+	// trigger event notification
+	select {
+	case w.chNotifyCompletion <- struct{}{}:
+	default:
+	}
+
 	if !pcb.deadline.IsZero() {
 		heap.Remove(&w.timeouts, pcb.idx)
 	}
 
 	// recycle
 	aiocbPool.Put(pcb)
-
-	// trigger event notification
-	select {
-	case w.chNotifyCompletion <- struct{}{}:
-	default:
-	}
 }
 
 // the core event loop of this watcher
@@ -402,7 +402,7 @@ func (w *watcher) loop() {
 	for {
 		select {
 		case <-w.chPendingNotify:
-			// swap w.pending with w.pending2
+			// pending buffer swap
 			w.pendingMutex.Lock()
 			w.pendingCreate, w.pendingProcessing = w.pendingProcessing, w.pendingCreate
 			w.pendingCreate = w.pendingCreate[:0]
@@ -410,13 +410,6 @@ func (w *watcher) loop() {
 			w.handlePending(w.pendingProcessing)
 
 		case pe := <-w.chEventNotify: // poller events
-			// try handle pending
-			w.pendingMutex.Lock()
-			w.pendingCreate, w.pendingProcessing = w.pendingProcessing, w.pendingCreate
-			w.pendingCreate = w.pendingCreate[:0]
-			w.pendingMutex.Unlock()
-			w.handlePending(w.pendingProcessing)
-
 			w.handleEvents(pe)
 
 		case <-w.timer.C: // timeout heap

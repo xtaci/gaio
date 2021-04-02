@@ -243,7 +243,8 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 		}
 
 		cb := aiocbPool.Get().(*aiocb)
-		*cb = aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull}
+		*cb = aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
+
 		w.pendingMutex.Lock()
 		w.pendingCreate = append(w.pendingCreate, cb)
 		if atomic.CompareAndSwapInt32(&w.fastIO, 0, 1) {
@@ -391,7 +392,7 @@ func (w *watcher) deliver(pcb *aiocb) {
 	default:
 	}
 
-	if !pcb.deadline.IsZero() {
+	if pcb.idx != -1 {
 		heap.Remove(&w.timeouts, pcb.idx)
 	}
 
@@ -523,17 +524,9 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				})
 			}
 		}
-		// push to heap for timeout operation
-		if !pcb.deadline.IsZero() {
-			heap.Push(&w.timeouts, pcb)
-			if w.timeouts.Len() == 1 {
-				w.timer.Reset(pcb.deadline.Sub(time.Now()))
-			}
-		}
 
 		// operations splitted into different buckets
-		switch pcb.op {
-		case OpRead:
+		if pcb.op == OpRead {
 			// try immediately queue is empty
 			if desc.readers.Len() == 0 {
 				if w.tryRead(ident, pcb) {
@@ -544,7 +537,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			// enqueue for poller events
 			pcb.l = &desc.readers
 			pcb.elem = pcb.l.PushBack(pcb)
-		case OpWrite:
+		} else {
 			if desc.writers.Len() == 0 {
 				if w.tryWrite(ident, pcb) {
 					w.deliver(pcb)
@@ -553,6 +546,14 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			}
 			pcb.l = &desc.writers
 			pcb.elem = pcb.l.PushBack(pcb)
+		}
+
+		// push to heap for timeout operation
+		if !pcb.deadline.IsZero() {
+			heap.Push(&w.timeouts, pcb)
+			if w.timeouts.Len() == 1 {
+				w.timer.Reset(pcb.deadline.Sub(time.Now()))
+			}
 		}
 	}
 }

@@ -372,7 +372,6 @@ func (w *watcher) releaseConn(ident int) {
 // deliver with resultsMutex locked
 func (w *watcher) deliverLocked(pcb *aiocb) {
 	w.deliver(pcb)
-	w.resultsMutex.Unlock()
 }
 
 // deliver function will try best to aggregate results for batch delivery
@@ -553,8 +552,6 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	// identified by 'e.ident', all library operation will be based on 'e.ident',
 	// then IO operation is impossible to misread or miswrite on re-created fd.
 	//log.Println(e)
-	w.resultsMutex.Lock()
-	w.resultsMutex.Unlock()
 	for _, e := range pe {
 		if desc, ok := w.descs[e.ident]; ok {
 			if e.ev&EV_READ != 0 {

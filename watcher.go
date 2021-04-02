@@ -160,6 +160,7 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 
 		w.swapBufferFront, w.swapBufferBack = w.swapBufferBack, w.swapBufferFront
 		w.bufferOffset = 0
+
 		w.resultsMutex.Unlock()
 
 		if len(r) > 0 {
@@ -369,11 +370,6 @@ func (w *watcher) releaseConn(ident int) {
 	}
 }
 
-// deliver with resultsMutex locked
-func (w *watcher) deliverLocked(pcb *aiocb) {
-	w.deliver(pcb)
-}
-
 // deliver function will try best to aggregate results for batch delivery
 func (w *watcher) deliver(pcb *aiocb) {
 	w.resultsMutex.Lock()
@@ -416,6 +412,13 @@ func (w *watcher) loop() {
 		case pe := <-w.chEventNotify: // poller events
 			w.handleEvents(pe)
 
+			// try handle pending
+			w.pendingMutex.Lock()
+			w.pendingCreate, w.pendingProcessing = w.pendingProcessing, w.pendingCreate
+			w.pendingCreate = w.pendingCreate[:0]
+			w.pendingMutex.Unlock()
+			w.handlePending(w.pendingProcessing)
+
 		case <-w.timer.C: // timeout heap
 			for w.timeouts.Len() > 0 {
 				now := time.Now()
@@ -423,7 +426,7 @@ func (w *watcher) loop() {
 				if now.After(pcb.deadline) {
 					// ErrDeadline
 					pcb.err = ErrDeadline
-					w.deliverLocked(pcb)
+					w.deliver(pcb)
 					// remove from list
 					pcb.l.Remove(pcb.elem)
 				} else {
@@ -469,7 +472,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 		} else {
 			if dupfd, err := dupconn(pcb.conn); err != nil {
 				pcb.err = err
-				w.deliverLocked(pcb)
+				w.deliver(pcb)
 				continue
 			} else {
 				// as we duplicated successfully, we're safe to
@@ -482,7 +485,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				werr := w.pfd.Watch(ident)
 				if werr != nil {
 					pcb.err = werr
-					w.deliverLocked(pcb)
+					w.deliver(pcb)
 					continue
 				}
 
@@ -521,7 +524,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			// try immediately queue is empty
 			if desc.readers.Len() == 0 {
 				if w.tryRead(ident, pcb) {
-					w.deliverLocked(pcb)
+					w.deliver(pcb)
 					continue
 				}
 			}
@@ -531,7 +534,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 		case OpWrite:
 			if desc.writers.Len() == 0 {
 				if w.tryWrite(ident, pcb) {
-					w.deliverLocked(pcb)
+					w.deliver(pcb)
 					continue
 				}
 			}

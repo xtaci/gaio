@@ -109,20 +109,20 @@ type OpResult struct {
 
 // aiocb contains all info for a single request
 type aiocb struct {
-	l            *list.List // list where this request belongs to
-	elem         *list.Element
-	ctx          interface{} // user context associated with this request
-	ptr          uintptr     // pointer to conn
-	op           OpType      // read or write
-	conn         net.Conn    // associated connection for nonblocking-io
-	err          error       // error for last operation
-	size         int         // size received or sent
-	buffer       []byte
-	readFull     bool // requests will read full or error
-	useSwap      bool // mark if the buffer is internal swap buffer
-	notifyCaller bool // mark if the caller have to wakeup caller to swap buffer.
-	idx          int  // index for heap op
-	deadline     time.Time
+	l          *list.List // list where this request belongs to
+	elem       *list.Element
+	ctx        interface{} // user context associated with this request
+	ptr        uintptr     // pointer to conn
+	op         OpType      // read or write
+	conn       net.Conn    // associated connection for nonblocking-io
+	err        error       // error for last operation
+	size       int         // size received or sent
+	buffer     []byte
+	backBuffer [1]byte // one byte buffer used when internal buffer exhausted
+	readFull   bool    // requests will read full or error
+	useSwap    bool    // mark if the buffer is internal swap buffer
+	idx        int     // index for heap op
+	deadline   time.Time
 }
 
 // Watcher will monitor events and process async-io request(s),

@@ -409,7 +409,6 @@ func (w *watcher) loop() {
 			w.pendingMutex.Unlock()
 			w.handlePending(w.pendingProcessing)
 
-			w.handleEvents(pe)
 		case pe := <-w.chEventNotify: // poller events
 			// try handle pending
 			w.pendingMutex.Lock()

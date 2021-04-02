@@ -553,6 +553,16 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	// identified by 'e.ident', all library operation will be based on 'e.ident',
 	// then IO operation is impossible to misread or miswrite on re-created fd.
 	//log.Println(e)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go w.handleReadEvents(pe, &wg)
+	go w.handleWriteEvents(pe, &wg)
+	wg.Wait()
+}
+
+// handle poller events
+func (w *watcher) handleReadEvents(pe pollerEvents, wg *sync.WaitGroup) {
 	for _, e := range pe {
 		if desc, ok := w.descs[e.ident]; ok {
 			if e.ev&EV_READ != 0 {
@@ -568,7 +578,15 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 					}
 				}
 			}
+		}
+	}
+	wg.Done()
+}
 
+// handle poller events
+func (w *watcher) handleWriteEvents(pe pollerEvents, wg *sync.WaitGroup) {
+	for _, e := range pe {
+		if desc, ok := w.descs[e.ident]; ok {
 			if e.ev&EV_WRITE != 0 {
 				var next *list.Element
 				for elem := desc.writers.Front(); elem != nil; elem = next {
@@ -584,4 +602,5 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 			}
 		}
 	}
+	wg.Done()
 }

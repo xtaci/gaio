@@ -81,11 +81,6 @@ type watcher struct {
 
 	die     chan struct{}
 	dieOnce sync.Once
-
-	// read/write spliter
-	wg            sync.WaitGroup
-	chReadEvents  chan pollerEvents
-	chWriteEvents chan pollerEvents
 }
 
 // NewWatcher creates a management object for monitoring file descriptors
@@ -111,8 +106,6 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.chEventNotify = make(chan pollerEvents)
 	w.chPendingNotify = make(chan struct{}, 1)
 	w.chNotifyCompletion = make(chan struct{}, 1)
-	w.chReadEvents = make(chan pollerEvents)
-	w.chWriteEvents = make(chan pollerEvents)
 	w.die = make(chan struct{})
 	w.chNotifySwap = make(chan struct{}, 1)
 
@@ -129,8 +122,6 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 
 	go w.pfd.Wait(w.chEventNotify)
 	go w.loop()
-	go w.readEventsHandler()
-	go w.writeEventsHandler()
 
 	// watcher finalizer for system resources
 	wrapper := &Watcher{watcher: w}
@@ -562,56 +553,37 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	// identified by 'e.ident', all library operation will be based on 'e.ident',
 	// then IO operation is impossible to misread or miswrite on re-created fd.
 	//log.Println(e)
-	w.wg.Add(2)
-	w.chReadEvents <- pe
-	w.chWriteEvents <- pe
-	w.wg.Wait()
-}
-
-// handle poller events
-func (w *watcher) readEventsHandler() {
-	for pe := range w.chReadEvents {
-		for _, e := range pe {
-			if desc, ok := w.descs[e.ident]; ok {
-				if e.ev&EV_READ != 0 {
-					var next *list.Element
-					for elem := desc.readers.Front(); elem != nil; elem = next {
-						next = elem.Next()
-						pcb := elem.Value.(*aiocb)
-						if w.tryRead(e.ident, pcb) {
-							w.deliver(pcb)
-							desc.readers.Remove(elem)
-						} else {
-							break
-						}
+	for _, e := range pe {
+		if desc, ok := w.descs[e.ident]; ok {
+			if e.ev&EV_READ != 0 {
+				var next *list.Element
+				for elem := desc.readers.Front(); elem != nil; elem = next {
+					next = elem.Next()
+					pcb := elem.Value.(*aiocb)
+					if w.tryRead(e.ident, pcb) {
+						w.deliver(pcb)
+						desc.readers.Remove(elem)
+					} else {
+						break
 					}
 				}
 			}
 		}
-		w.wg.Done()
-	}
-}
 
-// handle poller events
-func (w *watcher) writeEventsHandler() {
-	for pe := range w.chWriteEvents {
-		for _, e := range pe {
-			if desc, ok := w.descs[e.ident]; ok {
-				if e.ev&EV_WRITE != 0 {
-					var next *list.Element
-					for elem := desc.writers.Front(); elem != nil; elem = next {
-						next = elem.Next()
-						pcb := elem.Value.(*aiocb)
-						if w.tryWrite(e.ident, pcb) {
-							w.deliver(pcb)
-							desc.writers.Remove(elem)
-						} else {
-							break
-						}
+		if desc, ok := w.descs[e.ident]; ok {
+			if e.ev&EV_WRITE != 0 {
+				var next *list.Element
+				for elem := desc.writers.Front(); elem != nil; elem = next {
+					next = elem.Next()
+					pcb := elem.Value.(*aiocb)
+					if w.tryWrite(e.ident, pcb) {
+						w.deliver(pcb)
+						desc.writers.Remove(elem)
+					} else {
+						break
 					}
 				}
 			}
 		}
-		w.wg.Done()
 	}
 }

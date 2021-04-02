@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -63,7 +64,8 @@ type watcher struct {
 	swapSize        int // swap buffer capacity
 	swapBufferFront []byte
 	swapBufferBack  []byte
-	bufferOffset    int // bufferOffset for current using one
+	bufferOffset    int   // bufferOffset for current using one
+	shouldSwap      int32 // atomic mark for swap
 
 	// loop related data structure
 	descs      map[int]*fdDesc // all descriptors
@@ -157,9 +159,7 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 		r = w.resultsFront
 		w.resultsFront, w.resultsBack = w.resultsBack, w.resultsFront
 		w.resultsFront = w.resultsFront[:0]
-
-		w.swapBufferFront, w.swapBufferBack = w.swapBufferBack, w.swapBufferFront
-		w.bufferOffset = 0
+		atomic.StoreInt32(&w.shouldSwap, 1)
 
 		w.resultsMutex.Unlock()
 
@@ -259,6 +259,11 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 	backBuffer := false
 
 	if buf == nil { // internal or backBuffer
+		if atomic.CompareAndSwapInt32(&w.shouldSwap, 1, 0) {
+			w.swapBufferFront, w.swapBufferBack = w.swapBufferBack, w.swapBufferFront
+			w.bufferOffset = 0
+		}
+
 		buf = w.swapBufferFront[w.bufferOffset:]
 		if len(buf) > 0 {
 			useSwap = true
@@ -420,9 +425,9 @@ func (w *watcher) loop() {
 				if now.After(pcb.deadline) {
 					// ErrDeadline
 					pcb.err = ErrDeadline
-					w.deliver(pcb)
 					// remove from list
 					pcb.l.Remove(pcb.elem)
+					w.deliver(pcb)
 				} else {
 					w.timer.Reset(pcb.deadline.Sub(now))
 					break

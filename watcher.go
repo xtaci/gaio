@@ -14,7 +14,6 @@ import (
 	"reflect"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -60,11 +59,11 @@ type watcher struct {
 	pendingMutex      sync.Mutex
 
 	// internal buffer for reading
-	swapSize         int // swap buffer capacity
-	swapBufferFront  []byte
-	swapBufferBack   []byte
-	bufferOffset     int   // bufferOffset for current using one
-	shouldSwapBuffer int32 // atomic mark for swap
+	swapSize        int // swap buffer capacity
+	swapBufferFront []byte
+	swapBufferBack  []byte
+	bufferOffset    int           // bufferOffset for current using one
+	chNotifySwap    chan struct{} // notify buffer swap
 
 	// loop related data structure
 	descs      map[int]*fdDesc // all descriptors
@@ -115,6 +114,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.chReadEvents = make(chan pollerEvents)
 	w.chWriteEvents = make(chan pollerEvents)
 	w.die = make(chan struct{})
+	w.chNotifySwap = make(chan struct{}, 1)
 
 	// swapBuffer for shared reading
 	w.swapSize = bufsize
@@ -169,7 +169,10 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 			r = w.resultsFront
 			w.resultsFront, w.resultsBack = w.resultsBack, w.resultsFront
 			w.resultsFront = w.resultsFront[:0]
-			atomic.CompareAndSwapInt32(&w.shouldSwapBuffer, 0, 1)
+			select {
+			case w.chNotifySwap <- struct{}{}:
+			default:
+			}
 
 			w.resultsMutex.Unlock()
 			return r, nil
@@ -262,9 +265,11 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 	backBuffer := false
 
 	if buf == nil { // internal or backBuffer
-		if atomic.CompareAndSwapInt32(&w.shouldSwapBuffer, 1, 0) {
+		select {
+		case <-w.chNotifySwap:
 			w.swapBufferFront, w.swapBufferBack = w.swapBufferBack, w.swapBufferFront
 			w.bufferOffset = 0
+		default:
 		}
 
 		buf = w.swapBufferFront[w.bufferOffset:]

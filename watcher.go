@@ -371,14 +371,15 @@ func (w *watcher) releaseConn(ident int) {
 
 // deliver with resultsMutex locked
 func (w *watcher) deliverLocked(pcb *aiocb) {
-	w.resultsMutex.Lock()
 	w.deliver(pcb)
 	w.resultsMutex.Unlock()
 }
 
 // deliver function will try best to aggregate results for batch delivery
 func (w *watcher) deliver(pcb *aiocb) {
+	w.resultsMutex.Lock()
 	w.resultsFront = append(w.resultsFront, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+	w.resultsMutex.Unlock()
 
 	if !pcb.deadline.IsZero() {
 		heap.Remove(&w.timeouts, pcb.idx)

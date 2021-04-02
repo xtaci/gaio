@@ -556,8 +556,8 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go w.handleReadEvents(pe, &wg)
 	go w.handleWriteEvents(pe, &wg)
+	w.handleReadEvents(pe, &wg)
 	wg.Wait()
 }
 

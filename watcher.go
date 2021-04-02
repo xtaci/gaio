@@ -167,7 +167,7 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 		r = w.resultsFront
 		w.resultsFront, w.resultsBack = w.resultsBack, w.resultsFront
 		w.resultsFront = w.resultsFront[:0]
-		atomic.StoreInt32(&w.shouldSwapBuffer, 1)
+		atomic.CompareAndSwapInt32(&w.shouldSwapBuffer, 0, 1)
 
 		w.resultsMutex.Unlock()
 

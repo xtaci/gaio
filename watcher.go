@@ -162,22 +162,17 @@ func (w *watcher) notifyPending() {
 // An internal 'buf' returned or 'r []OpResult' are safe to use BEFORE next call to WaitIO().
 func (w *watcher) WaitIO() (r []OpResult, err error) {
 	for {
-		w.resultsMutex.Lock()
-
-		r = w.resultsFront
-		w.resultsFront, w.resultsBack = w.resultsBack, w.resultsFront
-		w.resultsFront = w.resultsFront[:0]
-		atomic.CompareAndSwapInt32(&w.shouldSwapBuffer, 0, 1)
-
-		w.resultsMutex.Unlock()
-
-		if len(r) > 0 {
-			return r, nil
-		}
-
-		// 0 results, wait for completion signal
 		select {
 		case <-w.chNotifyCompletion:
+			w.resultsMutex.Lock()
+
+			r = w.resultsFront
+			w.resultsFront, w.resultsBack = w.resultsBack, w.resultsFront
+			w.resultsFront = w.resultsFront[:0]
+			atomic.CompareAndSwapInt32(&w.shouldSwapBuffer, 0, 1)
+
+			w.resultsMutex.Unlock()
+			return r, nil
 		case <-w.die:
 			return r, ErrWatcherClosed
 		}

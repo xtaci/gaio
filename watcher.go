@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -49,9 +50,8 @@ type watcher struct {
 
 	// IO-completion events to user
 	chNotifyCompletion chan struct{}
-	hangups            []chan struct{} // blocking delivery will hangup on this
-	results            [][]OpResult    // swap buffer for result delivery
-	resultsIdx         int
+	resultsFront       []OpResult // swap buffer for result delivery
+	resultsBack        []OpResult
 	resultsMutex       sync.Mutex
 
 	// lock for pending io operations
@@ -61,10 +61,11 @@ type watcher struct {
 	pendingMutex      sync.Mutex
 
 	// internal buffer for reading
-	swapSize      int // swap buffer capacity
-	swapBuffer    [][]byte
-	swapBufferIdx int
-	bufferOffset  int // bufferOffset for current using one
+	swapSize        int // swap buffer capacity
+	swapBufferFront []byte
+	swapBufferBack  []byte
+	bufferOffset    int   // bufferOffset for current using one
+	shouldSwap      int32 // atomic mark for swap
 
 	// loop related data structure
 	descs      map[int]*fdDesc // all descriptors
@@ -111,13 +112,8 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 
 	// swapBuffer for shared reading
 	w.swapSize = bufsize
-	w.swapBuffer = make([][]byte, 2)
-	for i := 0; i < len(w.swapBuffer); i++ {
-		w.swapBuffer[i] = make([]byte, bufsize)
-	}
-
-	// results swap for WaitIO
-	w.results = make([][]OpResult, 2)
+	w.swapBufferFront = make([]byte, bufsize)
+	w.swapBufferBack = make([]byte, bufsize)
 
 	// init loop related data structures
 	w.descs = make(map[int]*fdDesc)
@@ -159,18 +155,17 @@ func (w *watcher) notifyPending() {
 func (w *watcher) WaitIO() (r []OpResult, err error) {
 	for {
 		w.resultsMutex.Lock()
-		if len(w.results[w.resultsIdx]) > 0 {
-			r = w.results[w.resultsIdx]
-			w.resultsIdx = (w.resultsIdx + 1) % len(w.results)
-			w.results[w.resultsIdx] = w.results[w.resultsIdx][:0]
-			for _, hangup := range w.hangups {
-				close(hangup)
-			}
-			w.hangups = nil
-			w.resultsMutex.Unlock()
+
+		r = w.resultsFront
+		w.resultsFront, w.resultsBack = w.resultsBack, w.resultsFront
+		w.resultsFront = w.resultsFront[:0]
+		atomic.StoreInt32(&w.shouldSwap, 1)
+
+		w.resultsMutex.Unlock()
+
+		if len(r) > 0 {
 			return r, nil
 		}
-		w.resultsMutex.Unlock()
 
 		// 0 results, wait for completion signal
 		select {
@@ -245,12 +240,13 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 		}
 
 		cb := aiocbPool.Get().(*aiocb)
-		*cb = aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull}
+		*cb = aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
+
 		w.pendingMutex.Lock()
 		w.pendingCreate = append(w.pendingCreate, cb)
 		w.pendingMutex.Unlock()
-
 		w.notifyPending()
+
 		return nil
 	}
 }
@@ -259,16 +255,26 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 	buf := pcb.buffer
 
-	var useSwap bool
-	if buf == nil { // internal buffer
-		buf = w.swapBuffer[w.swapBufferIdx][w.bufferOffset:]
-		useSwap = true
+	useSwap := false
+	backBuffer := false
+
+	if buf == nil { // internal or backBuffer
+		if atomic.CompareAndSwapInt32(&w.shouldSwap, 1, 0) {
+			w.swapBufferFront, w.swapBufferBack = w.swapBufferBack, w.swapBufferFront
+			w.bufferOffset = 0
+		}
+
+		buf = w.swapBufferFront[w.bufferOffset:]
+		if len(buf) > 0 {
+			useSwap = true
+		} else {
+			backBuffer = true
+			buf = pcb.backBuffer[:]
+		}
 	}
 
 	for {
-		// return values are stored in pcb
 		nr, er := syscall.Read(fd, buf[pcb.size:])
-		pcb.err = er
 		if er == syscall.EAGAIN {
 			return false
 		}
@@ -284,6 +290,7 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 			pcb.size += nr
 		}
 
+		pcb.err = er
 		// proper setting of EOF
 		if nr == 0 && er == nil {
 			pcb.err = io.EOF
@@ -292,32 +299,24 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 		break
 	}
 
-	completed := false
-	if pcb.err != nil {
-		completed = true
-	} else if pcb.size == len(pcb.buffer) {
-		completed = true
-	} else if !pcb.readFull {
-		completed = true
-	}
-
-	if completed {
-		// IO completed successfully with internal buffer
-		if useSwap && pcb.err == nil {
-			pcb.buffer = buf[:pcb.size] // set len to pcb.size
-			pcb.useSwap = true
-			w.bufferOffset += pcb.size
-
-			// current buffer exhausted, notify caller and swap buffer
-			if w.bufferOffset == w.swapSize {
-				w.swapBufferIdx = (w.swapBufferIdx + 1) % len(w.swapBuffer)
-				w.bufferOffset = 0
-				pcb.notifyCaller = true
-			}
+	if pcb.readFull { // read full operation
+		if pcb.err != nil {
+			return true
 		}
-		return true
+		if pcb.size == len(pcb.buffer) {
+			return true
+		}
+		return false
 	}
-	return false
+
+	if useSwap { // IO completed with internal buffer
+		pcb.useSwap = true
+		pcb.buffer = buf[:pcb.size] // set len to pcb.size
+		w.bufferOffset += pcb.size
+	} else if backBuffer { // internal buffer exhausted
+		pcb.buffer = buf
+	}
+	return true
 }
 
 func (w *watcher) tryWrite(fd int, pcb *aiocb) bool {
@@ -379,16 +378,8 @@ func (w *watcher) releaseConn(ident int) {
 
 // deliver function will try best to aggregate results for batch delivery
 func (w *watcher) deliver(pcb *aiocb) {
-	var hangup chan struct{}
-
 	w.resultsMutex.Lock()
-	w.results[w.resultsIdx] = append(w.results[w.resultsIdx], OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
-	if pcb.notifyCaller {
-		if hangup == nil {
-			hangup = make(chan struct{})
-			w.hangups = append(w.hangups, hangup)
-		}
-	}
+	w.resultsFront = append(w.resultsFront, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
 	w.resultsMutex.Unlock()
 
 	// trigger event notification
@@ -397,15 +388,12 @@ func (w *watcher) deliver(pcb *aiocb) {
 	default:
 	}
 
-	// wait on hangup if this is an blocking operation
-	if hangup != nil {
-		select {
-		case <-hangup:
-			return
-		case <-w.die:
-			return
-		}
+	if pcb.idx != -1 {
+		heap.Remove(&w.timeouts, pcb.idx)
 	}
+
+	// recycle
+	aiocbPool.Put(pcb)
 }
 
 // the core event loop of this watcher
@@ -420,7 +408,7 @@ func (w *watcher) loop() {
 	for {
 		select {
 		case <-w.chPendingNotify:
-			// swap w.pending with w.pending2
+			// pending buffer swap
 			w.pendingMutex.Lock()
 			w.pendingCreate, w.pendingProcessing = w.pendingProcessing, w.pendingCreate
 			w.pendingCreate = w.pendingCreate[:0]
@@ -435,11 +423,10 @@ func (w *watcher) loop() {
 				now := time.Now()
 				pcb := w.timeouts[0]
 				if now.After(pcb.deadline) {
-					// remove from list & heap together
-					pcb.l.Remove(pcb.elem)
-					heap.Pop(&w.timeouts)
 					// ErrDeadline
 					pcb.err = ErrDeadline
+					// remove from list
+					pcb.l.Remove(pcb.elem)
 					w.deliver(pcb)
 				} else {
 					w.timer.Reset(pcb.deadline.Sub(now))
@@ -524,8 +511,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 		}
 
 		// operations splitted into different buckets
-		switch pcb.op {
-		case OpRead:
+		if pcb.op == OpRead {
 			// try immediately queue is empty
 			if desc.readers.Len() == 0 {
 				if w.tryRead(ident, pcb) {
@@ -536,7 +522,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			// enqueue for poller events
 			pcb.l = &desc.readers
 			pcb.elem = pcb.l.PushBack(pcb)
-		case OpWrite:
+		} else {
 			if desc.writers.Len() == 0 {
 				if w.tryWrite(ident, pcb) {
 					w.deliver(pcb)
@@ -578,11 +564,6 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 					if w.tryRead(e.ident, pcb) {
 						w.deliver(pcb)
 						desc.readers.Remove(elem)
-						if !pcb.deadline.IsZero() {
-							heap.Remove(&w.timeouts, pcb.idx)
-						}
-						// recycle
-						aiocbPool.Put(pcb)
 					} else {
 						break
 					}
@@ -597,11 +578,6 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 					if w.tryWrite(e.ident, pcb) {
 						w.deliver(pcb)
 						desc.writers.Remove(elem)
-						if !pcb.deadline.IsZero() {
-							heap.Remove(&w.timeouts, pcb.idx)
-						}
-						// recycle
-						aiocbPool.Put(pcb)
 					} else {
 						break
 					}

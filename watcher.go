@@ -10,6 +10,7 @@ import (
 	"container/heap"
 	"container/list"
 	"io"
+	"log"
 	"net"
 	"reflect"
 	"runtime"
@@ -504,6 +505,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 					continue
 				}
 			}
+			log.Println("write pended")
 			pcb.l = &desc.writers
 			pcb.elem = pcb.l.PushBack(pcb)
 		}

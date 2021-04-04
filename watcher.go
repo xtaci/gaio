@@ -61,11 +61,12 @@ type watcher struct {
 	pendingMutex      sync.Mutex
 
 	// internal buffer for reading
-	swapSize        int // swap buffer capacity
-	swapBufferFront []byte
-	swapBufferBack  []byte
-	bufferOffset    int   // bufferOffset for current using one
-	shouldSwap      int32 // atomic mark for swap
+	swapSize         int // swap buffer capacity, triple buffer
+	swapBufferFront  []byte
+	swapBufferMiddle []byte
+	swapBufferBack   []byte
+	bufferOffset     int   // bufferOffset for current using one
+	shouldSwap       int32 // atomic mark for swap
 
 	// loop related data structure
 	descs      map[int]*fdDesc // all descriptors
@@ -113,6 +114,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	// swapBuffer for shared reading
 	w.swapSize = bufsize
 	w.swapBufferFront = make([]byte, bufsize)
+	w.swapBufferMiddle = make([]byte, bufsize)
 	w.swapBufferBack = make([]byte, bufsize)
 
 	// init loop related data structures
@@ -260,7 +262,7 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 
 	if buf == nil { // internal or backBuffer
 		if atomic.CompareAndSwapInt32(&w.shouldSwap, 1, 0) {
-			w.swapBufferFront, w.swapBufferBack = w.swapBufferBack, w.swapBufferFront
+			w.swapBufferFront, w.swapBufferMiddle, w.swapBufferBack = w.swapBufferMiddle, w.swapBufferBack, w.swapBufferFront
 			w.bufferOffset = 0
 		}
 

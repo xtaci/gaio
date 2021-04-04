@@ -34,6 +34,7 @@ type fdDesc struct {
 	readers list.List // all read/write requests
 	writers list.List
 	ptr     uintptr // pointer to net.Conn
+	ev      int     // save last fd states, initially we assume it's both readable & writable
 }
 
 // watcher will monitor events and process async-io request(s),
@@ -226,7 +227,7 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 }
 
 // tryRead will try to read data on aiocb and notify
-func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
+func (w *watcher) tryRead(fd int, desc *fdDesc, pcb *aiocb) bool {
 	buf := pcb.buffer
 
 	useSwap := false
@@ -250,6 +251,7 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 	for {
 		nr, er := syscall.Read(fd, buf[pcb.size:])
 		if er == syscall.EAGAIN {
+			desc.ev &^= EV_READ
 			return false
 		}
 
@@ -261,6 +263,9 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 
 		// if er is nil, accumulate bytes read
 		if er == nil {
+			if nr < len(buf[pcb.size:]) {
+				desc.ev &^= EV_READ
+			}
 			pcb.size += nr
 		}
 
@@ -293,7 +298,7 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 	return true
 }
 
-func (w *watcher) tryWrite(fd int, pcb *aiocb) bool {
+func (w *watcher) tryWrite(fd int, desc *fdDesc, pcb *aiocb) bool {
 	var nw int
 	var ew error
 
@@ -302,6 +307,7 @@ func (w *watcher) tryWrite(fd int, pcb *aiocb) bool {
 			nw, ew = syscall.Write(fd, pcb.buffer[pcb.size:])
 			pcb.err = ew
 			if ew == syscall.EAGAIN {
+				desc.ev &^= EV_WRITE
 				return false
 			}
 
@@ -311,6 +317,10 @@ func (w *watcher) tryWrite(fd int, pcb *aiocb) bool {
 
 			// if ew is nil, accumulate bytes written
 			if ew == nil {
+				if nw < len(pcb.buffer[pcb.size:]) {
+					desc.ev &^= EV_WRITE
+				}
+
 				pcb.size += nw
 			}
 			break
@@ -454,7 +464,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				}
 
 				// file description bindings
-				desc = &fdDesc{ptr: pcb.ptr}
+				desc = &fdDesc{ptr: pcb.ptr, ev: EV_WRITE | EV_READ}
 				w.descs[ident] = desc
 				w.connIdents[pcb.ptr] = ident
 
@@ -478,8 +488,8 @@ func (w *watcher) handlePending(pending []*aiocb) {
 		// operations splitted into different buckets
 		if pcb.op == OpRead {
 			// try immediately queue is empty
-			if desc.readers.Len() == 0 {
-				if w.tryRead(ident, pcb) {
+			if desc.ev&EV_READ != 0 {
+				if w.tryRead(ident, desc, pcb) {
 					w.deliver(pcb)
 					continue
 				}
@@ -488,8 +498,8 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			pcb.l = &desc.readers
 			pcb.elem = pcb.l.PushBack(pcb)
 		} else {
-			if desc.writers.Len() == 0 {
-				if w.tryWrite(ident, pcb) {
+			if desc.ev&EV_WRITE != 0 {
+				if w.tryWrite(ident, desc, pcb) {
 					w.deliver(pcb)
 					continue
 				}
@@ -522,11 +532,12 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	for _, e := range pe {
 		if desc, ok := w.descs[e.ident]; ok {
 			if e.ev&EV_READ != 0 {
+				desc.ev |= EV_READ
 				var next *list.Element
 				for elem := desc.readers.Front(); elem != nil; elem = next {
 					next = elem.Next()
 					pcb := elem.Value.(*aiocb)
-					if w.tryRead(e.ident, pcb) {
+					if w.tryRead(e.ident, desc, pcb) {
 						w.deliver(pcb)
 						desc.readers.Remove(elem)
 					} else {
@@ -536,11 +547,12 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 			}
 
 			if e.ev&EV_WRITE != 0 {
+				desc.ev |= EV_WRITE
 				var next *list.Element
 				for elem := desc.writers.Front(); elem != nil; elem = next {
 					next = elem.Next()
 					pcb := elem.Value.(*aiocb)
-					if w.tryWrite(e.ident, pcb) {
+					if w.tryWrite(e.ident, desc, pcb) {
 						w.deliver(pcb)
 						desc.writers.Remove(elem)
 					} else {

@@ -50,6 +50,7 @@ type watcher struct {
 
 	// IO-completion events to user
 	chNotifyCompletion chan struct{}
+	chResults          chan *aiocb
 	resultsFront       []OpResult // swap buffer for result delivery
 	resultsBack        []OpResult
 	resultsMutex       sync.Mutex
@@ -109,6 +110,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.chEventNotify = make(chan pollerEvents)
 	w.chPendingNotify = make(chan struct{}, 1)
 	w.chNotifyCompletion = make(chan struct{}, 1)
+	w.chResults = make(chan *aiocb, maxEvents)
 	w.die = make(chan struct{})
 
 	// swapBuffer for shared reading
@@ -125,6 +127,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 
 	go w.pfd.Wait(w.chEventNotify)
 	go w.loop()
+	go w.emitter()
 
 	// watcher finalizer for system resources
 	wrapper := &Watcher{watcher: w}
@@ -380,22 +383,40 @@ func (w *watcher) releaseConn(ident int) {
 
 // deliver function will try best to aggregate results for batch delivery
 func (w *watcher) deliver(pcb *aiocb) {
-	w.resultsMutex.Lock()
-	w.resultsFront = append(w.resultsFront, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
-	w.resultsMutex.Unlock()
-
-	// trigger event notification
-	select {
-	case w.chNotifyCompletion <- struct{}{}:
-	default:
-	}
-
 	if pcb.idx != -1 {
 		heap.Remove(&w.timeouts, pcb.idx)
 	}
+	w.chResults <- pcb
+}
 
-	// recycle
-	aiocbPool.Put(pcb)
+func (w *watcher) emitter() {
+	for {
+		select {
+		case pcb := <-w.chResults:
+			w.resultsMutex.Lock()
+			w.resultsFront = append(w.resultsFront, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+			// recycle
+			aiocbPool.Put(pcb)
+
+			for len(w.chResults) > 0 {
+				pcb := <-w.chResults
+				w.resultsFront = append(w.resultsFront, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+				// recycle
+				aiocbPool.Put(pcb)
+			}
+
+			w.resultsMutex.Unlock()
+
+			// trigger event notification
+			select {
+			case w.chNotifyCompletion <- struct{}{}:
+			default:
+			}
+
+		case <-w.die:
+			return
+		}
+	}
 }
 
 // the core event loop of this watcher

@@ -59,11 +59,11 @@ type watcher struct {
 	pendingMutex      sync.Mutex
 
 	// internal buffer for reading
-	swapSize        int // swap buffer capacity
-	swapBufferFront []byte
-	swapBufferBack  []byte
-	bufferOffset    int           // bufferOffset for current using one
-	chNotifySwap    chan struct{} // notify buffer swap
+	swapSize         int // swap buffer capacity
+	swapBufferFront  []byte
+	swapBufferBack   []byte
+	bufferOffset     int  // bufferOffset for current using one
+	shouldSwapBuffer bool // mark internal buffer should swap
 
 	// loop related data structure
 	descs      map[int]*fdDesc // all descriptors
@@ -107,7 +107,6 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.chPendingNotify = make(chan struct{}, 1)
 	w.chNotifyCompletion = make(chan struct{}, 1)
 	w.die = make(chan struct{})
-	w.chNotifySwap = make(chan struct{}, 1)
 
 	// swapBuffer for shared reading
 	w.swapSize = bufsize
@@ -160,11 +159,7 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 			r = w.resultsFront
 			w.resultsFront, w.resultsBack = w.resultsBack, w.resultsFront
 			w.resultsFront = w.resultsFront[:0]
-			select {
-			case w.chNotifySwap <- struct{}{}:
-			default:
-			}
-
+			w.shouldSwapBuffer = true
 			w.resultsMutex.Unlock()
 			return r, nil
 		case <-w.die:
@@ -249,6 +244,33 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 }
 
 // tryRead will try to read data on aiocb and notify
+func (w *watcher) read(fd int, pcb *aiocb) bool {
+	w.resultsMutex.Lock()
+	done := w.tryRead(fd, pcb)
+	if done {
+		w.resultsFront = append(w.resultsFront, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+	}
+	w.resultsMutex.Unlock()
+
+	if done {
+		// trigger event notification
+		select {
+		case w.chNotifyCompletion <- struct{}{}:
+		default:
+		}
+
+		if pcb.idx != -1 {
+			heap.Remove(&w.timeouts, pcb.idx)
+		}
+
+		// recycle
+		aiocbPool.Put(pcb)
+	}
+
+	return done
+}
+
+// tryRead will try to read data on aiocb and notify
 func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 	buf := pcb.buffer
 
@@ -256,11 +278,10 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 	backBuffer := false
 
 	if buf == nil { // internal or backBuffer
-		select {
-		case <-w.chNotifySwap:
+		if w.shouldSwapBuffer == true {
 			w.swapBufferFront, w.swapBufferBack = w.swapBufferBack, w.swapBufferFront
 			w.bufferOffset = 0
-		default:
+			w.shouldSwapBuffer = false
 		}
 
 		buf = w.swapBufferFront[w.bufferOffset:]
@@ -318,6 +339,32 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 	return true
 }
 
+func (w *watcher) write(fd int, pcb *aiocb) bool {
+	w.resultsMutex.Lock()
+	done := w.tryWrite(fd, pcb)
+	if done {
+		w.resultsFront = append(w.resultsFront, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+	}
+	w.resultsMutex.Unlock()
+
+	if done {
+		// trigger event notification
+		select {
+		case w.chNotifyCompletion <- struct{}{}:
+		default:
+		}
+
+		if pcb.idx != -1 {
+			heap.Remove(&w.timeouts, pcb.idx)
+		}
+
+		// recycle
+		aiocbPool.Put(pcb)
+	}
+
+	return done
+}
+
 func (w *watcher) tryWrite(fd int, pcb *aiocb) bool {
 	var nw int
 	var ew error
@@ -350,6 +397,26 @@ func (w *watcher) tryWrite(fd int, pcb *aiocb) bool {
 	return false
 }
 
+//  deliver a pcb to resultsFront
+func (w *watcher) deliver(pcb *aiocb) {
+	w.resultsMutex.Lock()
+	w.resultsFront = append(w.resultsFront, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+	w.resultsMutex.Unlock()
+
+	// trigger event notification
+	select {
+	case w.chNotifyCompletion <- struct{}{}:
+	default:
+	}
+
+	if pcb.idx != -1 {
+		heap.Remove(&w.timeouts, pcb.idx)
+	}
+
+	// recycle
+	aiocbPool.Put(pcb)
+}
+
 // release connection related resources
 func (w *watcher) releaseConn(ident int) {
 	if desc, ok := w.descs[ident]; ok {
@@ -373,26 +440,6 @@ func (w *watcher) releaseConn(ident int) {
 		// close socket file descriptor duplicated from net.Conn
 		syscall.Close(ident)
 	}
-}
-
-// deliver function will try best to aggregate results for batch delivery
-func (w *watcher) deliver(pcb *aiocb) {
-	w.resultsMutex.Lock()
-	w.resultsFront = append(w.resultsFront, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
-	w.resultsMutex.Unlock()
-
-	// trigger event notification
-	select {
-	case w.chNotifyCompletion <- struct{}{}:
-	default:
-	}
-
-	if pcb.idx != -1 {
-		heap.Remove(&w.timeouts, pcb.idx)
-	}
-
-	// recycle
-	aiocbPool.Put(pcb)
 }
 
 // the core event loop of this watcher
@@ -513,8 +560,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 		if pcb.op == OpRead {
 			// try immediately queue is empty
 			if desc.readers.Len() == 0 {
-				if w.tryRead(ident, pcb) {
-					w.deliver(pcb)
+				if w.read(ident, pcb) {
 					continue
 				}
 			}
@@ -523,8 +569,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			pcb.elem = pcb.l.PushBack(pcb)
 		} else {
 			if desc.writers.Len() == 0 {
-				if w.tryWrite(ident, pcb) {
-					w.deliver(pcb)
+				if w.write(ident, pcb) {
 					continue
 				}
 			}
@@ -560,8 +605,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 				for elem := desc.readers.Front(); elem != nil; elem = next {
 					next = elem.Next()
 					pcb := elem.Value.(*aiocb)
-					if w.tryRead(e.ident, pcb) {
-						w.deliver(pcb)
+					if w.read(e.ident, pcb) {
 						desc.readers.Remove(elem)
 					} else {
 						break
@@ -576,8 +620,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 				for elem := desc.writers.Front(); elem != nil; elem = next {
 					next = elem.Next()
 					pcb := elem.Value.(*aiocb)
-					if w.tryWrite(e.ident, pcb) {
-						w.deliver(pcb)
+					if w.write(e.ident, pcb) {
 						desc.writers.Remove(elem)
 					} else {
 						break

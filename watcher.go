@@ -42,7 +42,7 @@ type watcher struct {
 	pfd *poller
 
 	// netpoll events
-	chEventNotify chan pollerEvents
+	chEventNotify chan event
 
 	// events from user
 	chPending chan *aiocb
@@ -94,7 +94,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.pfd = pfd
 
 	// loop related chan
-	w.chEventNotify = make(chan pollerEvents)
+	w.chEventNotify = make(chan event, maxEvents)
 	w.chPending = make(chan *aiocb, maxEvents)
 	w.chResults = make(chan *aiocb, maxEvents)
 	w.die = make(chan struct{})
@@ -509,7 +509,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 }
 
 // handle poller events
-func (w *watcher) handleEvents(pe pollerEvents) {
+func (w *watcher) handleEvents(e event) {
 	// suppose fd(s) being polled is closed by conn.Close() from outside after chanrecv,
 	// and a new conn has re-opened with the same handler number(fd). The read and write
 	// on this fd is fatal.
@@ -519,33 +519,31 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	// identified by 'e.ident', all library operation will be based on 'e.ident',
 	// then IO operation is impossible to misread or miswrite on re-created fd.
 	//log.Println(e)
-	for _, e := range pe {
-		if desc, ok := w.descs[e.ident]; ok {
-			if e.ev&EV_READ != 0 {
-				var next *list.Element
-				for elem := desc.readers.Front(); elem != nil; elem = next {
-					next = elem.Next()
-					pcb := elem.Value.(*aiocb)
-					if w.tryRead(e.ident, pcb) {
-						w.deliver(pcb)
-						desc.readers.Remove(elem)
-					} else {
-						break
-					}
+	if desc, ok := w.descs[e.ident]; ok {
+		if e.ev&EV_READ != 0 {
+			var next *list.Element
+			for elem := desc.readers.Front(); elem != nil; elem = next {
+				next = elem.Next()
+				pcb := elem.Value.(*aiocb)
+				if w.tryRead(e.ident, pcb) {
+					w.deliver(pcb)
+					desc.readers.Remove(elem)
+				} else {
+					break
 				}
 			}
+		}
 
-			if e.ev&EV_WRITE != 0 {
-				var next *list.Element
-				for elem := desc.writers.Front(); elem != nil; elem = next {
-					next = elem.Next()
-					pcb := elem.Value.(*aiocb)
-					if w.tryWrite(e.ident, pcb) {
-						w.deliver(pcb)
-						desc.writers.Remove(elem)
-					} else {
-						break
-					}
+		if e.ev&EV_WRITE != 0 {
+			var next *list.Element
+			for elem := desc.writers.Front(); elem != nil; elem = next {
+				next = elem.Next()
+				pcb := elem.Value.(*aiocb)
+				if w.tryWrite(e.ident, pcb) {
+					w.deliver(pcb)
+					desc.writers.Remove(elem)
+				} else {
+					break
 				}
 			}
 		}

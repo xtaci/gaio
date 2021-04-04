@@ -116,7 +116,7 @@ func (p *poller) wakeup() error {
 	return ErrPollerClosed
 }
 
-func (p *poller) Wait(chEventNotify chan event) {
+func (p *poller) Wait(chEventNotify chan pollerEvents) {
 	p.initCache(cap(chEventNotify) + 2)
 	events := make([]syscall.EpollEvent, maxEvents)
 	// close poller fd & eventfd in defer
@@ -151,6 +151,8 @@ func (p *poller) Wait(chEventNotify chan event) {
 				return
 			}
 
+			// load from cache
+			pe := p.loadCache(n)
 			// event processing
 			for i := 0; i < n; i++ {
 				ev := &events[i]
@@ -165,21 +167,21 @@ func (p *poller) Wait(chEventNotify chan event) {
 					// ing simple code to detect peer shutdown when using Edge Trig-
 					// gered monitoring.)
 					if ev.Events&(syscall.EPOLLIN|syscall.EPOLLERR|syscall.EPOLLHUP|syscall.EPOLLRDHUP) != 0 {
-
 						e.ev |= EV_READ
 					}
 					if ev.Events&(syscall.EPOLLOUT|syscall.EPOLLERR|syscall.EPOLLHUP) != 0 {
 						e.ev |= EV_WRITE
 					}
 
-					select {
-					case chEventNotify <- e:
-					case <-p.die:
-						return
-					}
+					pe = append(pe, e)
 				}
 			}
 
+			select {
+			case chEventNotify <- pe:
+			case <-p.die:
+				return
+			}
 		}
 	}
 }

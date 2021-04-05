@@ -30,10 +30,16 @@ func init() {
 
 // fdDesc contains all data structures associated to fd
 type fdDesc struct {
+	w      *watcher
+	ident  int
 	reader *aiocb
 	writer *aiocb
 	ptr    uintptr // pointer to net.Conn
-	_lock  int32   // spinlock to avoid sched
+
+	ev_r int32 // pending events for not able to get lock
+	ev_w int32
+
+	_lock int32 // spinlock to avoid goroutine hangup
 }
 
 func (d *fdDesc) tryLock() bool {
@@ -46,6 +52,20 @@ func (d *fdDesc) Lock() {
 }
 
 func (d *fdDesc) Unlock() {
+	if d.reader != nil && atomic.CompareAndSwapInt32(&d.ev_r, 1, 0) {
+		if d.w.tryRead(d.ident, d.reader) {
+			d.w.deliver(d.reader)
+			d.reader = nil
+		}
+	}
+
+	if d.writer != nil && atomic.CompareAndSwapInt32(&d.ev_w, 1, 0) {
+		if d.w.tryWrite(d.ident, d.writer) {
+			d.w.deliver(d.writer)
+			d.writer = nil
+		}
+	}
+
 	for !atomic.CompareAndSwapInt32(&d._lock, 1, 0) {
 	}
 }
@@ -469,7 +489,7 @@ func (w *watcher) handlePending(pcb *aiocb) {
 			}
 
 			// file description bindings
-			desc = &fdDesc{ptr: pcb.ptr}
+			desc = &fdDesc{w: w, ident: ident, ptr: pcb.ptr}
 
 			w.connLock.Lock()
 			w.descs[ident] = desc
@@ -558,29 +578,14 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 
 				e.ident = -1
 				desc.Unlock()
-			}
-		}
-	}
-
-	for _, e := range pe {
-		if desc, ok := w.descs[e.ident]; ok {
-			if e.ident != -1 {
-				desc.Lock()
-				if e.ev&EV_READ != 0 && desc.reader != nil {
-					if w.tryRead(e.ident, desc.reader) {
-						w.deliver(desc.reader)
-						desc.reader = nil
-					}
+			} else {
+				if e.ev&EV_READ != 0 {
+					atomic.StoreInt32(&desc.ev_r, 1)
 				}
 
-				if e.ev&EV_WRITE != 0 && desc.writer != nil {
-					if w.tryWrite(e.ident, desc.writer) {
-						w.deliver(desc.writer)
-						desc.writer = nil
-					}
+				if e.ev&EV_WRITE != 0 {
+					atomic.StoreInt32(&desc.ev_w, 1)
 				}
-
-				desc.Unlock()
 			}
 		}
 	}

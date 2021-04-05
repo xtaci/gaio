@@ -116,10 +116,10 @@ type aiocb struct {
 	err        error       // error for last operation
 	size       int         // size received or sent
 	buffer     []byte
-	backBuffer [1]byte // one byte buffer used when internal buffer exhausted
-	readFull   bool    // requests will read full or error
-	useSwap    bool    // mark if the buffer is internal swap buffer
-	idx        int     // index for heap op
+	backBuffer [1024]byte // 1kbyte buffer used when internal buffer exhausted
+	readFull   bool       // requests will read full or error
+	useSwap    bool       // mark if the buffer is internal swap buffer
+	idx        int        // index for heap op
 	deadline   time.Time
 }
 

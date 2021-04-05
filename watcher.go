@@ -62,14 +62,6 @@ type watcher struct {
 	// IO-completion events to user
 	chResults chan *aiocb
 
-	// internal buffer for reading
-	swapSize         int // swap buffer capacity, triple buffer
-	swapBufferFront  []byte
-	swapBufferMiddle []byte
-	swapBufferBack   []byte
-	bufferOffset     int   // bufferOffset for current using one
-	shouldSwap       int32 // atomic mark for swap
-
 	// loop related data structure
 	descs      map[int]*fdDesc // all descriptors
 	connIdents map[uintptr]int // we must not hold net.Conn as key, for GC purpose
@@ -114,12 +106,6 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.chResults = make(chan *aiocb, maxEvents)
 	w.die = make(chan struct{})
 
-	// swapBuffer for shared reading
-	w.swapSize = bufsize
-	w.swapBufferFront = make([]byte, bufsize)
-	w.swapBufferMiddle = make([]byte, bufsize)
-	w.swapBufferBack = make([]byte, bufsize)
-
 	// init loop related data structures
 	w.descs = make(map[int]*fdDesc)
 	w.connIdents = make(map[uintptr]int)
@@ -160,8 +146,6 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 				r = append(r, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
 				aiocbPool.Put(pcb)
 			}
-			atomic.StoreInt32(&w.shouldSwap, 1)
-
 			return r, nil
 		case <-w.die:
 			return nil, ErrWatcherClosed
@@ -245,22 +229,10 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 	buf := pcb.buffer
 
-	useSwap := false
 	backBuffer := false
-
 	if buf == nil { // internal or backBuffer
-		if atomic.CompareAndSwapInt32(&w.shouldSwap, 1, 0) {
-			w.swapBufferFront, w.swapBufferMiddle, w.swapBufferBack = w.swapBufferMiddle, w.swapBufferBack, w.swapBufferFront
-			w.bufferOffset = 0
-		}
-
-		buf = w.swapBufferFront[w.bufferOffset:]
-		if len(buf) > 0 {
-			useSwap = true
-		} else {
-			backBuffer = true
-			buf = pcb.backBuffer[:]
-		}
+		backBuffer = true
+		buf = pcb.backBuffer[:]
 	}
 
 	for {
@@ -299,11 +271,7 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 		return false
 	}
 
-	if useSwap { // IO completed with internal buffer
-		pcb.useSwap = true
-		pcb.buffer = buf[:pcb.size] // set len to pcb.size
-		w.bufferOffset += pcb.size
-	} else if backBuffer { // internal buffer exhausted
+	if backBuffer { // internal buffer exhausted
 		pcb.buffer = buf
 	}
 	return true
@@ -494,24 +462,23 @@ func (w *watcher) handlePending(pcb *aiocb) {
 		}
 	}
 
-	desc.Lock()
-	defer desc.Unlock()
-
 	// lock fd
-	if pcb.op == OpRead && desc.reader == nil {
-		desc.reader = pcb
+	if pcb.op == OpRead {
 		if w.tryRead(ident, pcb) {
 			w.deliver(pcb)
-			desc.reader = nil
 			return
 		}
-	} else if pcb.op == OpWrite && desc.writer == nil {
-		desc.writer = pcb
+		desc.Lock()
+		defer desc.Unlock()
+		desc.reader = pcb
+	} else if pcb.op == OpWrite {
 		if w.tryWrite(ident, pcb) {
 			w.deliver(pcb)
-			desc.writer = nil
 			return
 		}
+		desc.Lock()
+		defer desc.Unlock()
+		desc.writer = pcb
 	}
 
 	// push to heap for timeout operation

@@ -36,10 +36,6 @@ type fdDesc struct {
 	writer *aiocb
 	ptr    uintptr // pointer to net.Conn
 
-	// watcher unable to get the lock, keep the event here
-	ev_r int32
-	ev_w int32
-
 	_lock int32 // spinlock to avoid goroutine hangup
 }
 
@@ -54,14 +50,14 @@ func (d *fdDesc) Lock() {
 
 func (d *fdDesc) Unlock() {
 	// watcher unable to get the lock
-	if d.reader != nil && atomic.CompareAndSwapInt32(&d.ev_r, 1, 0) {
+	if d.reader != nil {
 		if d.w.tryRead(d.ident, d.reader) {
 			d.w.deliver(d.reader)
 			d.reader = nil
 		}
 	}
 
-	if d.writer != nil && atomic.CompareAndSwapInt32(&d.ev_w, 1, 0) {
+	if d.writer != nil {
 		if d.w.tryWrite(d.ident, d.writer) {
 			d.w.deliver(d.writer)
 			d.writer = nil
@@ -519,22 +515,9 @@ func (w *watcher) handlePending(pcb *aiocb) {
 	defer desc.Unlock()
 
 	// operations splitted into different buckets
-	if pcb.op == OpRead {
-		// try immediately queue is empty
-		if desc.reader == nil {
-			if w.tryRead(ident, pcb) {
-				w.deliver(pcb)
-				return
-			}
-		}
+	if pcb.op == OpRead && desc.reader == nil {
 		desc.reader = pcb
-	} else {
-		if desc.writer == nil {
-			if w.tryWrite(ident, pcb) {
-				w.deliver(pcb)
-				return
-			}
-		}
+	} else if pcb.op == OpWrite && desc.writer == nil {
 		desc.writer = pcb
 	}
 
@@ -578,14 +561,6 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 					}
 				}
 				desc.Unlock()
-			} else { // cannot lock for now
-				if e.ev&EV_READ != 0 {
-					atomic.StoreInt32(&desc.ev_r, 1)
-				}
-
-				if e.ev&EV_WRITE != 0 {
-					atomic.StoreInt32(&desc.ev_w, 1)
-				}
 			}
 		}
 	}

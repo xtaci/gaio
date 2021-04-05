@@ -30,8 +30,6 @@ func init() {
 
 // fdDesc contains all data structures associated to fd
 type fdDesc struct {
-	w      *watcher
-	ident  int
 	reader *aiocb
 	writer *aiocb
 	ptr    uintptr // pointer to net.Conn
@@ -49,21 +47,6 @@ func (d *fdDesc) Lock() {
 }
 
 func (d *fdDesc) Unlock() {
-	// watcher unable to get the lock
-	if d.reader != nil {
-		if d.w.tryRead(d.ident, d.reader) {
-			d.w.deliver(d.reader)
-			d.reader = nil
-		}
-	}
-
-	if d.writer != nil {
-		if d.w.tryWrite(d.ident, d.writer) {
-			d.w.deliver(d.writer)
-			d.writer = nil
-		}
-	}
-
 	for !atomic.CompareAndSwapInt32(&d._lock, 1, 0) {
 	}
 }
@@ -487,7 +470,7 @@ func (w *watcher) handlePending(pcb *aiocb) {
 			}
 
 			// file description bindings
-			desc = &fdDesc{w: w, ident: ident, ptr: pcb.ptr}
+			desc = &fdDesc{ptr: pcb.ptr}
 
 			w.connLock.Lock()
 			w.descs[ident] = desc
@@ -514,11 +497,21 @@ func (w *watcher) handlePending(pcb *aiocb) {
 	desc.Lock()
 	defer desc.Unlock()
 
-	// operations splitted into different buckets
+	// lock fd
 	if pcb.op == OpRead && desc.reader == nil {
 		desc.reader = pcb
+		if w.tryRead(ident, pcb) {
+			w.deliver(pcb)
+			desc.reader = nil
+			return
+		}
 	} else if pcb.op == OpWrite && desc.writer == nil {
 		desc.writer = pcb
+		if w.tryWrite(ident, pcb) {
+			w.deliver(pcb)
+			desc.writer = nil
+			return
+		}
 	}
 
 	// push to heap for timeout operation

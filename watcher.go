@@ -61,6 +61,7 @@ type watcher struct {
 
 	// loop related data structure
 	descs      map[int]*fdDesc // all descriptors
+	descLock   sync.Mutex
 	connIdents map[uintptr]int // we must not hold net.Conn as key, for GC purpose
 	// for timeout operations which
 	// aiocb has non-zero deadline, either exists
@@ -112,7 +113,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.gcNotify = make(chan struct{}, 1)
 	w.timer = time.NewTimer(0)
 
-	go w.pfd.Wait(w.chEventNotify)
+	go w.pfd.Wait(w)
 	go w.loop()
 
 	// watcher finalizer for system resources
@@ -221,12 +222,9 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 		cb := aiocbPool.Get().(*aiocb)
 		*cb = aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
 
-		select {
-		case w.chPending <- cb:
-		case <-w.die:
-			return ErrWatcherClosed
-
-		}
+		w.descLock.Lock()
+		w.handlePending([]*aiocb{cb})
+		w.descLock.Unlock()
 
 		return nil
 	}
@@ -343,6 +341,7 @@ func (w *watcher) tryWrite(fd int, desc *fdDesc, pcb *aiocb) bool {
 
 // release connection related resources
 func (w *watcher) releaseConn(ident int) {
+	w.descLock.Lock()
 	if desc, ok := w.descs[ident]; ok {
 		// delete from heap
 		for e := desc.readers.Front(); e != nil; e = e.Next() {
@@ -364,6 +363,7 @@ func (w *watcher) releaseConn(ident int) {
 		// close socket file descriptor duplicated from net.Conn
 		syscall.Close(ident)
 	}
+	w.descLock.Unlock()
 }
 
 // deliver function will try best to aggregate results for batch delivery
@@ -383,25 +383,15 @@ func (w *watcher) deliver(pcb *aiocb) {
 func (w *watcher) loop() {
 	// defer function to release all resources
 	defer func() {
+		w.descLock.Lock()
 		for ident := range w.descs {
 			w.releaseConn(ident)
 		}
+		w.descLock.Unlock()
 	}()
 
-	var reqs []*aiocb
 	for {
 		select {
-		case r := <-w.chPending:
-			reqs = append(reqs, r)
-			for len(w.chPending) > 0 {
-				reqs = append(reqs, <-w.chPending)
-			}
-			w.handlePending(reqs)
-			reqs = reqs[:0]
-
-		case pe := <-w.chEventNotify: // poller events
-			w.handleEvents(pe)
-
 		case <-w.timer.C: // timeout heap
 			for w.timeouts.Len() > 0 {
 				now := time.Now()
@@ -538,6 +528,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	// identified by 'e.ident', all library operation will be based on 'e.ident',
 	// then IO operation is impossible to misread or miswrite on re-created fd.
 	//log.Println(e)
+	w.descLock.Lock()
 	for _, e := range pe {
 		if desc, ok := w.descs[e.ident]; ok {
 			if e.ev&EV_READ != 0 {
@@ -571,4 +562,5 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 			}
 		}
 	}
+	w.descLock.Unlock()
 }

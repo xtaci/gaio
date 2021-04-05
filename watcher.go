@@ -35,6 +35,7 @@ type fdDesc struct {
 	writers list.List
 	ptr     uintptr // pointer to net.Conn
 	ev      int     // save last fd states, initially we assume it's both readable & writable
+	sync.Mutex
 }
 
 // watcher will monitor events and process async-io request(s),
@@ -61,7 +62,7 @@ type watcher struct {
 
 	// loop related data structure
 	descs      map[int]*fdDesc // all descriptors
-	descLock   sync.Mutex
+	descLock   sync.RWMutex
 	connIdents map[uintptr]int // we must not hold net.Conn as key, for GC purpose
 	// for timeout operations which
 	// aiocb has non-zero deadline, either exists
@@ -219,12 +220,10 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 			return ErrUnsupported
 		}
 
-		cb := aiocbPool.Get().(*aiocb)
-		*cb = aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
+		pcb := aiocbPool.Get().(*aiocb)
+		*pcb = aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
 
-		w.descLock.Lock()
-		w.handlePending([]*aiocb{cb})
-		w.descLock.Unlock()
+		w.handlePending(pcb)
 
 		return nil
 	}
@@ -341,7 +340,6 @@ func (w *watcher) tryWrite(fd int, desc *fdDesc, pcb *aiocb) bool {
 
 // release connection related resources
 func (w *watcher) releaseConn(ident int) {
-	w.descLock.Lock()
 	if desc, ok := w.descs[ident]; ok {
 		// delete from heap
 		for e := desc.readers.Front(); e != nil; e = e.Next() {
@@ -363,7 +361,6 @@ func (w *watcher) releaseConn(ident int) {
 		// close socket file descriptor duplicated from net.Conn
 		syscall.Close(ident)
 	}
-	w.descLock.Unlock()
 }
 
 // deliver function will try best to aggregate results for batch delivery
@@ -429,90 +426,97 @@ func (w *watcher) loop() {
 }
 
 // for loop handling pending requests
-func (w *watcher) handlePending(pending []*aiocb) {
-	for _, pcb := range pending {
-		ident, ok := w.connIdents[pcb.ptr]
-		// resource releasing operation
-		if pcb.op == opDelete && ok {
-			w.releaseConn(ident)
-			continue
-		}
+func (w *watcher) handlePending(pcb *aiocb) {
+	w.descLock.RLock()
+	ident, ok := w.connIdents[pcb.ptr]
+	// resource releasing operation
+	if pcb.op == opDelete && ok {
+		w.releaseConn(ident)
+		return
+	}
 
-		// handling new connection
-		var desc *fdDesc
-		if ok {
-			desc = w.descs[ident]
+	// handling new connection
+	var desc *fdDesc
+	if ok {
+		desc = w.descs[ident]
+		w.descLock.RUnlock()
+	} else {
+		w.descLock.RUnlock()
+
+		if dupfd, err := dupconn(pcb.conn); err != nil {
+			pcb.err = err
+			w.deliver(pcb)
+			return
 		} else {
-			if dupfd, err := dupconn(pcb.conn); err != nil {
-				pcb.err = err
+			// as we duplicated successfully, we're safe to
+			// close the original connection
+			pcb.conn.Close()
+			// assign idents
+			ident = dupfd
+
+			// unexpected situation, should notify caller if we cannot dup(2)
+			werr := w.pfd.Watch(ident)
+			if werr != nil {
+				pcb.err = werr
 				w.deliver(pcb)
-				continue
-			} else {
-				// as we duplicated successfully, we're safe to
-				// close the original connection
-				pcb.conn.Close()
-				// assign idents
-				ident = dupfd
+				return
+			}
 
-				// unexpected situation, should notify caller if we cannot dup(2)
-				werr := w.pfd.Watch(ident)
-				if werr != nil {
-					pcb.err = werr
-					w.deliver(pcb)
-					continue
+			w.descLock.Lock()
+			// file description bindings
+			desc = &fdDesc{ptr: pcb.ptr, ev: EV_WRITE | EV_READ}
+			w.descs[ident] = desc
+			w.connIdents[pcb.ptr] = ident
+			w.descLock.Unlock()
+
+			// the conn is still useful for GC finalizer.
+			// note finalizer function cannot hold reference to net.Conn,
+			// if not it will never be GC-ed.
+			runtime.SetFinalizer(pcb.conn, func(c net.Conn) {
+				w.gcMutex.Lock()
+				w.gc = append(w.gc, c)
+				w.gcMutex.Unlock()
+
+				// notify gc processor
+				select {
+				case w.gcNotify <- struct{}{}:
+				default:
 				}
+			})
+		}
+	}
 
-				// file description bindings
-				desc = &fdDesc{ptr: pcb.ptr, ev: EV_WRITE | EV_READ}
-				w.descs[ident] = desc
-				w.connIdents[pcb.ptr] = ident
+	desc.Lock()
+	defer desc.Unlock()
 
-				// the conn is still useful for GC finalizer.
-				// note finalizer function cannot hold reference to net.Conn,
-				// if not it will never be GC-ed.
-				runtime.SetFinalizer(pcb.conn, func(c net.Conn) {
-					w.gcMutex.Lock()
-					w.gc = append(w.gc, c)
-					w.gcMutex.Unlock()
-
-					// notify gc processor
-					select {
-					case w.gcNotify <- struct{}{}:
-					default:
-					}
-				})
+	// operations splitted into different buckets
+	if pcb.op == OpRead {
+		// try immediately queue is empty
+		if desc.ev&EV_READ != 0 {
+			if w.tryRead(ident, desc, pcb) {
+				w.deliver(pcb)
+				return
 			}
 		}
-
-		// operations splitted into different buckets
-		if pcb.op == OpRead {
-			// try immediately queue is empty
-			if desc.ev&EV_READ != 0 {
-				if w.tryRead(ident, desc, pcb) {
-					w.deliver(pcb)
-					continue
-				}
+		// enqueue for poller events
+		pcb.l = &desc.readers
+		pcb.elem = pcb.l.PushBack(pcb)
+	} else {
+		if desc.ev&EV_WRITE != 0 {
+			if w.tryWrite(ident, desc, pcb) {
+				w.deliver(pcb)
+				return
 			}
-			// enqueue for poller events
-			pcb.l = &desc.readers
-			pcb.elem = pcb.l.PushBack(pcb)
-		} else {
-			if desc.ev&EV_WRITE != 0 {
-				if w.tryWrite(ident, desc, pcb) {
-					w.deliver(pcb)
-					continue
-				}
-			}
-			pcb.l = &desc.writers
-			pcb.elem = pcb.l.PushBack(pcb)
 		}
+		pcb.l = &desc.writers
+		pcb.elem = pcb.l.PushBack(pcb)
+	}
 
-		// push to heap for timeout operation
-		if !pcb.deadline.IsZero() {
-			heap.Push(&w.timeouts, pcb)
-			if w.timeouts.Len() == 1 {
-				w.timer.Reset(time.Until(pcb.deadline))
-			}
+	// push to heap for timeout operation
+	if !pcb.deadline.IsZero() {
+		heap.Push(&w.timeouts, pcb)
+		if w.timeouts.Len() == 1 {
+			w.timer.Reset(time.Until(pcb.deadline))
 		}
 	}
 }
@@ -528,9 +532,10 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	// identified by 'e.ident', all library operation will be based on 'e.ident',
 	// then IO operation is impossible to misread or miswrite on re-created fd.
 	//log.Println(e)
-	w.descLock.Lock()
+	w.descLock.RLock()
 	for _, e := range pe {
 		if desc, ok := w.descs[e.ident]; ok {
+			desc.Lock()
 			if e.ev&EV_READ != 0 {
 				desc.ev |= EV_READ
 				var next *list.Element
@@ -560,7 +565,8 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 					}
 				}
 			}
+			desc.Unlock()
 		}
 	}
-	w.descLock.Unlock()
+	w.descLock.RUnlock()
 }

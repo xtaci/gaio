@@ -36,7 +36,8 @@ type fdDesc struct {
 	writer *aiocb
 	ptr    uintptr // pointer to net.Conn
 
-	ev_r int32 // pending events for not able to get lock
+	// watcher unable to get the lock, keep the event here
+	ev_r int32
 	ev_w int32
 
 	_lock int32 // spinlock to avoid goroutine hangup
@@ -52,6 +53,7 @@ func (d *fdDesc) Lock() {
 }
 
 func (d *fdDesc) Unlock() {
+	// watcher unable to get the lock
 	if d.reader != nil && atomic.CompareAndSwapInt32(&d.ev_r, 1, 0) {
 		if d.w.tryRead(d.ident, d.reader) {
 			d.w.deliver(d.reader)
@@ -561,7 +563,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	w.connLock.RLock()
 	for _, e := range pe {
 		if desc, ok := w.descs[e.ident]; ok {
-			if desc.tryLock() { // cannot lock for now
+			if desc.tryLock() {
 				if e.ev&EV_READ != 0 && desc.reader != nil {
 					if w.tryRead(e.ident, desc.reader) {
 						w.deliver(desc.reader)
@@ -575,10 +577,8 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 						desc.writer = nil
 					}
 				}
-
-				e.ident = -1
 				desc.Unlock()
-			} else {
+			} else { // cannot lock for now
 				if e.ev&EV_READ != 0 {
 					atomic.StoreInt32(&desc.ev_r, 1)
 				}

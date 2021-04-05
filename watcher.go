@@ -95,7 +95,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.pfd = pfd
 
 	// loop related chan
-	w.chEventNotify = make(chan pollerEvents, runtime.NumCPU())
+	w.chEventNotify = make(chan pollerEvents)
 	w.chPending = make(chan *aiocb, maxEvents)
 	w.chResults = make(chan *aiocb, maxEvents)
 	w.die = make(chan struct{})
@@ -221,7 +221,13 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 		cb := aiocbPool.Get().(*aiocb)
 		*cb = aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
 
-		w.chPending <- cb
+		select {
+		case w.chPending <- cb:
+		case <-w.die:
+			return ErrWatcherClosed
+
+		}
+
 		return nil
 	}
 }
@@ -366,8 +372,11 @@ func (w *watcher) deliver(pcb *aiocb) {
 		heap.Remove(&w.timeouts, pcb.idx)
 	}
 
-	w.chResults <- pcb
-
+	select {
+	case w.chResults <- pcb:
+	case <-w.die:
+		return
+	}
 }
 
 // the core event loop of this watcher

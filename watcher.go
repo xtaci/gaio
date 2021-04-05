@@ -35,7 +35,17 @@ type fdDesc struct {
 	writers list.List
 	ptr     uintptr // pointer to net.Conn
 	ev      int     // save last fd states, initially we assume it's both readable & writable
-	sync.Mutex
+	lock    int32
+}
+
+func (d *fdDesc) Lock() {
+	for !atomic.CompareAndSwapInt32(&d.lock, 0, 1) {
+	}
+}
+
+func (d *fdDesc) Unlock() {
+	for !atomic.CompareAndSwapInt32(&d.lock, 1, 0) {
+	}
 }
 
 // watcher will monitor events and process async-io request(s),

@@ -177,12 +177,10 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 				}
 			}
 
-			if len(pe) > 0 {
-				select {
-				case chEventNotify <- pe:
-				case <-p.die:
-					return
-				}
+			select {
+			case chEventNotify <- pe:
+			case <-p.die:
+				return
 			}
 		}
 	}

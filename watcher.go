@@ -537,7 +537,7 @@ func (w *watcher) handlePending(pcb *aiocb) {
 }
 
 // handle poller events
-func (w *watcher) handleEvents(pe pollerEvents) {
+func (w *watcher) handleEvents(e event) {
 	// suppose fd(s) being polled is closed by conn.Close() from outside after chanrecv,
 	// and a new conn has re-opened with the same handler number(fd). The read and write
 	// on this fd is fatal.
@@ -548,40 +548,38 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	// then IO operation is impossible to misread or miswrite on re-created fd.
 	//log.Println(e)
 	w.descLock.RLock()
-	for _, e := range pe {
-		if desc, ok := w.descs[e.ident]; ok {
-			desc.Lock()
-			if e.ev&EV_READ != 0 {
-				desc.ev |= EV_READ
-				var next *list.Element
-				for elem := desc.readers.Front(); elem != nil; elem = next {
-					next = elem.Next()
-					pcb := elem.Value.(*aiocb)
-					if w.tryRead(e.ident, desc, pcb) {
-						w.deliver(pcb)
-						desc.readers.Remove(elem)
-					} else {
-						break
-					}
+	if desc, ok := w.descs[e.ident]; ok {
+		desc.Lock()
+		if e.ev&EV_READ != 0 {
+			desc.ev |= EV_READ
+			var next *list.Element
+			for elem := desc.readers.Front(); elem != nil; elem = next {
+				next = elem.Next()
+				pcb := elem.Value.(*aiocb)
+				if w.tryRead(e.ident, desc, pcb) {
+					w.deliver(pcb)
+					desc.readers.Remove(elem)
+				} else {
+					break
 				}
 			}
-
-			if e.ev&EV_WRITE != 0 {
-				desc.ev |= EV_WRITE
-				var next *list.Element
-				for elem := desc.writers.Front(); elem != nil; elem = next {
-					next = elem.Next()
-					pcb := elem.Value.(*aiocb)
-					if w.tryWrite(e.ident, desc, pcb) {
-						w.deliver(pcb)
-						desc.writers.Remove(elem)
-					} else {
-						break
-					}
-				}
-			}
-			desc.Unlock()
 		}
+
+		if e.ev&EV_WRITE != 0 {
+			desc.ev |= EV_WRITE
+			var next *list.Element
+			for elem := desc.writers.Front(); elem != nil; elem = next {
+				next = elem.Next()
+				pcb := elem.Value.(*aiocb)
+				if w.tryWrite(e.ident, desc, pcb) {
+					w.deliver(pcb)
+					desc.writers.Remove(elem)
+				} else {
+					break
+				}
+			}
+		}
+		desc.Unlock()
 	}
 	w.descLock.RUnlock()
 }

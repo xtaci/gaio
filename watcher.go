@@ -68,8 +68,10 @@ type watcher struct {
 	// aiocb has non-zero deadline, either exists
 	// in timeouts & queue at any time
 	// or in neither of them.
-	timeouts timedHeap
-	timer    *time.Timer
+	timeouts  timedHeap
+	timer     *time.Timer
+	timerLock sync.Mutex
+
 	// for garbage collector
 	gc       []net.Conn
 	gcMutex  sync.Mutex
@@ -341,6 +343,7 @@ func (w *watcher) tryWrite(fd int, desc *fdDesc, pcb *aiocb) bool {
 // release connection related resources
 func (w *watcher) releaseConn(ident int) {
 	if desc, ok := w.descs[ident]; ok {
+		desc.Lock()
 		// delete from heap
 		for e := desc.readers.Front(); e != nil; e = e.Next() {
 			tcb := e.Value.(*aiocb)
@@ -360,6 +363,7 @@ func (w *watcher) releaseConn(ident int) {
 		delete(w.connIdents, desc.ptr)
 		// close socket file descriptor duplicated from net.Conn
 		syscall.Close(ident)
+		desc.Unlock()
 	}
 }
 
@@ -390,6 +394,7 @@ func (w *watcher) loop() {
 	for {
 		select {
 		case <-w.timer.C: // timeout heap
+			w.timerLock.Lock()
 			for w.timeouts.Len() > 0 {
 				now := time.Now()
 				pcb := w.timeouts[0]
@@ -404,16 +409,19 @@ func (w *watcher) loop() {
 					break
 				}
 			}
+			w.timerLock.Unlock()
 
 		case <-w.gcNotify: // gc recycled net.Conn
 			w.gcMutex.Lock()
 			for i, c := range w.gc {
 				ptr := reflect.ValueOf(c).Pointer()
+				w.descLock.Lock()
 				if ident, ok := w.connIdents[ptr]; ok {
 					// since it's gc-ed, queue is impossible to hold net.Conn
 					// we don't have to send to chIOCompletion,just release here
 					w.releaseConn(ident)
 				}
+				w.descLock.Unlock()
 				w.gc[i] = nil
 			}
 			w.gc = w.gc[:0]
@@ -427,22 +435,27 @@ func (w *watcher) loop() {
 
 // for loop handling pending requests
 func (w *watcher) handlePending(pcb *aiocb) {
-	w.descLock.RLock()
-	ident, ok := w.connIdents[pcb.ptr]
 	// resource releasing operation
-	if pcb.op == opDelete && ok {
-		w.releaseConn(ident)
+	if pcb.op == opDelete {
+		w.descLock.Lock()
+		ident, ok := w.connIdents[pcb.ptr]
+		if ok {
+			w.releaseConn(ident)
+		}
+		w.descLock.Unlock()
 		return
 	}
 
-	// handling new connection
+	// other operations
+	w.descLock.RLock()
 	var desc *fdDesc
+	ident, ok := w.connIdents[pcb.ptr]
 	if ok {
 		desc = w.descs[ident]
-		w.descLock.RUnlock()
-	} else {
-		w.descLock.RUnlock()
+	}
+	w.descLock.RUnlock()
 
+	if desc == nil {
 		if dupfd, err := dupconn(pcb.conn); err != nil {
 			pcb.err = err
 			w.deliver(pcb)
@@ -513,12 +526,14 @@ func (w *watcher) handlePending(pcb *aiocb) {
 	}
 
 	// push to heap for timeout operation
+	w.timerLock.Lock()
 	if !pcb.deadline.IsZero() {
 		heap.Push(&w.timeouts, pcb)
 		if w.timeouts.Len() == 1 {
 			w.timer.Reset(time.Until(pcb.deadline))
 		}
 	}
+	w.timerLock.Unlock()
 }
 
 // handle poller events

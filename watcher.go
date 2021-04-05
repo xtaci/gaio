@@ -536,14 +536,14 @@ func (w *watcher) handlePending(pcb *aiocb) {
 	}
 
 	// push to heap for timeout operation
-	w.timerLock.Lock()
 	if !pcb.deadline.IsZero() {
+		w.timerLock.Lock()
 		heap.Push(&w.timeouts, pcb)
 		if w.timeouts.Len() == 1 {
 			w.timer.Reset(time.Until(pcb.deadline))
 		}
+		w.timerLock.Unlock()
 	}
-	w.timerLock.Unlock()
 }
 
 // handle poller events

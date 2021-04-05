@@ -35,16 +35,20 @@ type fdDesc struct {
 	writers list.List
 	ptr     uintptr // pointer to net.Conn
 	ev      int     // save last fd states, initially we assume it's both readable & writable
-	lock    int32
+	_lock   int32   // spinlock to avoid sched
+}
+
+func (d *fdDesc) tryLock() bool {
+	return atomic.CompareAndSwapInt32(&d._lock, 0, 1)
 }
 
 func (d *fdDesc) Lock() {
-	for !atomic.CompareAndSwapInt32(&d.lock, 0, 1) {
+	for !atomic.CompareAndSwapInt32(&d._lock, 0, 1) {
 	}
 }
 
 func (d *fdDesc) Unlock() {
-	for !atomic.CompareAndSwapInt32(&d.lock, 1, 0) {
+	for !atomic.CompareAndSwapInt32(&d._lock, 1, 0) {
 	}
 }
 
@@ -52,9 +56,6 @@ func (d *fdDesc) Unlock() {
 type watcher struct {
 	// poll fd
 	pfd *poller
-
-	// netpoll events
-	chEventNotify chan pollerEvents
 
 	// events from user
 	chPending chan *aiocb
@@ -72,8 +73,9 @@ type watcher struct {
 
 	// loop related data structure
 	descs      map[int]*fdDesc // all descriptors
-	descLock   sync.RWMutex
 	connIdents map[uintptr]int // we must not hold net.Conn as key, for GC purpose
+	connLock   sync.RWMutex    // lock for above 2 mapping
+
 	// for timeout operations which
 	// aiocb has non-zero deadline, either exists
 	// in timeouts & queue at any time
@@ -109,7 +111,6 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.pfd = pfd
 
 	// loop related chan
-	w.chEventNotify = make(chan pollerEvents)
 	w.chPending = make(chan *aiocb, maxEvents)
 	w.chResults = make(chan *aiocb, maxEvents)
 	w.die = make(chan struct{})
@@ -394,11 +395,11 @@ func (w *watcher) deliver(pcb *aiocb) {
 func (w *watcher) loop() {
 	// defer function to release all resources
 	defer func() {
-		w.descLock.Lock()
+		w.connLock.Lock()
 		for ident := range w.descs {
 			w.releaseConn(ident)
 		}
-		w.descLock.Unlock()
+		w.connLock.Unlock()
 	}()
 
 	for {
@@ -425,13 +426,13 @@ func (w *watcher) loop() {
 			w.gcMutex.Lock()
 			for i, c := range w.gc {
 				ptr := reflect.ValueOf(c).Pointer()
-				w.descLock.Lock()
+				w.connLock.Lock()
 				if ident, ok := w.connIdents[ptr]; ok {
 					// since it's gc-ed, queue is impossible to hold net.Conn
 					// we don't have to send to chIOCompletion,just release here
 					w.releaseConn(ident)
 				}
-				w.descLock.Unlock()
+				w.connLock.Unlock()
 				w.gc[i] = nil
 			}
 			w.gc = w.gc[:0]
@@ -447,23 +448,23 @@ func (w *watcher) loop() {
 func (w *watcher) handlePending(pcb *aiocb) {
 	// resource releasing operation
 	if pcb.op == opDelete {
-		w.descLock.Lock()
+		w.connLock.Lock()
 		ident, ok := w.connIdents[pcb.ptr]
 		if ok {
 			w.releaseConn(ident)
 		}
-		w.descLock.Unlock()
+		w.connLock.Unlock()
 		return
 	}
 
 	// other operations
-	w.descLock.RLock()
 	var desc *fdDesc
+	w.connLock.RLock()
 	ident, ok := w.connIdents[pcb.ptr]
 	if ok {
 		desc = w.descs[ident]
 	}
-	w.descLock.RUnlock()
+	w.connLock.RUnlock()
 
 	if desc == nil {
 		if dupfd, err := dupconn(pcb.conn); err != nil {
@@ -485,12 +486,12 @@ func (w *watcher) handlePending(pcb *aiocb) {
 				return
 			}
 
-			w.descLock.Lock()
+			w.connLock.Lock()
 			// file description bindings
 			desc = &fdDesc{ptr: pcb.ptr, ev: EV_WRITE | EV_READ}
 			w.descs[ident] = desc
 			w.connIdents[pcb.ptr] = ident
-			w.descLock.Unlock()
+			w.connLock.Unlock()
 
 			// the conn is still useful for GC finalizer.
 			// note finalizer function cannot hold reference to net.Conn,
@@ -547,7 +548,7 @@ func (w *watcher) handlePending(pcb *aiocb) {
 }
 
 // handle poller events
-func (w *watcher) handleEvents(e event) {
+func (w *watcher) handleEvents(pe pollerEvents) {
 	// suppose fd(s) being polled is closed by conn.Close() from outside after chanrecv,
 	// and a new conn has re-opened with the same handler number(fd). The read and write
 	// on this fd is fatal.
@@ -557,39 +558,82 @@ func (w *watcher) handleEvents(e event) {
 	// identified by 'e.ident', all library operation will be based on 'e.ident',
 	// then IO operation is impossible to misread or miswrite on re-created fd.
 	//log.Println(e)
-	w.descLock.RLock()
-	if desc, ok := w.descs[e.ident]; ok {
-		desc.Lock()
-		if e.ev&EV_READ != 0 {
-			desc.ev |= EV_READ
-			var next *list.Element
-			for elem := desc.readers.Front(); elem != nil; elem = next {
-				next = elem.Next()
-				pcb := elem.Value.(*aiocb)
-				if w.tryRead(e.ident, desc, pcb) {
-					w.deliver(pcb)
-					desc.readers.Remove(elem)
-				} else {
-					break
+	w.connLock.RLock()
+	for _, e := range pe {
+		if desc, ok := w.descs[e.ident]; ok {
+			if desc.tryLock() { // cannot lock for now
+				if e.ev&EV_READ != 0 {
+					desc.ev |= EV_READ
+					var next *list.Element
+					for elem := desc.readers.Front(); elem != nil; elem = next {
+						next = elem.Next()
+						pcb := elem.Value.(*aiocb)
+						if w.tryRead(e.ident, desc, pcb) {
+							w.deliver(pcb)
+							desc.readers.Remove(elem)
+						} else {
+							break
+						}
+					}
 				}
-			}
-		}
 
-		if e.ev&EV_WRITE != 0 {
-			desc.ev |= EV_WRITE
-			var next *list.Element
-			for elem := desc.writers.Front(); elem != nil; elem = next {
-				next = elem.Next()
-				pcb := elem.Value.(*aiocb)
-				if w.tryWrite(e.ident, desc, pcb) {
-					w.deliver(pcb)
-					desc.writers.Remove(elem)
-				} else {
-					break
+				if e.ev&EV_WRITE != 0 {
+					desc.ev |= EV_WRITE
+					var next *list.Element
+					for elem := desc.writers.Front(); elem != nil; elem = next {
+						next = elem.Next()
+						pcb := elem.Value.(*aiocb)
+						if w.tryWrite(e.ident, desc, pcb) {
+							w.deliver(pcb)
+							desc.writers.Remove(elem)
+						} else {
+							break
+						}
+					}
 				}
+				e.ident = -1
+				desc.Unlock()
 			}
 		}
-		desc.Unlock()
 	}
-	w.descLock.RUnlock()
+
+	for _, e := range pe {
+		if desc, ok := w.descs[e.ident]; ok {
+			desc.Lock()
+			if e.ident != -1 {
+				if e.ev&EV_READ != 0 {
+					desc.ev |= EV_READ
+					var next *list.Element
+					for elem := desc.readers.Front(); elem != nil; elem = next {
+						next = elem.Next()
+						pcb := elem.Value.(*aiocb)
+						if w.tryRead(e.ident, desc, pcb) {
+							w.deliver(pcb)
+							desc.readers.Remove(elem)
+						} else {
+							break
+						}
+					}
+				}
+
+				if e.ev&EV_WRITE != 0 {
+					desc.ev |= EV_WRITE
+					var next *list.Element
+					for elem := desc.writers.Front(); elem != nil; elem = next {
+						next = elem.Next()
+						pcb := elem.Value.(*aiocb)
+						if w.tryWrite(e.ident, desc, pcb) {
+							w.deliver(pcb)
+							desc.writers.Remove(elem)
+						} else {
+							break
+						}
+					}
+				}
+				desc.Unlock()
+			}
+		}
+	}
+
+	w.connLock.RUnlock()
 }

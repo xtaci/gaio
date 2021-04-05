@@ -117,6 +117,7 @@ func (p *poller) wakeup() error {
 }
 
 func (p *poller) Wait(w *watcher) {
+	p.initCache(1)
 	events := make([]syscall.EpollEvent, maxEvents)
 	// close poller fd & eventfd in defer
 	defer func() {
@@ -150,6 +151,8 @@ func (p *poller) Wait(w *watcher) {
 				return
 			}
 
+			// load from cache
+			pe := p.loadCache(n)
 			// event processing
 			for i := 0; i < n; i++ {
 				ev := &events[i]
@@ -170,10 +173,10 @@ func (p *poller) Wait(w *watcher) {
 						e.ev |= EV_WRITE
 					}
 
-					w.handleEvents(e)
+					pe = append(pe, e)
 				}
 			}
-
+			w.handleEvents(pe)
 		}
 	}
 }

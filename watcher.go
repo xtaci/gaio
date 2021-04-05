@@ -8,7 +8,6 @@ package gaio
 
 import (
 	"container/heap"
-	"container/list"
 	"io"
 	"net"
 	"reflect"
@@ -31,10 +30,10 @@ func init() {
 
 // fdDesc contains all data structures associated to fd
 type fdDesc struct {
-	readers list.List // all read/write requests
-	writers list.List
-	ptr     uintptr // pointer to net.Conn
-	_lock   int32   // spinlock to avoid sched
+	reader *aiocb
+	writer *aiocb
+	ptr    uintptr // pointer to net.Conn
+	_lock  int32   // spinlock to avoid sched
 }
 
 func (d *fdDesc) tryLock() bool {
@@ -345,19 +344,12 @@ func (w *watcher) tryWrite(fd int, pcb *aiocb) bool {
 func (w *watcher) releaseConn(ident int) {
 	if desc, ok := w.descs[ident]; ok {
 		desc.Lock()
-		// delete from heap
-		for e := desc.readers.Front(); e != nil; e = e.Next() {
-			tcb := e.Value.(*aiocb)
-			if !tcb.deadline.IsZero() {
-				heap.Remove(&w.timeouts, tcb.idx)
-			}
+		if desc.reader != nil && desc.reader.idx != -1 {
+			heap.Remove(&w.timeouts, desc.reader.idx)
 		}
 
-		for e := desc.writers.Front(); e != nil; e = e.Next() {
-			tcb := e.Value.(*aiocb)
-			if !tcb.deadline.IsZero() {
-				heap.Remove(&w.timeouts, tcb.idx)
-			}
+		if desc.writer != nil && desc.writer.idx != -1 {
+			heap.Remove(&w.timeouts, desc.writer.idx)
 		}
 
 		delete(w.descs, ident)
@@ -507,24 +499,21 @@ func (w *watcher) handlePending(pcb *aiocb) {
 	// operations splitted into different buckets
 	if pcb.op == OpRead {
 		// try immediately queue is empty
-		if desc.readers.Len() == 0 {
+		if desc.reader == nil {
 			if w.tryRead(ident, pcb) {
 				w.deliver(pcb)
 				return
 			}
 		}
-		// enqueue for poller events
-		pcb.l = &desc.readers
-		pcb.elem = pcb.l.PushBack(pcb)
+		desc.reader = pcb
 	} else {
-		if desc.writers.Len() == 0 {
+		if desc.writer == nil {
 			if w.tryWrite(ident, pcb) {
 				w.deliver(pcb)
 				return
 			}
 		}
-		pcb.l = &desc.writers
-		pcb.elem = pcb.l.PushBack(pcb)
+		desc.writer = pcb
 	}
 
 	// push to heap for timeout operation
@@ -553,31 +542,17 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	for _, e := range pe {
 		if desc, ok := w.descs[e.ident]; ok {
 			if desc.tryLock() { // cannot lock for now
-				if e.ev&EV_READ != 0 {
-					var next *list.Element
-					for elem := desc.readers.Front(); elem != nil; elem = next {
-						next = elem.Next()
-						pcb := elem.Value.(*aiocb)
-						if w.tryRead(e.ident, pcb) {
-							w.deliver(pcb)
-							desc.readers.Remove(elem)
-						} else {
-							break
-						}
+				if e.ev&EV_READ != 0 && desc.reader != nil {
+					if w.tryRead(e.ident, desc.reader) {
+						w.deliver(desc.reader)
+						desc.reader = nil
 					}
 				}
 
-				if e.ev&EV_WRITE != 0 {
-					var next *list.Element
-					for elem := desc.writers.Front(); elem != nil; elem = next {
-						next = elem.Next()
-						pcb := elem.Value.(*aiocb)
-						if w.tryWrite(e.ident, pcb) {
-							w.deliver(pcb)
-							desc.writers.Remove(elem)
-						} else {
-							break
-						}
+				if e.ev&EV_WRITE != 0 && desc.writer != nil {
+					if w.tryWrite(e.ident, desc.writer) {
+						w.deliver(desc.writer)
+						desc.writer = nil
 					}
 				}
 
@@ -591,33 +566,20 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 		if desc, ok := w.descs[e.ident]; ok {
 			if e.ident != -1 {
 				desc.Lock()
-				if e.ev&EV_READ != 0 {
-					var next *list.Element
-					for elem := desc.readers.Front(); elem != nil; elem = next {
-						next = elem.Next()
-						pcb := elem.Value.(*aiocb)
-						if w.tryRead(e.ident, pcb) {
-							w.deliver(pcb)
-							desc.readers.Remove(elem)
-						} else {
-							break
-						}
+				if e.ev&EV_READ != 0 && desc.reader != nil {
+					if w.tryRead(e.ident, desc.reader) {
+						w.deliver(desc.reader)
+						desc.reader = nil
 					}
 				}
 
-				if e.ev&EV_WRITE != 0 {
-					var next *list.Element
-					for elem := desc.writers.Front(); elem != nil; elem = next {
-						next = elem.Next()
-						pcb := elem.Value.(*aiocb)
-						if w.tryWrite(e.ident, pcb) {
-							w.deliver(pcb)
-							desc.writers.Remove(elem)
-						} else {
-							break
-						}
+				if e.ev&EV_WRITE != 0 && desc.writer != nil {
+					if w.tryWrite(e.ident, desc.writer) {
+						w.deliver(desc.writer)
+						desc.writer = nil
 					}
 				}
+
 				desc.Unlock()
 			}
 		}

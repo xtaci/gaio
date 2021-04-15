@@ -3,6 +3,7 @@
 package gaio
 
 import (
+	"log"
 	"net"
 	"runtime"
 	"sync"
@@ -39,6 +40,7 @@ func setAffinity() {
 
 	runtime.LockOSThread()
 	C.lock_thread(C.int(idx))
+	log.Println("pin to", idx)
 }
 
 // _EPOLLET value is incorrect in syscall

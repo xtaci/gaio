@@ -4,10 +4,42 @@ package gaio
 
 import (
 	"net"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 )
+
+/*
+#define _GNU_SOURCE
+#include <sched.h>
+#include <pthread.h>
+
+void lock_thread(int cpuid) {
+        pthread_t tid;
+        cpu_set_t cpuset;
+
+        tid = pthread_self();
+        CPU_ZERO(&cpuset);
+        CPU_SET(cpuid, &cpuset);
+    pthread_setaffinity_np(tid, sizeof(cpu_set_t), &cpuset);
+}
+*/
+import "C"
+
+var (
+	GLOBAL_IDX_CPU uint32
+	NUM_CPU        = runtime.NumCPU()
+)
+
+func setAffinity() {
+	idx := atomic.AddUint32(&GLOBAL_IDX_CPU, 1)
+	idx %= uint32(NUM_CPU)
+
+	runtime.LockOSThread()
+	C.lock_thread(C.int(idx))
+}
 
 // _EPOLLET value is incorrect in syscall
 const (
@@ -117,6 +149,9 @@ func (p *poller) wakeup() error {
 }
 
 func (p *poller) Wait(chEventNotify chan pollerEvents) {
+	// affinity setting
+	setAffinity()
+
 	p.initCache(cap(chEventNotify) + 2)
 	events := make([]syscall.EpollEvent, maxEvents)
 	// close poller fd & eventfd in defer

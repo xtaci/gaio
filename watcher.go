@@ -19,6 +19,35 @@ import (
 	"time"
 )
 
+/*
+#define _GNU_SOURCE
+#include <sched.h>
+#include <pthread.h>
+
+void lock_thread(int cpuid) {
+        pthread_t tid;
+        cpu_set_t cpuset;
+
+        tid = pthread_self();
+        CPU_ZERO(&cpuset);
+        CPU_SET(cpuid, &cpuset);
+    pthread_setaffinity_np(tid, sizeof(cpu_set_t), &cpuset);
+}
+*/
+import "C"
+
+var (
+	globalIdxCpu uint32
+)
+
+func setAffinity() {
+	idx := atomic.AddUint32(&globalIdxCpu, 1)
+	idx %= uint32(runtime.NumCPU())
+
+	runtime.LockOSThread()
+	C.lock_thread(C.int(idx))
+}
+
 var (
 	aiocbPool sync.Pool
 )
@@ -364,6 +393,7 @@ func (w *watcher) deliver(pcb *aiocb) {
 
 // the core event loop of this watcher
 func (w *watcher) loop() {
+	setAffinity()
 	// defer function to release all resources
 	defer func() {
 		for ident := range w.descs {

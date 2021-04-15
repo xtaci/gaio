@@ -364,7 +364,6 @@ func (w *watcher) deliver(pcb *aiocb) {
 
 // the core event loop of this watcher
 func (w *watcher) loop() {
-	runtime.LockOSThread()
 	// defer function to release all resources
 	defer func() {
 		for ident := range w.descs {

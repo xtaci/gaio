@@ -148,8 +148,6 @@ func (p *poller) wakeup() error {
 }
 
 func (p *poller) Wait(chEventNotify chan pollerEvents) {
-	runtime.LockOSThread()
-
 	p.initCache(cap(chEventNotify) + 2)
 	events := make([]syscall.EpollEvent, maxEvents)
 	// close poller fd & eventfd in defer

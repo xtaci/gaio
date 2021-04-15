@@ -206,23 +206,18 @@ func (w *watcher) Free(conn net.Conn) error {
 
 // core async-io creation
 func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byte, deadline time.Time, readfull bool) error {
-	select {
-	case <-w.die:
-		return ErrWatcherClosed
-	default:
-		var ptr uintptr
-		if conn != nil && reflect.TypeOf(conn).Kind() == reflect.Ptr {
-			ptr = reflect.ValueOf(conn).Pointer()
-		} else {
-			return ErrUnsupported
-		}
-
-		cb := aiocbPool.Get().(*aiocb)
-		*cb = aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
-
-		w.chPending <- cb
-		return nil
+	var ptr uintptr
+	if conn != nil && reflect.TypeOf(conn).Kind() == reflect.Ptr {
+		ptr = reflect.ValueOf(conn).Pointer()
+	} else {
+		return ErrUnsupported
 	}
+
+	cb := aiocbPool.Get().(*aiocb)
+	*cb = aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
+
+	w.chPending <- cb
+	return nil
 }
 
 // tryRead will try to read data on aiocb and notify

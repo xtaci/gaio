@@ -356,10 +356,7 @@ func (w *watcher) deliver(pcb *aiocb) {
 		heap.Remove(&w.timeouts, pcb.idx)
 	}
 
-	select {
-	case w.chResults <- pcb:
-	case <-w.die:
-	}
+	w.chResults <- pcb
 }
 
 // the core event loop of this watcher

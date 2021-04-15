@@ -36,6 +36,11 @@ type fdDesc struct {
 	ptr     uintptr // pointer to net.Conn
 }
 
+type eventBatch struct {
+	events pollerEvents
+	wg     *sync.WaitGroup
+}
+
 // watcher will monitor events and process async-io request(s),
 type watcher struct {
 	// poll fd
@@ -74,6 +79,8 @@ type watcher struct {
 
 	die     chan struct{}
 	dieOnce sync.Once
+
+	chEventBatch chan eventBatch
 }
 
 // NewWatcher creates a management object for monitoring file descriptors
@@ -110,6 +117,11 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.connIdents = make(map[uintptr]int)
 	w.gcNotify = make(chan struct{}, 1)
 	w.timer = time.NewTimer(0)
+
+	w.chEventBatch = make(chan eventBatch, runtime.NumCPU())
+	for i := 0; i < runtime.NumCPU(); i++ {
+		go w.batchHandler()
+	}
 
 	go w.pfd.Wait(w.chEventNotify)
 	go w.loop()
@@ -512,44 +524,73 @@ func (w *watcher) handlePending(pending []*aiocb) {
 
 // handle poller events
 func (w *watcher) handleEvents(pe pollerEvents) {
-	// suppose fd(s) being polled is closed by conn.Close() from outside after chanrecv,
-	// and a new conn has re-opened with the same handler number(fd). The read and write
-	// on this fd is fatal.
-	//
-	// Note poller will remove closed fd automatically epoll(7), kqueue(2) and silently.
-	// To solve this problem watcher will dup() a new fd from net.Conn, which uniquely
-	// identified by 'e.ident', all library operation will be based on 'e.ident',
-	// then IO operation is impossible to misread or miswrite on re-created fd.
-	//log.Println(e)
-	for _, e := range pe {
-		if desc, ok := w.descs[e.ident]; ok {
-			if e.ev&EV_READ != 0 {
-				var next *list.Element
-				for elem := desc.readers.Front(); elem != nil; elem = next {
-					next = elem.Next()
-					pcb := elem.Value.(*aiocb)
-					if w.tryRead(e.ident, pcb) {
-						w.deliver(pcb)
-						desc.readers.Remove(elem)
-					} else {
-						break
-					}
-				}
-			}
+	batchSize := len(pe) / cap(w.chEventBatch)
+	remain := len(pe) % cap(w.chEventBatch)
 
-			if e.ev&EV_WRITE != 0 {
-				var next *list.Element
-				for elem := desc.writers.Front(); elem != nil; elem = next {
-					next = elem.Next()
-					pcb := elem.Value.(*aiocb)
-					if w.tryWrite(e.ident, pcb) {
-						w.deliver(pcb)
-						desc.writers.Remove(elem)
-					} else {
-						break
+	var wg sync.WaitGroup
+	for i := 0; i < len(pe); i++ {
+		if i+batchSize > len(pe) {
+			break
+		}
+
+		wg.Add(1)
+		w.chEventBatch <- eventBatch{pe[i : i+batchSize], &wg}
+		i += batchSize
+	}
+
+	if remain > 0 {
+		wg.Add(1)
+		w.chEventBatch <- eventBatch{pe[len(pe)-remain:], &wg}
+	}
+}
+
+func (w *watcher) batchHandler() {
+	for {
+		select {
+		case batch := <-w.chEventBatch:
+			// suppose fd(s) being polled is closed by conn.Close() from outside after chanrecv,
+			// and a new conn has re-opened with the same handler number(fd). The read and write
+			// on this fd is fatal.
+			//
+			// Note poller will remove closed fd automatically epoll(7), kqueue(2) and silently.
+			// To solve this problem watcher will dup() a new fd from net.Conn, which uniquely
+			// identified by 'e.ident', all library operation will be based on 'e.ident',
+			// then IO operation is impossible to misread or miswrite on re-created fd.
+			//log.Println(e)
+			for _, e := range batch.events {
+				if desc, ok := w.descs[e.ident]; ok {
+					if e.ev&EV_READ != 0 {
+						var next *list.Element
+						for elem := desc.readers.Front(); elem != nil; elem = next {
+							next = elem.Next()
+							pcb := elem.Value.(*aiocb)
+							if w.tryRead(e.ident, pcb) {
+								w.deliver(pcb)
+								desc.readers.Remove(elem)
+							} else {
+								break
+							}
+						}
+					}
+
+					if e.ev&EV_WRITE != 0 {
+						var next *list.Element
+						for elem := desc.writers.Front(); elem != nil; elem = next {
+							next = elem.Next()
+							pcb := elem.Value.(*aiocb)
+							if w.tryWrite(e.ident, pcb) {
+								w.deliver(pcb)
+								desc.writers.Remove(elem)
+							} else {
+								break
+							}
+						}
 					}
 				}
 			}
+			batch.wg.Done()
+		case <-w.die:
+			return
 		}
 	}
 }

@@ -17,7 +17,6 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-	"unsafe"
 )
 
 var (
@@ -208,14 +207,11 @@ func (w *watcher) Free(conn net.Conn) error {
 // core async-io creation
 func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byte, deadline time.Time, readfull bool) error {
 	var ptr uintptr
-	/*
-		if conn != nil && reflect.TypeOf(conn).Kind() == reflect.Ptr {
-			ptr = reflect.ValueOf(conn).Pointer()
-		} else {
-			return ErrUnsupported
-		}
-	*/
-	ptr = uintptr(unsafe.Pointer(conn.(*net.TCPConn)))
+	if conn != nil && reflect.TypeOf(conn).Kind() == reflect.Ptr {
+		ptr = reflect.ValueOf(conn).Pointer()
+	} else {
+		return ErrUnsupported
+	}
 
 	cb := aiocbPool.Get().(*aiocb)
 	*cb = aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}

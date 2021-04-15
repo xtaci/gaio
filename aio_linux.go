@@ -136,45 +136,6 @@ func (p *poller) Watch(fd int) error {
 	return p.wakeup()
 }
 
-var _zero uintptr
-var (
-	errEAGAIN error = syscall.EAGAIN
-	errEINVAL error = syscall.EINVAL
-	errENOENT error = syscall.ENOENT
-)
-
-type Errno uintptr
-
-// errnoErr returns common boxed Errno values, to prevent
-// allocations at runtime.
-func errnoErr(e syscall.Errno) error {
-	switch e {
-	case 0:
-		return nil
-	case syscall.EAGAIN:
-		return errEAGAIN
-	case syscall.EINVAL:
-		return errEINVAL
-	case syscall.ENOENT:
-		return errENOENT
-	}
-	return e
-}
-func EpollWait(epfd int, events []syscall.EpollEvent, msec int) (n int, err error) {
-	var _p0 unsafe.Pointer
-	if len(events) > 0 {
-		_p0 = unsafe.Pointer(&events[0])
-	} else {
-		_p0 = unsafe.Pointer(&_zero)
-	}
-	r0, _, e1 := syscall.RawSyscall6(syscall.SYS_EPOLL_WAIT, uintptr(epfd), uintptr(_p0), uintptr(len(events)), uintptr(msec), 0, 0)
-	n = int(r0)
-	if e1 != 0 {
-		err = errnoErr(e1)
-	}
-	return
-}
-
 // wakeup interrupt epoll_wait
 func (p *poller) wakeup() error {
 	p.mu.Lock()
@@ -191,7 +152,7 @@ func (p *poller) wakeup() error {
 
 func (p *poller) Wait(chEventNotify chan pollerEvents) {
 	// affinity setting
-	setAffinity()
+	//setAffinity()
 
 	p.initCache(cap(chEventNotify) + 2)
 	events := make([]syscall.EpollEvent, maxEvents)
@@ -219,7 +180,7 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 			p.awaiting = p.awaiting[:0]
 			p.awaitingMutex.Unlock()
 
-			n, err := EpollWait(p.pfd, events, -1)
+			n, err := syscall.EpollWait(p.pfd, events, -1)
 			if err == syscall.EINTR {
 				continue
 			}

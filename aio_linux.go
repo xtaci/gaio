@@ -38,6 +38,7 @@ func setAffinity() {
 	idx := atomic.AddUint32(&GLOBAL_IDX_CPU, 1)
 	idx %= uint32(NUM_CPU)
 
+	runtime.LockOSThread()
 	C.lock_thread(C.int(idx))
 	log.Println("pin to", idx)
 }
@@ -153,7 +154,6 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 	// affinity setting
 	setAffinity()
 
-	runtime.LockOSThread()
 	p.initCache(cap(chEventNotify) + 2)
 	events := make([]syscall.EpollEvent, maxEvents)
 	// close poller fd & eventfd in defer

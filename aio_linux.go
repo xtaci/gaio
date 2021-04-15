@@ -3,7 +3,6 @@
 package gaio
 
 import (
-	"log"
 	"net"
 	"runtime"
 	"sync"
@@ -30,17 +29,15 @@ void lock_thread(int cpuid) {
 import "C"
 
 var (
-	GLOBAL_IDX_CPU uint32
-	NUM_CPU        = runtime.NumCPU()
+	globalIdxCpu uint32
 )
 
 func setAffinity() {
-	idx := atomic.AddUint32(&GLOBAL_IDX_CPU, 1)
-	idx %= uint32(NUM_CPU)
+	idx := atomic.AddUint32(&globalIdxCpu, 1)
+	idx %= uint32(runtime.NumCPU())
 
 	runtime.LockOSThread()
 	C.lock_thread(C.int(idx))
-	log.Println("pin to", idx)
 }
 
 // _EPOLLET value is incorrect in syscall

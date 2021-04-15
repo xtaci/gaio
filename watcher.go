@@ -17,7 +17,6 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-	"unsafe"
 )
 
 var (
@@ -226,46 +225,6 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 	}
 }
 
-// Errno values.
-var (
-	errEAGAIN error = syscall.EAGAIN
-	errEINVAL error = syscall.EINVAL
-	errENOENT error = syscall.ENOENT
-)
-
-// errnoErr returns common boxed Errno values, to prevent
-// allocations at runtime.
-func errnoErr(e syscall.Errno) error {
-	switch e {
-	case 0:
-		return nil
-	case syscall.EAGAIN:
-		return errEAGAIN
-	case syscall.EINVAL:
-		return errEINVAL
-	case syscall.ENOENT:
-		return errENOENT
-	}
-	return e
-}
-
-var _zero uintptr
-
-func read(fd int, p []byte) (n int, err error) {
-	var _p0 unsafe.Pointer
-	if len(p) > 0 {
-		_p0 = unsafe.Pointer(&p[0])
-	} else {
-		_p0 = unsafe.Pointer(&_zero)
-	}
-	r0, _, e1 := syscall.RawSyscall(syscall.SYS_READ, uintptr(fd), uintptr(_p0), uintptr(len(p)))
-	n = int(r0)
-	if e1 != 0 {
-		err = errnoErr(e1)
-	}
-	return
-}
-
 // tryRead will try to read data on aiocb and notify
 func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 	buf := pcb.buffer
@@ -289,7 +248,7 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 	}
 
 	for {
-		nr, er := read(fd, buf[pcb.size:])
+		nr, er := rawRead(fd, buf[pcb.size:])
 		if er == syscall.EAGAIN {
 			return false
 		}
@@ -334,28 +293,13 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 	return true
 }
 
-func write(fd int, p []byte) (n int, err error) {
-	var _p0 unsafe.Pointer
-	if len(p) > 0 {
-		_p0 = unsafe.Pointer(&p[0])
-	} else {
-		_p0 = unsafe.Pointer(&_zero)
-	}
-	r0, _, e1 := syscall.RawSyscall(syscall.SYS_WRITE, uintptr(fd), uintptr(_p0), uintptr(len(p)))
-	n = int(r0)
-	if e1 != 0 {
-		err = errnoErr(e1)
-	}
-	return
-}
-
 func (w *watcher) tryWrite(fd int, pcb *aiocb) bool {
 	var nw int
 	var ew error
 
 	if pcb.buffer != nil {
 		for {
-			nw, ew = write(fd, pcb.buffer[pcb.size:])
+			nw, ew = rawWrite(fd, pcb.buffer[pcb.size:])
 			pcb.err = ew
 			if ew == syscall.EAGAIN {
 				return false

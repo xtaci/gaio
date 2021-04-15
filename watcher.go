@@ -371,6 +371,8 @@ func (w *watcher) loop() {
 		}
 	}()
 
+	setAffinity()
+
 	var reqs []*aiocb
 	for {
 		select {

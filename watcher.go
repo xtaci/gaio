@@ -248,7 +248,7 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 	}
 
 	for {
-		nr, er := syscall.Read(fd, buf[pcb.size:])
+		nr, er := rawRead(fd, buf[pcb.size:])
 		if er == syscall.EAGAIN {
 			return false
 		}
@@ -299,7 +299,7 @@ func (w *watcher) tryWrite(fd int, pcb *aiocb) bool {
 
 	if pcb.buffer != nil {
 		for {
-			nw, ew = syscall.Write(fd, pcb.buffer[pcb.size:])
+			nw, ew = rawWrite(fd, pcb.buffer[pcb.size:])
 			pcb.err = ew
 			if ew == syscall.EAGAIN {
 				return false

@@ -94,7 +94,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.pfd = pfd
 
 	// loop related chan
-	w.chEventNotify = make(chan pollerEvents)
+	w.chEventNotify = make(chan pollerEvents, runtime.NumCPU())
 	w.chPending = make(chan *aiocb, maxEvents)
 	w.chResults = make(chan *aiocb, maxEvents)
 	w.die = make(chan struct{})

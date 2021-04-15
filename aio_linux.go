@@ -148,8 +148,7 @@ func (p *poller) wakeup() error {
 }
 
 func (p *poller) Wait(chEventNotify chan pollerEvents) {
-	// affinity setting
-	//setAffinity()
+	runtime.LockOSThread()
 
 	p.initCache(cap(chEventNotify) + 2)
 	events := make([]syscall.EpollEvent, maxEvents)

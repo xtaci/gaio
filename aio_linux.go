@@ -177,7 +177,7 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 			p.awaiting = p.awaiting[:0]
 			p.awaitingMutex.Unlock()
 
-			n, err := syscall.EpollWait(p.pfd, events, -1)
+			n, err := epollWait(p.pfd, events, -1)
 			if err == syscall.EINTR {
 				continue
 			}

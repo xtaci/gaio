@@ -10,6 +10,7 @@ import (
 	"container/heap"
 	"container/list"
 	"io"
+	"math/rand"
 	"net"
 	"reflect"
 	"runtime"
@@ -36,16 +37,9 @@ void lock_thread(int cpuid) {
 */
 import "C"
 
-var (
-	globalIdxCpu uint32
-)
-
-func setAffinity() {
-	idx := atomic.AddUint32(&globalIdxCpu, 1)
-	idx %= uint32(runtime.NumCPU())
-
+func setAffinity(cpuID int) {
 	runtime.LockOSThread()
-	C.lock_thread(C.int(idx))
+	C.lock_thread(C.int(cpuID))
 }
 
 var (
@@ -393,7 +387,7 @@ func (w *watcher) deliver(pcb *aiocb) {
 
 // the core event loop of this watcher
 func (w *watcher) loop() {
-	setAffinity()
+	setAffinity(rand.Intn(runtime.NumCPU()))
 	// defer function to release all resources
 	defer func() {
 		for ident := range w.descs {

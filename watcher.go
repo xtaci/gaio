@@ -48,7 +48,7 @@ type watcher struct {
 	chPending chan *aiocb
 
 	// IO-completion events to user
-	chResults chan []*aiocb
+	chResults chan *aiocb
 
 	// internal buffer for reading
 	swapSize         int // swap buffer capacity, triple buffer
@@ -94,9 +94,9 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.pfd = pfd
 
 	// loop related chan
-	w.chEventNotify = make(chan pollerEvents)
+	w.chEventNotify = make(chan pollerEvents, runtime.NumCPU())
 	w.chPending = make(chan *aiocb, maxEvents)
-	w.chResults = make(chan []*aiocb, maxEvents)
+	w.chResults = make(chan *aiocb, maxEvents)
 	w.die = make(chan struct{})
 
 	// swapBuffer for shared reading
@@ -137,12 +137,15 @@ func (w *watcher) Close() (err error) {
 func (w *watcher) WaitIO() (r []OpResult, err error) {
 	for {
 		select {
-		case pcbs := <-w.chResults:
-			for _, pcb := range pcbs {
+		case pcb := <-w.chResults:
+			r = append(r, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+			aiocbPool.Put(pcb)
+			for len(w.chResults) > 0 {
+				pcb := <-w.chResults
 				r = append(r, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
 				aiocbPool.Put(pcb)
-				atomic.StoreInt32(&w.shouldSwap, 1)
 			}
+			atomic.StoreInt32(&w.shouldSwap, 1)
 
 			return r, nil
 		case <-w.die:
@@ -354,7 +357,7 @@ func (w *watcher) deliver(pcb *aiocb) {
 	}
 
 	select {
-	case w.chResults <- []*aiocb{pcb}:
+	case w.chResults <- pcb:
 	case <-w.die:
 	}
 }
@@ -518,7 +521,6 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	// identified by 'e.ident', all library operation will be based on 'e.ident',
 	// then IO operation is impossible to misread or miswrite on re-created fd.
 	//log.Println(e)
-	var pcbs []*aiocb
 	for _, e := range pe {
 		if desc, ok := w.descs[e.ident]; ok {
 			if e.ev&EV_READ != 0 {
@@ -527,7 +529,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 					next = elem.Next()
 					pcb := elem.Value.(*aiocb)
 					if w.tryRead(e.ident, pcb) {
-						pcbs = append(pcbs, pcb)
+						w.deliver(pcb)
 						desc.readers.Remove(elem)
 					} else {
 						break
@@ -541,7 +543,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 					next = elem.Next()
 					pcb := elem.Value.(*aiocb)
 					if w.tryWrite(e.ident, pcb) {
-						pcbs = append(pcbs, pcb)
+						w.deliver(pcb)
 						desc.writers.Remove(elem)
 					} else {
 						break
@@ -549,16 +551,5 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 				}
 			}
 		}
-	}
-
-	for _, pcb := range pcbs {
-		if pcb.idx != -1 {
-			heap.Remove(&w.timeouts, pcb.idx)
-		}
-	}
-
-	select {
-	case w.chResults <- pcbs:
-	case <-w.die:
 	}
 }

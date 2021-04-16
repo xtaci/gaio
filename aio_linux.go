@@ -144,7 +144,7 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 			p.awaiting = p.awaiting[:0]
 			p.awaitingMutex.Unlock()
 
-			n, err := epollWait(p.pfd, events, -1)
+			n, err := syscall.EpollWait(p.pfd, events, -1)
 			if err == syscall.EINTR {
 				continue
 			}
@@ -237,22 +237,6 @@ func rawWrite(fd int, p []byte) (n int, err error) {
 		_p0 = unsafe.Pointer(&_zero)
 	}
 	r0, _, e1 := syscall.RawSyscall(syscall.SYS_WRITE, uintptr(fd), uintptr(_p0), uintptr(len(p)))
-	n = int(r0)
-	if e1 != 0 {
-		err = errnoErr(e1)
-	}
-	return
-}
-
-// epoll_wait
-func epollWait(epfd int, events []syscall.EpollEvent, msec int) (n int, err error) {
-	var _p0 unsafe.Pointer
-	if len(events) > 0 {
-		_p0 = unsafe.Pointer(&events[0])
-	} else {
-		_p0 = unsafe.Pointer(&_zero)
-	}
-	r0, _, e1 := syscall.RawSyscall6(syscall.SYS_EPOLL_WAIT, uintptr(epfd), uintptr(_p0), uintptr(len(events)), uintptr(msec), 0, 0)
 	n = int(r0)
 	if e1 != 0 {
 		err = errnoErr(e1)

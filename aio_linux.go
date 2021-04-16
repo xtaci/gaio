@@ -117,7 +117,6 @@ func (p *poller) wakeup() error {
 }
 
 func (p *poller) Wait(chEventNotify chan pollerEvents) {
-	setAffinity()
 	p.initCache(cap(chEventNotify) + 2)
 	events := make([]syscall.EpollEvent, maxEvents)
 	// close poller fd & eventfd in defer
@@ -144,7 +143,7 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 			p.awaiting = p.awaiting[:0]
 			p.awaitingMutex.Unlock()
 
-			n, err := epollWait(p.pfd, events, -1)
+			n, err := syscall.EpollWait(p.pfd, events, -1)
 			if err == syscall.EINTR {
 				continue
 			}

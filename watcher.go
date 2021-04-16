@@ -364,7 +364,7 @@ func (w *watcher) deliver(pcb *aiocb) {
 
 // the core event loop of this watcher
 func (w *watcher) loop() {
-	//setAffinity()
+	setAffinity()
 
 	// defer function to release all resources
 	defer func() {

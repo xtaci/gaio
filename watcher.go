@@ -9,7 +9,6 @@ package gaio
 import (
 	"container/heap"
 	"container/list"
-	"crypto/rand"
 	"io"
 	"net"
 	"reflect"
@@ -365,9 +364,7 @@ func (w *watcher) deliver(pcb *aiocb) {
 
 // the core event loop of this watcher
 func (w *watcher) loop() {
-	b := make([]byte, 1)
-	rand.Read(b)
-	setAffinity(int(b[0]) % runtime.NumCPU())
+	setAffinity()
 
 	// defer function to release all resources
 	defer func() {

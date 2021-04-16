@@ -2,5 +2,5 @@
 
 package gaio
 
-func setAffinity(cpuID int) {
+func setAffinity() {
 }

@@ -18,10 +18,15 @@ void lock_thread(int cpuid) {
 }
 */
 import "C"
-import "runtime"
+import (
+	"crypto/rand"
+	"runtime"
+)
 
 // bind thread & goroutine to a specific CPU
-func setAffinity(cpuID int) {
+func setAffinity() {
+	b := make([]byte, 1)
+	rand.Read(b)
 	runtime.LockOSThread()
-	C.lock_thread(C.int(cpuID))
+	C.lock_thread(C.int(b[0]))
 }

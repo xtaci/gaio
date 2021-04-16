@@ -4,41 +4,10 @@ package gaio
 
 import (
 	"net"
-	"runtime"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"unsafe"
 )
-
-/*
-#define _GNU_SOURCE
-#include <sched.h>
-#include <pthread.h>
-
-void lock_thread(int cpuid) {
-        pthread_t tid;
-        cpu_set_t cpuset;
-
-        tid = pthread_self();
-        CPU_ZERO(&cpuset);
-        CPU_SET(cpuid, &cpuset);
-    pthread_setaffinity_np(tid, sizeof(cpu_set_t), &cpuset);
-}
-*/
-import "C"
-
-var (
-	globalIdxCpu uint32
-)
-
-func setAffinity() {
-	idx := atomic.AddUint32(&globalIdxCpu, 1)
-	idx %= uint32(runtime.NumCPU())
-
-	runtime.LockOSThread()
-	C.lock_thread(C.int(idx))
-}
 
 // _EPOLLET value is incorrect in syscall
 const (
@@ -148,6 +117,7 @@ func (p *poller) wakeup() error {
 }
 
 func (p *poller) Wait(chEventNotify chan pollerEvents) {
+	setAffinity()
 	p.initCache(cap(chEventNotify) + 2)
 	events := make([]syscall.EpollEvent, maxEvents)
 	// close poller fd & eventfd in defer
@@ -215,4 +185,77 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 			}
 		}
 	}
+}
+
+// Errno values.
+var (
+	errEAGAIN error = syscall.EAGAIN
+	errEINVAL error = syscall.EINVAL
+	errENOENT error = syscall.ENOENT
+)
+
+// errnoErr returns common boxed Errno values, to prevent
+// allocations at runtime.
+func errnoErr(e syscall.Errno) error {
+	switch e {
+	case 0:
+		return nil
+	case syscall.EAGAIN:
+		return errEAGAIN
+	case syscall.EINVAL:
+		return errEINVAL
+	case syscall.ENOENT:
+		return errENOENT
+	}
+	return e
+}
+
+var _zero uintptr
+
+// raw read for nonblocking op to avert context switch
+func rawRead(fd int, p []byte) (n int, err error) {
+	var _p0 unsafe.Pointer
+	if len(p) > 0 {
+		_p0 = unsafe.Pointer(&p[0])
+	} else {
+		_p0 = unsafe.Pointer(&_zero)
+	}
+	r0, _, e1 := syscall.RawSyscall(syscall.SYS_READ, uintptr(fd), uintptr(_p0), uintptr(len(p)))
+	n = int(r0)
+	if e1 != 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+// raw write for nonblocking op to avert context switch
+func rawWrite(fd int, p []byte) (n int, err error) {
+	var _p0 unsafe.Pointer
+	if len(p) > 0 {
+		_p0 = unsafe.Pointer(&p[0])
+	} else {
+		_p0 = unsafe.Pointer(&_zero)
+	}
+	r0, _, e1 := syscall.RawSyscall(syscall.SYS_WRITE, uintptr(fd), uintptr(_p0), uintptr(len(p)))
+	n = int(r0)
+	if e1 != 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+// epoll_wait
+func epollWait(epfd int, events []syscall.EpollEvent, msec int) (n int, err error) {
+	var _p0 unsafe.Pointer
+	if len(events) > 0 {
+		_p0 = unsafe.Pointer(&events[0])
+	} else {
+		_p0 = unsafe.Pointer(&_zero)
+	}
+	r0, _, e1 := syscall.RawSyscall6(syscall.SYS_EPOLL_WAIT, uintptr(epfd), uintptr(_p0), uintptr(len(events)), uintptr(msec), 0, 0)
+	n = int(r0)
+	if e1 != 0 {
+		err = errnoErr(e1)
+	}
+	return
 }

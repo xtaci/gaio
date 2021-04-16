@@ -175,3 +175,11 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 		}
 	}
 }
+
+func rawRead(fd int, p []byte) (n int, err error) {
+	return syscall.Read(fd, p)
+}
+
+func rawWrite(fd int, p []byte) (n int, err error) {
+	return syscall.Write(fd, p)
+}

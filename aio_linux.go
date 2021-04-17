@@ -23,10 +23,6 @@ type poller struct {
 	efd    int        // eventfd
 	efdbuf []byte
 
-	// awaiting for poll
-	awaiting      []int
-	awaitingMutex sync.Mutex
-
 	// closing signal
 	die     chan struct{}
 	dieOnce sync.Once
@@ -97,11 +93,7 @@ func (p *poller) Close() error {
 }
 
 func (p *poller) Watch(fd int) error {
-	p.awaitingMutex.Lock()
-	p.awaiting = append(p.awaiting, fd)
-	p.awaitingMutex.Unlock()
-
-	return p.wakeup()
+	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
 }
 
 // wakeup interrupt epoll_wait
@@ -137,14 +129,6 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 		case <-p.die:
 			return
 		default:
-			// check for new awaiting
-			p.awaitingMutex.Lock()
-			for _, fd := range p.awaiting {
-				syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
-			}
-			p.awaiting = p.awaiting[:0]
-			p.awaitingMutex.Unlock()
-
 			n, err := syscall.EpollWait(p.pfd, events, -1)
 			if err == syscall.EINTR {
 				continue

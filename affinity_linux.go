@@ -23,7 +23,7 @@ import (
 )
 
 // bind thread & goroutine to a specific CPU
-func setAffinity() {
+func setAffinity(cpuId int32) {
 	runtime.LockOSThread()
-	C.lock_thread(C.int(1))
+	C.lock_thread(C.int(cpuId))
 }

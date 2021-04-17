@@ -58,6 +58,9 @@ type watcher struct {
 	bufferOffset     int   // bufferOffset for current using one
 	shouldSwap       int32 // atomic mark for swap
 
+	// loop cpu affinity
+	chCPUID chan int32
+
 	// loop related data structure
 	descs      map[int]*fdDesc // all descriptors
 	connIdents map[uintptr]int // we must not hold net.Conn as key, for GC purpose
@@ -94,6 +97,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.pfd = pfd
 
 	// loop related chan
+	w.chCPUID = make(chan int32)
 	w.chEventNotify = make(chan pollerEvents)
 	w.chPending = make(chan *aiocb, maxEvents)
 	w.chResults = make(chan *aiocb, maxEvents)
@@ -121,6 +125,33 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	})
 
 	return wrapper, nil
+}
+
+// Set Poller Affinity for Epoll/Kqueue
+func (w *watcher) SetPollerAffinity(cpuid int) (err error) {
+	if cpuid >= runtime.NumCPU() {
+		return ErrCPUID
+	}
+
+	// store and wakeup
+	atomic.StoreInt32(&w.pfd.cpuid, int32(cpuid))
+	w.pfd.wakeup()
+	return nil
+}
+
+// Set Loop Affinity for syscall.Read/syscall.Write
+func (w *watcher) SetLoopAffinity(cpuid int) (err error) {
+	if cpuid >= runtime.NumCPU() {
+		return ErrCPUID
+	}
+
+	// sendchan
+	select {
+	case w.chCPUID <- int32(cpuid):
+	case <-w.die:
+		return ErrConnClosed
+	}
+	return nil
 }
 
 // Close stops monitoring on events for all connections
@@ -364,8 +395,6 @@ func (w *watcher) deliver(pcb *aiocb) {
 
 // the core event loop of this watcher
 func (w *watcher) loop() {
-	setAffinity()
-
 	// defer function to release all resources
 	defer func() {
 		for ident := range w.descs {
@@ -416,6 +445,8 @@ func (w *watcher) loop() {
 			}
 			w.gc = w.gc[:0]
 			w.gcMutex.Unlock()
+		case cpuid := <-w.chCPUID:
+			setAffinity(cpuid)
 
 		case <-w.die:
 			return

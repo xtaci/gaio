@@ -375,6 +375,13 @@ func (w *watcher) loop() {
 
 	var reqs []*aiocb
 	for {
+		// Prevents execution of the timer
+		select {
+		case <-w.die:
+			return
+		default:
+		}
+
 		select {
 		case r := <-w.chPending:
 			reqs = append(reqs, r)
@@ -416,7 +423,6 @@ func (w *watcher) loop() {
 			}
 			w.gc = w.gc[:0]
 			w.gcMutex.Unlock()
-
 		case <-w.die:
 			return
 		}

@@ -5,6 +5,7 @@ package gaio
 import (
 	"net"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 )
@@ -82,6 +83,7 @@ func openPoll() (*poller, error) {
 	p.efd = int(r0)
 	p.efdbuf = make([]byte, 8)
 	p.die = make(chan struct{})
+	p.cpuid = -1
 
 	return p, err
 }
@@ -117,7 +119,6 @@ func (p *poller) wakeup() error {
 }
 
 func (p *poller) Wait(chEventNotify chan pollerEvents) {
-	setAffinity()
 	p.initCache(cap(chEventNotify) + 2)
 	events := make([]syscall.EpollEvent, maxEvents)
 	// close poller fd & eventfd in defer
@@ -159,6 +160,11 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 				ev := &events[i]
 				if int(ev.Fd) == p.efd {
 					syscall.Read(p.efd, p.efdbuf) // simply consume
+					// check cpuid
+					if cpuid := atomic.LoadInt32(&p.cpuid); cpuid != -1 {
+						setAffinity(cpuid)
+						atomic.StoreInt32(&p.cpuid, -1)
+					}
 				} else {
 					e := event{ident: int(ev.Fd)}
 

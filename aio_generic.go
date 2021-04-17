@@ -29,6 +29,8 @@ var (
 	ErrDeadline = errors.New("operation exceeded deadline")
 	// ErrEmptyBuffer means the buffer is nil
 	ErrEmptyBuffer = errors.New("empty buffer")
+	// ErrCPUID indicates the given cpuid is invalid
+	ErrCPUID = errors.New("no such core")
 )
 
 var (
@@ -65,6 +67,7 @@ type pollerEvents []event
 
 // generic poll struct
 type poolGeneric struct {
+	cpuid        int32
 	cachedEvents []pollerEvents
 	cacheIndex   uint
 }

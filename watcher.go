@@ -552,7 +552,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 		}
 
 		// rearm
-		w.pfd.Rearm(ident)
+		//w.pfd.Rearm(ident)
 
 		// push to heap for timeout operation
 		if !pcb.deadline.IsZero() {
@@ -607,7 +607,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 			}
 
 			if desc.readers.Len() > 0 || desc.writers.Len() > 0 {
-				w.pfd.Rearm(e.ident)
+				//w.pfd.Rearm(e.ident)
 			}
 		}
 	}

@@ -115,6 +115,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.gcNotify = make(chan struct{}, 1)
 	w.timer = time.NewTimer(0)
 
+	go w.pfd.Wait(w.chEventNotify)
 	go w.loop()
 
 	// watcher finalizer for system resources
@@ -251,7 +252,6 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 		*cb = aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
 
 		w.chPending <- cb
-		w.pfd.wakeup()
 		return nil
 	}
 }
@@ -413,6 +413,9 @@ func (w *watcher) loop() {
 			w.handlePending(reqs)
 			reqs = reqs[:0]
 
+		case pe := <-w.chEventNotify: // poller events
+			w.handleEvents(pe)
+
 		case <-w.timer.C: // timeout heap
 			for w.timeouts.Len() > 0 {
 				now := time.Now()
@@ -448,8 +451,6 @@ func (w *watcher) loop() {
 
 		case <-w.die:
 			return
-		default:
-			w.handleEvents(w.pfd.Wait())
 		}
 	}
 }
@@ -502,7 +503,6 @@ func (w *watcher) handlePending(pending []*aiocb) {
 					w.gcMutex.Unlock()
 
 					// notify gc processor
-					w.pfd.wakeup()
 					select {
 					case w.gcNotify <- struct{}{}:
 					default:

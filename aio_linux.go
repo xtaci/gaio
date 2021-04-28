@@ -81,7 +81,6 @@ func openPoll() (*poller, error) {
 	p.die = make(chan struct{})
 	p.cpuid = -1
 
-	p.initCache(2)
 	return p, err
 }
 
@@ -111,19 +110,18 @@ func (p *poller) wakeup() error {
 	return ErrPollerClosed
 }
 
-func (p *poller) Wait() []event {
+func (p *poller) Wait(chEventNotify chan pollerEvents) {
+	p.initCache(cap(chEventNotify) + 2)
 	events := make([]syscall.EpollEvent, maxEvents)
-	/*
-		// close poller fd & eventfd in defer
-		defer func() {
-			p.mu.Lock()
-			syscall.Close(p.pfd)
-			syscall.Close(p.efd)
-			p.pfd = -1
-			p.efd = -1
-			p.mu.Unlock()
-		}()
-	*/
+	// close poller fd & eventfd in defer
+	defer func() {
+		p.mu.Lock()
+		syscall.Close(p.pfd)
+		syscall.Close(p.efd)
+		p.pfd = -1
+		p.efd = -1
+		p.mu.Unlock()
+	}()
 
 	const (
 		rSet = syscall.EPOLLIN | syscall.EPOLLERR | syscall.EPOLLHUP | syscall.EPOLLRDHUP
@@ -131,50 +129,56 @@ func (p *poller) Wait() []event {
 	)
 
 	// epoll eventloop
-	select {
-	case <-p.die:
-		return nil
-	default:
-		n, err := syscall.EpollWait(p.pfd, events, -1)
-		if err == syscall.EINTR {
-			return nil
-		}
-		if err != nil {
-			return nil
-		}
+	for {
+		select {
+		case <-p.die:
+			return
+		default:
+			n, err := syscall.EpollWait(p.pfd, events, -1)
+			if err == syscall.EINTR {
+				continue
+			}
+			if err != nil {
+				return
+			}
 
-		// load from cache
-		pe := p.loadCache(n)
-		// event processing
-		for i := 0; i < n; i++ {
-			ev := &events[i]
-			if int(ev.Fd) == p.efd {
-				syscall.Read(p.efd, p.efdbuf) // simply consume
-				// check cpuid
-				if cpuid := atomic.LoadInt32(&p.cpuid); cpuid != -1 {
-					setAffinity(cpuid)
-					atomic.StoreInt32(&p.cpuid, -1)
-				}
-			} else {
-				e := event{ident: int(ev.Fd)}
+			// load from cache
+			pe := p.loadCache(n)
+			// event processing
+			for i := 0; i < n; i++ {
+				ev := &events[i]
+				if int(ev.Fd) == p.efd {
+					syscall.Read(p.efd, p.efdbuf) // simply consume
+					// check cpuid
+					if cpuid := atomic.LoadInt32(&p.cpuid); cpuid != -1 {
+						setAffinity(cpuid)
+						atomic.StoreInt32(&p.cpuid, -1)
+					}
+				} else {
+					e := event{ident: int(ev.Fd)}
 
-				// EPOLLRDHUP (since Linux 2.6.17)
-				// Stream socket peer closed connection, or shut down writing
-				// half of connection.  (This flag is especially useful for writ-
-				// ing simple code to detect peer shutdown when using Edge Trig-
-				// gered monitoring.)
-				if ev.Events&rSet != 0 {
-					e.ev |= EV_READ
-				}
-				if ev.Events&wSet != 0 {
-					e.ev |= EV_WRITE
-				}
+					// EPOLLRDHUP (since Linux 2.6.17)
+					// Stream socket peer closed connection, or shut down writing
+					// half of connection.  (This flag is especially useful for writ-
+					// ing simple code to detect peer shutdown when using Edge Trig-
+					// gered monitoring.)
+					if ev.Events&rSet != 0 {
+						e.ev |= EV_READ
+					}
+					if ev.Events&wSet != 0 {
+						e.ev |= EV_WRITE
+					}
 
-				pe = append(pe, e)
+					pe = append(pe, e)
+				}
+			}
+
+			select {
+			case chEventNotify <- pe:
+			case <-p.die:
+				return
 			}
 		}
-
-		return pe
 	}
 }
 

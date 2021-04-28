@@ -77,6 +77,8 @@ type watcher struct {
 
 	die     chan struct{}
 	dieOnce sync.Once
+
+	sync.Mutex
 }
 
 // NewWatcher creates a management object for monitoring file descriptors
@@ -115,7 +117,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.gcNotify = make(chan struct{}, 1)
 	w.timer = time.NewTimer(0)
 
-	go w.pfd.Wait(w.chEventNotify)
+	go w.pfd.Wait(w)
 	go w.loop()
 
 	// watcher finalizer for system resources
@@ -415,17 +417,20 @@ func (w *watcher) loop() {
 	for {
 		select {
 		case r := <-w.chPending:
+			w.Lock()
 			reqs = append(reqs, r)
 			for len(w.chPending) > 0 {
 				reqs = append(reqs, <-w.chPending)
 			}
 			w.handlePending(reqs)
 			reqs = reqs[:0]
+			w.Unlock()
 
 		case pe := <-w.chEventNotify: // poller events
 			w.handleEvents(pe)
 
 		case <-w.timer.C: // timeout heap
+			w.Lock()
 			for w.timeouts.Len() > 0 {
 				now := time.Now()
 				pcb := w.timeouts[0]
@@ -440,8 +445,10 @@ func (w *watcher) loop() {
 					break
 				}
 			}
+			w.Unlock()
 
 		case <-w.gcNotify: // gc recycled net.Conn
+			w.Lock()
 			w.gcMutex.Lock()
 			for i, c := range w.gc {
 				ptr := reflect.ValueOf(c).Pointer()
@@ -454,6 +461,7 @@ func (w *watcher) loop() {
 			}
 			w.gc = w.gc[:0]
 			w.gcMutex.Unlock()
+			w.Unlock()
 
 		case cpuid := <-w.chCPUID:
 			setAffinity(cpuid)

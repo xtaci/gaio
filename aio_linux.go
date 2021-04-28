@@ -114,8 +114,8 @@ func (p *poller) wakeup() error {
 	return ErrPollerClosed
 }
 
-func (p *poller) Wait(chEventNotify chan pollerEvents) {
-	p.initCache(cap(chEventNotify) + 2)
+func (p *poller) Wait(w *watcher) {
+	p.initCache(2)
 	events := make([]syscall.EpollEvent, maxEvents)
 	// close poller fd & eventfd in defer
 	defer func() {
@@ -177,11 +177,9 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 				}
 			}
 
-			select {
-			case chEventNotify <- pe:
-			case <-p.die:
-				return
-			}
+			w.Lock()
+			w.handleEvents(pe)
+			w.Unlock()
 		}
 	}
 }

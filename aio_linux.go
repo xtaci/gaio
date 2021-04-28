@@ -128,8 +128,8 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 	}()
 
 	const (
-		rSet = syscall.EPOLLIN | syscall.EPOLLERR | syscall.EPOLLHUP | syscall.EPOLLRDHUP
-		wSet = syscall.EPOLLOUT | syscall.EPOLLERR | syscall.EPOLLHUP
+		rSet = syscall.EPOLLIN | syscall.EPOLLRDHUP
+		wSet = syscall.EPOLLOUT
 	)
 
 	// epoll eventloop

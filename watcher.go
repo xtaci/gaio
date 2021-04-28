@@ -481,6 +481,14 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				// assign idents
 				ident = dupfd
 
+				// unexpected situation, should notify caller if we cannot dup(2)
+				werr := w.pfd.Watch(ident)
+				if werr != nil {
+					pcb.err = werr
+					w.deliver(pcb)
+					continue
+				}
+
 				// file description bindings
 				desc = &fdDesc{ptr: pcb.ptr}
 				w.descs[ident] = desc
@@ -533,9 +541,6 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				w.timer.Reset(time.Until(pcb.deadline))
 			}
 		}
-
-		// watch
-		w.pfd.Watch(ident)
 	}
 }
 
@@ -564,7 +569,6 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 						break
 					}
 				}
-
 			}
 
 			if e.ev&EV_WRITE != 0 {
@@ -579,9 +583,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 						break
 					}
 				}
-
 			}
-			w.pfd.Watch(e.ident)
 		}
 	}
 }

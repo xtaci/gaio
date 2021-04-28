@@ -78,7 +78,17 @@ type watcher struct {
 	die     chan struct{}
 	dieOnce sync.Once
 
-	sync.Mutex
+	lock int32
+}
+
+func (w *watcher) Lock() {
+	for !atomic.CompareAndSwapInt32(&w.lock, 0, 1) {
+	}
+}
+
+func (w *watcher) Unlock() {
+	for !atomic.CompareAndSwapInt32(&w.lock, 1, 0) {
+	}
 }
 
 // NewWatcher creates a management object for monitoring file descriptors

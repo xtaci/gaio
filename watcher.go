@@ -484,7 +484,6 @@ func (w *watcher) loop() {
 
 // for loop handling pending requests
 func (w *watcher) handlePending(pending []*aiocb) {
-NEXTPCB:
 	for _, pcb := range pending {
 		ident, ok := w.connIdents[pcb.ptr]
 		// resource releasing operation
@@ -552,6 +551,7 @@ NEXTPCB:
 			pcb.elem = pcb.l.PushBack(pcb)
 
 			var next *list.Element
+		READER_LIST:
 			for elem := desc.readers.Front(); elem != nil; elem = next {
 				next = elem.Next()
 				pcb := elem.Value.(*aiocb)
@@ -559,9 +559,10 @@ NEXTPCB:
 					w.deliver(pcb)
 					desc.readers.Remove(elem)
 				} else {
-					// rearm
-					w.pfd.Rearm(ident)
-					continue NEXTPCB
+					if desc.readers.Len() == 1 || desc.writers.Len() == 0 { // rearm
+						w.pfd.Rearm(ident)
+					}
+					break READER_LIST
 				}
 			}
 
@@ -570,6 +571,7 @@ NEXTPCB:
 			pcb.elem = pcb.l.PushBack(pcb)
 
 			var next *list.Element
+		WRITER_LIST:
 			for elem := desc.writers.Front(); elem != nil; elem = next {
 				next = elem.Next()
 				pcb := elem.Value.(*aiocb)
@@ -578,8 +580,10 @@ NEXTPCB:
 					desc.writers.Remove(elem)
 				} else {
 					// rearm
-					w.pfd.Rearm(ident)
-					continue NEXTPCB
+					if desc.writers.Len() == 1 || desc.readers.Len() == 0 { // rearm
+						w.pfd.Rearm(ident)
+					}
+					break WRITER_LIST
 				}
 			}
 		}

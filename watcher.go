@@ -471,6 +471,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			desc = w.descs[ident]
 		} else {
 			if dupfd, err := dupconn(pcb.conn); err != nil {
+				// unexpected situation, should notify caller if we cannot dup(2)
 				pcb.err = err
 				w.deliver(pcb)
 				continue
@@ -481,7 +482,6 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				// assign idents
 				ident = dupfd
 
-				// unexpected situation, should notify caller if we cannot dup(2)
 				werr := w.pfd.Watch(ident)
 				if werr != nil {
 					pcb.err = werr
@@ -523,6 +523,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			// enqueue for poller events
 			pcb.l = &desc.readers
 			pcb.elem = pcb.l.PushBack(pcb)
+			w.pfd.Rearm(ident)
 		} else {
 			if desc.writers.Len() == 0 {
 				if w.tryWrite(ident, pcb) {
@@ -532,6 +533,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			}
 			pcb.l = &desc.writers
 			pcb.elem = pcb.l.PushBack(pcb)
+			w.pfd.Rearm(ident)
 		}
 
 		// push to heap for timeout operation
@@ -569,6 +571,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 						break
 					}
 				}
+
 			}
 
 			if e.ev&EV_WRITE != 0 {
@@ -583,6 +586,10 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 						break
 					}
 				}
+			}
+
+			if desc.readers.Len() > 0 || desc.writers.Len() > 0 {
+				w.pfd.Rearm(e.ident)
 			}
 		}
 	}

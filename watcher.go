@@ -547,7 +547,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 					w.deliver(pcb)
 					desc.readers.Remove(elem)
 				} else {
-					break
+					return
 				}
 			}
 
@@ -563,7 +563,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 					w.deliver(pcb)
 					desc.writers.Remove(elem)
 				} else {
-					break
+					return
 				}
 			}
 		}

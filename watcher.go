@@ -523,7 +523,6 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			// enqueue for poller events
 			pcb.l = &desc.readers
 			pcb.elem = pcb.l.PushBack(pcb)
-			w.pfd.Rearm(ident)
 		} else {
 			if desc.writers.Len() == 0 {
 				if w.tryWrite(ident, pcb) {
@@ -533,8 +532,10 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			}
 			pcb.l = &desc.writers
 			pcb.elem = pcb.l.PushBack(pcb)
-			w.pfd.Rearm(ident)
 		}
+
+		// rearm
+		w.pfd.Rearm(ident)
 
 		// push to heap for timeout operation
 		if !pcb.deadline.IsZero() {

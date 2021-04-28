@@ -569,7 +569,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 		}
 
 		// rearm
-		//w.pfd.Rearm(ident)
+		w.pfd.Rearm(ident)
 
 	}
 }
@@ -617,7 +617,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 			}
 
 			if desc.readers.Len() > 0 || desc.writers.Len() > 0 {
-				//w.pfd.Rearm(e.ident)
+				w.pfd.Rearm(e.ident)
 			}
 		}
 	}

@@ -146,7 +146,7 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 					syscall.Read(p.efd, p.efdbuf) // simply consume
 					// check cpuid
 					if cpuid := atomic.LoadInt32(&p.cpuid); cpuid != -1 {
-						//setAffinity(cpuid)
+						setAffinity(cpuid)
 						atomic.StoreInt32(&p.cpuid, -1)
 					}
 				} else {

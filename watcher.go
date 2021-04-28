@@ -99,8 +99,8 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	// loop related chan
 	w.chCPUID = make(chan int32)
 	w.chEventNotify = make(chan pollerEvents)
-	w.chPending = make(chan *aiocb, maxEvents*2)
-	w.chResults = make(chan *aiocb, maxEvents*2)
+	w.chPending = make(chan *aiocb, maxEvents*4)
+	w.chResults = make(chan *aiocb, maxEvents*4)
 	w.die = make(chan struct{})
 
 	// swapBuffer for shared reading
@@ -251,7 +251,16 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 		cb := aiocbPool.Get().(*aiocb)
 		*cb = aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
 
-		w.chPending <- cb
+		select {
+		case w.chPending <- cb:
+		default:
+			go func() {
+				select {
+				case w.chPending <- cb:
+				case <-w.die:
+				}
+			}()
+		}
 		return nil
 	}
 }

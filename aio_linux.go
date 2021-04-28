@@ -66,7 +66,7 @@ func openPoll() (*poller, error) {
 
 	if err := syscall.EpollCtl(fd, syscall.EPOLL_CTL_ADD, int(r0),
 		&syscall.EpollEvent{Fd: int32(r0),
-			Events: syscall.EPOLLIN,
+			Events: syscall.EPOLLIN | _EPOLLET,
 		},
 	); err != nil {
 		syscall.Close(fd)

@@ -474,6 +474,7 @@ func (w *watcher) loop() {
 
 // for loop handling pending requests
 func (w *watcher) handlePending(pending []*aiocb) {
+NEXTPCB:
 	for _, pcb := range pending {
 		ident, ok := w.connIdents[pcb.ptr]
 		// resource releasing operation
@@ -539,6 +540,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			// enqueue for poller events
 			pcb.l = &desc.readers
 			pcb.elem = pcb.l.PushBack(pcb)
+
 			var next *list.Element
 			for elem := desc.readers.Front(); elem != nil; elem = next {
 				next = elem.Next()
@@ -549,7 +551,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				} else {
 					// rearm
 					w.pfd.Rearm(ident)
-					return
+					continue NEXTPCB
 				}
 			}
 
@@ -567,7 +569,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				} else {
 					// rearm
 					w.pfd.Rearm(ident)
-					return
+					continue NEXTPCB
 				}
 			}
 		}

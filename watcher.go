@@ -99,8 +99,8 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	// loop related chan
 	w.chCPUID = make(chan int32)
 	w.chEventNotify = make(chan pollerEvents)
-	w.chPending = make(chan *aiocb, maxEvents)
-	w.chResults = make(chan *aiocb, maxEvents)
+	w.chPending = make(chan *aiocb, maxEvents*2)
+	w.chResults = make(chan *aiocb, maxEvents*2)
 	w.die = make(chan struct{})
 
 	// swapBuffer for shared reading

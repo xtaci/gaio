@@ -34,6 +34,7 @@ type fdDesc struct {
 	readers list.List // all read/write requests
 	writers list.List
 	ptr     uintptr // pointer to net.Conn
+	armed   bool
 }
 
 // watcher will monitor events and process async-io request(s),
@@ -170,7 +171,6 @@ func (w *watcher) Close() (err error) {
 func (w *watcher) notifyPending() {
 	select {
 	case w.chPendingNotify <- struct{}{}:
-		w.pfd.wakeup()
 	default:
 	}
 }
@@ -535,9 +535,13 @@ func (w *watcher) handlePending(pending []*aiocb) {
 					w.deliver(pcb)
 					continue
 				}
-				// rearm the ident
-				w.pfd.Rearm(ident)
 			}
+
+			if !desc.armed {
+				w.pfd.Rearm(ident)
+				desc.armed = true
+			}
+
 			// enqueue for poller events
 			pcb.l = &desc.readers
 			pcb.elem = pcb.l.PushBack(pcb)
@@ -547,9 +551,14 @@ func (w *watcher) handlePending(pending []*aiocb) {
 					w.deliver(pcb)
 					continue
 				}
-				// rearm the ident
 				w.pfd.Rearm(ident)
 			}
+
+			if !desc.armed {
+				w.pfd.Rearm(ident)
+				desc.armed = true
+			}
+
 			pcb.l = &desc.writers
 			pcb.elem = pcb.l.PushBack(pcb)
 		}
@@ -578,6 +587,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	//log.Println(e)
 	for _, e := range pe {
 		if desc, ok := w.descs[e.ident]; ok {
+			desc.armed = false
 			if e.ev&EV_READ != 0 {
 				var next *list.Element
 				for elem := desc.readers.Front(); elem != nil; elem = next {
@@ -590,7 +600,6 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 						break
 					}
 				}
-
 			}
 
 			if e.ev&EV_WRITE != 0 {
@@ -609,6 +618,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 
 			if desc.readers.Len() > 0 || desc.writers.Len() > 0 {
 				w.pfd.Rearm(e.ident)
+				desc.armed = true
 			}
 		}
 	}

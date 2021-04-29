@@ -34,6 +34,7 @@ type fdDesc struct {
 	readers list.List // all read/write requests
 	writers list.List
 	ptr     uintptr // pointer to net.Conn
+	armed   bool
 }
 
 // watcher will monitor events and process async-io request(s),
@@ -504,7 +505,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				}
 
 				// file description bindings
-				desc = &fdDesc{ptr: pcb.ptr}
+				desc = &fdDesc{ptr: pcb.ptr, armed: true}
 				w.descs[ident] = desc
 				w.connIdents[pcb.ptr] = ident
 
@@ -534,8 +535,11 @@ func (w *watcher) handlePending(pending []*aiocb) {
 					w.deliver(pcb)
 					continue
 				}
-				// rearm the ident
-				w.pfd.Rearm(ident)
+
+				if !desc.armed { // rearm the ident
+					w.pfd.Rearm(ident)
+					desc.armed = true
+				}
 			}
 			// enqueue for poller events
 			pcb.l = &desc.readers
@@ -546,8 +550,11 @@ func (w *watcher) handlePending(pending []*aiocb) {
 					w.deliver(pcb)
 					continue
 				}
-				// rearm the ident
-				w.pfd.Rearm(ident)
+
+				if !desc.armed { // rearm the ident
+					w.pfd.Rearm(ident)
+					desc.armed = true
+				}
 			}
 			pcb.l = &desc.writers
 			pcb.elem = pcb.l.PushBack(pcb)
@@ -608,6 +615,8 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 
 			if desc.readers.Len() > 0 || desc.writers.Len() > 0 {
 				w.pfd.Rearm(e.ident)
+			} else {
+				desc.armed = false
 			}
 		}
 	}

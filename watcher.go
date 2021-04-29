@@ -45,7 +45,10 @@ type watcher struct {
 	chEventNotify chan pollerEvents
 
 	// events from user
-	chPending chan *aiocb
+	chPendingNotify   chan struct{}
+	pendingCreate     []*aiocb
+	pendingProcessing []*aiocb // swaped pending
+	pendingMutex      sync.Mutex
 
 	// IO-completion events to user
 	chResults chan *aiocb
@@ -99,8 +102,8 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	// loop related chan
 	w.chCPUID = make(chan int32)
 	w.chEventNotify = make(chan pollerEvents)
-	w.chPending = make(chan *aiocb, maxEvents)
-	w.chResults = make(chan *aiocb, maxEvents)
+	w.chPendingNotify = make(chan struct{}, 1)
+	w.chResults = make(chan *aiocb, maxEvents*4)
 	w.die = make(chan struct{})
 
 	// swapBuffer for shared reading
@@ -161,6 +164,15 @@ func (w *watcher) Close() (err error) {
 		err = w.pfd.Close()
 	})
 	return err
+}
+
+// notify new operations pending
+func (w *watcher) notifyPending() {
+	select {
+	case w.chPendingNotify <- struct{}{}:
+		w.pfd.wakeup()
+	default:
+	}
 }
 
 // WaitIO blocks until any read/write completion, or error.
@@ -251,7 +263,11 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 		cb := aiocbPool.Get().(*aiocb)
 		*cb = aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
 
-		w.chPending <- cb
+		w.pendingMutex.Lock()
+		w.pendingCreate = append(w.pendingCreate, cb)
+		w.pendingMutex.Unlock()
+
+		w.notifyPending()
 		return nil
 	}
 }
@@ -402,16 +418,15 @@ func (w *watcher) loop() {
 		}
 	}()
 
-	var reqs []*aiocb
 	for {
 		select {
-		case r := <-w.chPending:
-			reqs = append(reqs, r)
-			for len(w.chPending) > 0 {
-				reqs = append(reqs, <-w.chPending)
-			}
-			w.handlePending(reqs)
-			reqs = reqs[:0]
+		case <-w.chPendingNotify:
+			// swap w.pending with w.pending2
+			w.pendingMutex.Lock()
+			w.pendingCreate, w.pendingProcessing = w.pendingProcessing, w.pendingCreate
+			w.pendingCreate = w.pendingCreate[:0]
+			w.pendingMutex.Unlock()
+			w.handlePending(w.pendingProcessing)
 
 		case pe := <-w.chEventNotify: // poller events
 			w.handleEvents(pe)
@@ -471,6 +486,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			desc = w.descs[ident]
 		} else {
 			if dupfd, err := dupconn(pcb.conn); err != nil {
+				// unexpected situation, should notify caller if we cannot dup(2)
 				pcb.err = err
 				w.deliver(pcb)
 				continue
@@ -481,7 +497,6 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				// assign idents
 				ident = dupfd
 
-				// unexpected situation, should notify caller if we cannot dup(2)
 				werr := w.pfd.Watch(ident)
 				if werr != nil {
 					pcb.err = werr
@@ -510,30 +525,6 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				})
 			}
 		}
-
-		// operations splitted into different buckets
-		if pcb.op == OpRead {
-			// try immediately queue is empty
-			if desc.readers.Len() == 0 {
-				if w.tryRead(ident, pcb) {
-					w.deliver(pcb)
-					continue
-				}
-			}
-			// enqueue for poller events
-			pcb.l = &desc.readers
-			pcb.elem = pcb.l.PushBack(pcb)
-		} else {
-			if desc.writers.Len() == 0 {
-				if w.tryWrite(ident, pcb) {
-					w.deliver(pcb)
-					continue
-				}
-			}
-			pcb.l = &desc.writers
-			pcb.elem = pcb.l.PushBack(pcb)
-		}
-
 		// push to heap for timeout operation
 		if !pcb.deadline.IsZero() {
 			heap.Push(&w.timeouts, pcb)
@@ -541,6 +532,50 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				w.timer.Reset(time.Until(pcb.deadline))
 			}
 		}
+		// operations splitted into different buckets
+		if pcb.op == OpRead {
+			// enqueue for poller events
+			pcb.l = &desc.readers
+			pcb.elem = pcb.l.PushBack(pcb)
+
+			var next *list.Element
+		READER_LIST:
+			for elem := desc.readers.Front(); elem != nil; elem = next {
+				next = elem.Next()
+				pcb := elem.Value.(*aiocb)
+				if w.tryRead(ident, pcb) {
+					w.deliver(pcb)
+					desc.readers.Remove(elem)
+				} else {
+					if desc.readers.Len() == 1 || desc.writers.Len() == 0 { // rearm
+						w.pfd.Rearm(ident)
+					}
+					break READER_LIST
+				}
+			}
+
+		} else {
+			pcb.l = &desc.writers
+			pcb.elem = pcb.l.PushBack(pcb)
+
+			var next *list.Element
+		WRITER_LIST:
+			for elem := desc.writers.Front(); elem != nil; elem = next {
+				next = elem.Next()
+				pcb := elem.Value.(*aiocb)
+				if w.tryWrite(ident, pcb) {
+					w.deliver(pcb)
+					desc.writers.Remove(elem)
+				} else {
+					// rearm
+					if desc.writers.Len() == 1 || desc.readers.Len() == 0 { // rearm
+						w.pfd.Rearm(ident)
+					}
+					break WRITER_LIST
+				}
+			}
+		}
+
 	}
 }
 
@@ -569,6 +604,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 						break
 					}
 				}
+
 			}
 
 			if e.ev&EV_WRITE != 0 {
@@ -583,6 +619,10 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 						break
 					}
 				}
+			}
+
+			if desc.readers.Len() > 0 || desc.writers.Len() > 0 {
+				w.pfd.Rearm(e.ident)
 			}
 		}
 	}

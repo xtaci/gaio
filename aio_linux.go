@@ -66,7 +66,7 @@ func openPoll() (*poller, error) {
 
 	if err := syscall.EpollCtl(fd, syscall.EPOLL_CTL_ADD, int(r0),
 		&syscall.EpollEvent{Fd: int32(r0),
-			Events: syscall.EPOLLIN,
+			Events: syscall.EPOLLIN | _EPOLLET,
 		},
 	); err != nil {
 		syscall.Close(fd)
@@ -93,7 +93,11 @@ func (p *poller) Close() error {
 }
 
 func (p *poller) Watch(fd int) error {
-	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
+	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLONESHOT | syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
+}
+
+func (p *poller) Rearm(fd int) error {
+	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_MOD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLONESHOT | syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
 }
 
 // wakeup interrupt epoll_wait
@@ -122,6 +126,11 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 		p.efd = -1
 		p.mu.Unlock()
 	}()
+
+	const (
+		rSet = syscall.EPOLLIN | syscall.EPOLLRDHUP
+		wSet = syscall.EPOLLOUT
+	)
 
 	// epoll eventloop
 	for {
@@ -157,10 +166,10 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 					// half of connection.  (This flag is especially useful for writ-
 					// ing simple code to detect peer shutdown when using Edge Trig-
 					// gered monitoring.)
-					if ev.Events&(syscall.EPOLLIN|syscall.EPOLLERR|syscall.EPOLLHUP|syscall.EPOLLRDHUP) != 0 {
+					if ev.Events&rSet != 0 {
 						e.ev |= EV_READ
 					}
-					if ev.Events&(syscall.EPOLLOUT|syscall.EPOLLERR|syscall.EPOLLHUP) != 0 {
+					if ev.Events&wSet != 0 {
 						e.ev |= EV_WRITE
 					}
 

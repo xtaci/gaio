@@ -80,8 +80,6 @@ type watcher struct {
 
 	die     chan struct{}
 	dieOnce sync.Once
-
-	sync.Mutex
 }
 
 // NewWatcher creates a management object for monitoring file descriptors
@@ -264,9 +262,11 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 		cb := aiocbPool.Get().(*aiocb)
 		*cb = aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
 
-		w.Lock()
-		w.handlePending([]*aiocb{cb})
-		w.Unlock()
+		w.pendingMutex.Lock()
+		w.pendingCreate = append(w.pendingCreate, cb)
+		w.pendingMutex.Unlock()
+
+		w.notifyPending()
 		return nil
 	}
 }
@@ -428,13 +428,16 @@ func (w *watcher) loop() {
 			w.handlePending(w.pendingProcessing)
 
 		case pe := <-w.chEventNotify: // poller events
+			// swap w.pending with w.pending2
+			w.pendingMutex.Lock()
+			w.pendingCreate, w.pendingProcessing = w.pendingProcessing, w.pendingCreate
+			w.pendingCreate = w.pendingCreate[:0]
+			w.pendingMutex.Unlock()
+			w.handlePending(w.pendingProcessing)
 
-			w.Lock()
 			w.handleEvents(pe)
-			w.Unlock()
 
 		case <-w.timer.C: // timeout heap
-			w.Lock()
 			for w.timeouts.Len() > 0 {
 				now := time.Now()
 				pcb := w.timeouts[0]
@@ -449,10 +452,8 @@ func (w *watcher) loop() {
 					break
 				}
 			}
-			w.Unlock()
 
 		case <-w.gcNotify: // gc recycled net.Conn
-			w.Lock()
 			w.gcMutex.Lock()
 			for i, c := range w.gc {
 				ptr := reflect.ValueOf(c).Pointer()
@@ -465,7 +466,6 @@ func (w *watcher) loop() {
 			}
 			w.gc = w.gc[:0]
 			w.gcMutex.Unlock()
-			w.Unlock()
 
 		case cpuid := <-w.chCPUID:
 			setAffinity(cpuid)

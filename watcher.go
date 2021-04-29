@@ -170,6 +170,7 @@ func (w *watcher) Close() (err error) {
 func (w *watcher) notifyPending() {
 	select {
 	case w.chPendingNotify <- struct{}{}:
+		w.pfd.wakeup()
 	default:
 	}
 }

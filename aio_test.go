@@ -685,7 +685,7 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 			case OpWrite:
 				// recv
 				if res.Error != nil {
-					continue
+					t.Fatal(res.Error)
 				}
 
 				// inject random nil buffer to test internal buffer

@@ -34,7 +34,8 @@ type fdDesc struct {
 	readers list.List // all read/write requests
 	writers list.List
 	ptr     uintptr // pointer to net.Conn
-	armed   bool
+	r       bool
+	w       bool
 }
 
 // watcher will monitor events and process async-io request(s),
@@ -505,7 +506,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				}
 
 				// file description bindings
-				desc = &fdDesc{ptr: pcb.ptr, armed: true}
+				desc = &fdDesc{ptr: pcb.ptr, r: true, w: true}
 				w.descs[ident] = desc
 				w.connIdents[pcb.ptr] = ident
 
@@ -530,31 +531,23 @@ func (w *watcher) handlePending(pending []*aiocb) {
 		switch pcb.op {
 		case OpRead:
 			// try immediately queue is empty
-			if desc.readers.Len() == 0 {
+			if desc.readers.Len() == 0 && desc.r {
 				if w.tryRead(ident, pcb) {
 					w.deliver(pcb)
 					continue
 				}
-
-				if !desc.armed { // rearm the ident
-					w.pfd.Rearm(ident)
-					desc.armed = true
-				}
+				desc.r = false
 			}
 			// enqueue for poller events
 			pcb.l = &desc.readers
 			pcb.elem = pcb.l.PushBack(pcb)
 		case OpWrite:
-			if desc.writers.Len() == 0 {
+			if desc.writers.Len() == 0 && desc.w {
 				if w.tryWrite(ident, pcb) {
 					w.deliver(pcb)
 					continue
 				}
-
-				if !desc.armed { // rearm the ident
-					w.pfd.Rearm(ident)
-					desc.armed = true
-				}
+				desc.w = false
 			}
 			pcb.l = &desc.writers
 			pcb.elem = pcb.l.PushBack(pcb)
@@ -597,6 +590,9 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 					}
 				}
 
+				if desc.readers.Len() == 0 {
+					desc.r = true
+				}
 			}
 
 			if e.ev&EV_WRITE != 0 {
@@ -611,12 +607,10 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 						break
 					}
 				}
-			}
 
-			if desc.readers.Len() > 0 || desc.writers.Len() > 0 {
-				w.pfd.Rearm(e.ident)
-			} else {
-				desc.armed = false
+				if desc.writers.Len() == 0 {
+					desc.w = true
+				}
 			}
 		}
 	}

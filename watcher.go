@@ -428,6 +428,13 @@ func (w *watcher) loop() {
 			w.handlePending(w.pendingProcessing)
 
 		case pe := <-w.chEventNotify: // poller events
+			// swap w.pending with w.pending2
+			w.pendingMutex.Lock()
+			w.pendingCreate, w.pendingProcessing = w.pendingProcessing, w.pendingCreate
+			w.pendingCreate = w.pendingCreate[:0]
+			w.pendingMutex.Unlock()
+			w.handlePending(w.pendingProcessing)
+
 			w.handleEvents(pe)
 
 		case <-w.timer.C: // timeout heap

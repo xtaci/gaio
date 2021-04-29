@@ -695,7 +695,7 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 				if allswap || rnd%13 == 0 {
 					err = w.Read(nil, res.Conn, nil)
 				} else {
-					err = w.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
+					err = w.Read(nil, res.Conn, make([]byte, 1024))
 				}
 
 				if err != nil {

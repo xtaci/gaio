@@ -34,8 +34,7 @@ type fdDesc struct {
 	readers list.List // all read/write requests
 	writers list.List
 	ptr     uintptr // pointer to net.Conn
-	r       bool
-	w       bool
+	armed   bool
 }
 
 // watcher will monitor events and process async-io request(s),
@@ -506,7 +505,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				}
 
 				// file description bindings
-				desc = &fdDesc{ptr: pcb.ptr, r: true, w: true}
+				desc = &fdDesc{ptr: pcb.ptr}
 				w.descs[ident] = desc
 				w.connIdents[pcb.ptr] = ident
 
@@ -531,26 +530,35 @@ func (w *watcher) handlePending(pending []*aiocb) {
 		switch pcb.op {
 		case OpRead:
 			// try immediately queue is empty
-			if desc.readers.Len() == 0 && desc.r {
+			if desc.readers.Len() == 0 {
 				if w.tryRead(ident, pcb) {
 					w.deliver(pcb)
 					continue
 				}
-				desc.r = false
-				w.pfd.Rearm(ident)
 			}
+
+			if !desc.armed {
+				w.pfd.Rearm(ident)
+				desc.armed = true
+			}
+
 			// enqueue for poller events
 			pcb.l = &desc.readers
 			pcb.elem = pcb.l.PushBack(pcb)
 		case OpWrite:
-			if desc.writers.Len() == 0 && desc.w {
+			if desc.writers.Len() == 0 {
 				if w.tryWrite(ident, pcb) {
 					w.deliver(pcb)
 					continue
 				}
-				desc.w = false
 				w.pfd.Rearm(ident)
 			}
+
+			if !desc.armed {
+				w.pfd.Rearm(ident)
+				desc.armed = true
+			}
+
 			pcb.l = &desc.writers
 			pcb.elem = pcb.l.PushBack(pcb)
 		}
@@ -579,8 +587,8 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	//log.Println(e)
 	for _, e := range pe {
 		if desc, ok := w.descs[e.ident]; ok {
+			desc.armed = false
 			if e.ev&EV_READ != 0 {
-				desc.r = true
 				var next *list.Element
 				for elem := desc.readers.Front(); elem != nil; elem = next {
 					next = elem.Next()
@@ -589,14 +597,12 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 						w.deliver(pcb)
 						desc.readers.Remove(elem)
 					} else {
-						desc.r = false
 						break
 					}
 				}
 			}
 
 			if e.ev&EV_WRITE != 0 {
-				desc.w = true
 				var next *list.Element
 				for elem := desc.writers.Front(); elem != nil; elem = next {
 					next = elem.Next()
@@ -605,7 +611,6 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 						w.deliver(pcb)
 						desc.writers.Remove(elem)
 					} else {
-						desc.w = false
 						break
 					}
 				}
@@ -613,6 +618,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 
 			if desc.readers.Len() > 0 || desc.writers.Len() > 0 {
 				w.pfd.Rearm(e.ident)
+				desc.armed = true
 			}
 		}
 	}

@@ -45,7 +45,10 @@ type watcher struct {
 	chEventNotify chan pollerEvents
 
 	// events from user
-	chPending chan *aiocb
+	chPendingNotify   chan struct{}
+	pendingCreate     []*aiocb
+	pendingProcessing []*aiocb // swaped pending
+	pendingMutex      sync.Mutex
 
 	// IO-completion events to user
 	chResults chan *aiocb
@@ -99,7 +102,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	// loop related chan
 	w.chCPUID = make(chan int32)
 	w.chEventNotify = make(chan pollerEvents)
-	w.chPending = make(chan *aiocb, maxEvents*4)
+	w.chPendingNotify = make(chan struct{}, 1)
 	w.chResults = make(chan *aiocb, maxEvents*4)
 	w.die = make(chan struct{})
 
@@ -161,6 +164,14 @@ func (w *watcher) Close() (err error) {
 		err = w.pfd.Close()
 	})
 	return err
+}
+
+// notify new operations pending
+func (w *watcher) notifyPending() {
+	select {
+	case w.chPendingNotify <- struct{}{}:
+	default:
+	}
 }
 
 // WaitIO blocks until any read/write completion, or error.
@@ -251,16 +262,11 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 		cb := aiocbPool.Get().(*aiocb)
 		*cb = aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
 
-		select {
-		case w.chPending <- cb:
-		default:
-			go func() {
-				select {
-				case w.chPending <- cb:
-				case <-w.die:
-				}
-			}()
-		}
+		w.pendingMutex.Lock()
+		w.pendingCreate = append(w.pendingCreate, cb)
+		w.pendingMutex.Unlock()
+
+		w.notifyPending()
 		return nil
 	}
 }
@@ -411,16 +417,15 @@ func (w *watcher) loop() {
 		}
 	}()
 
-	var reqs []*aiocb
 	for {
 		select {
-		case r := <-w.chPending:
-			reqs = append(reqs, r)
-			for len(w.chPending) > 0 {
-				reqs = append(reqs, <-w.chPending)
-			}
-			w.handlePending(reqs)
-			reqs = reqs[:0]
+		case <-w.chPendingNotify:
+			// swap w.pending with w.pending2
+			w.pendingMutex.Lock()
+			w.pendingCreate, w.pendingProcessing = w.pendingProcessing, w.pendingCreate
+			w.pendingCreate = w.pendingCreate[:0]
+			w.pendingMutex.Unlock()
+			w.handlePending(w.pendingProcessing)
 
 		case pe := <-w.chEventNotify: // poller events
 			w.handleEvents(pe)

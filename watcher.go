@@ -188,7 +188,8 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 				r = append(r, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
 				aiocbPool.Put(pcb)
 			}
-			atomic.StoreInt32(&w.shouldSwap, 1)
+
+			atomic.CompareAndSwapInt32(&w.shouldSwap, 0, 1)
 
 			return r, nil
 		case <-w.die:

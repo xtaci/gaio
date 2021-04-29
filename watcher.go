@@ -537,6 +537,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 					continue
 				}
 				desc.r = false
+				w.pfd.Rearm(ident)
 			}
 			// enqueue for poller events
 			pcb.l = &desc.readers
@@ -548,6 +549,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 					continue
 				}
 				desc.w = false
+				w.pfd.Rearm(ident)
 			}
 			pcb.l = &desc.writers
 			pcb.elem = pcb.l.PushBack(pcb)
@@ -607,6 +609,10 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 						break
 					}
 				}
+			}
+
+			if desc.readers.Len() > 0 || desc.writers.Len() > 0 {
+				w.pfd.Rearm(e.ident)
 			}
 		}
 	}

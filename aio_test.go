@@ -636,11 +636,9 @@ func testParallel(t *testing.T, par int, msgsize int) {
 	}
 }
 
-/*
 func Test10kRandomSwapBuffer(t *testing.T) {
 	testParallelRandomInternal(t, 10240, 1024, false)
 }
-*/
 
 func Test10kCompleteSwapBuffer(t *testing.T) {
 	testParallelRandomInternal(t, 10240, 1024, true)
@@ -651,7 +649,7 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 	ln := echoServer(t, msgsize)
 	defer ln.Close()
 
-	w, err := NewWatcher()
+	w, err := NewWatcherSize(par * msgsize)
 	if err != nil {
 		t.Fatal(err)
 	}

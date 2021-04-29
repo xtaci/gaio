@@ -261,7 +261,7 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 		}
 
 		cb := aiocbPool.Get().(*aiocb)
-		*cb = aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
+		*cb = aiocb{op: op, ptr: ptr, size: 0, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
 
 		w.pendingMutex.Lock()
 		w.pendingCreate = append(w.pendingCreate, cb)

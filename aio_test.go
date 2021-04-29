@@ -705,10 +705,6 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 				if res.Error != nil {
 					continue
 				}
-				if res.Size == 0 {
-					continue
-				}
-
 				nbytes += res.Size
 				if nbytes >= ntotal {
 					t.Log("completed:", nbytes)

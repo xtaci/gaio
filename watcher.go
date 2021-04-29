@@ -525,54 +525,40 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				})
 			}
 		}
+
+		// operations splitted into different buckets
+		switch pcb.op {
+		case OpRead:
+			// try immediately queue is empty
+			if desc.readers.Len() == 0 {
+				if w.tryRead(ident, pcb) {
+					w.deliver(pcb)
+					continue
+				}
+				// rearm the ident
+				w.pfd.Rearm(ident)
+			}
+			// enqueue for poller events
+			pcb.l = &desc.readers
+			pcb.elem = pcb.l.PushBack(pcb)
+		case OpWrite:
+			if desc.writers.Len() == 0 {
+				if w.tryWrite(ident, pcb) {
+					w.deliver(pcb)
+					continue
+				}
+				// rearm the ident
+				w.pfd.Rearm(ident)
+			}
+			pcb.l = &desc.writers
+			pcb.elem = pcb.l.PushBack(pcb)
+		}
+
 		// push to heap for timeout operation
 		if !pcb.deadline.IsZero() {
 			heap.Push(&w.timeouts, pcb)
 			if w.timeouts.Len() == 1 {
 				w.timer.Reset(time.Until(pcb.deadline))
-			}
-		}
-		// operations splitted into different buckets
-		if pcb.op == OpRead {
-			// enqueue for poller events
-			pcb.l = &desc.readers
-			pcb.elem = pcb.l.PushBack(pcb)
-
-			var next *list.Element
-		READER_LIST:
-			for elem := desc.readers.Front(); elem != nil; elem = next {
-				next = elem.Next()
-				pcb := elem.Value.(*aiocb)
-				if w.tryRead(ident, pcb) {
-					w.deliver(pcb)
-					desc.readers.Remove(elem)
-				} else {
-					if desc.readers.Len() == 1 || desc.writers.Len() == 0 { // rearm
-						w.pfd.Rearm(ident)
-					}
-					break READER_LIST
-				}
-			}
-
-		} else {
-			pcb.l = &desc.writers
-			pcb.elem = pcb.l.PushBack(pcb)
-
-			var next *list.Element
-		WRITER_LIST:
-			for elem := desc.writers.Front(); elem != nil; elem = next {
-				next = elem.Next()
-				pcb := elem.Value.(*aiocb)
-				if w.tryWrite(ident, pcb) {
-					w.deliver(pcb)
-					desc.writers.Remove(elem)
-				} else {
-					// rearm
-					if desc.writers.Len() == 1 || desc.readers.Len() == 0 { // rearm
-						w.pfd.Rearm(ident)
-					}
-					break WRITER_LIST
-				}
 			}
 		}
 

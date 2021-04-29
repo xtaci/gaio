@@ -122,8 +122,8 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 		p.mu.Lock()
 		syscall.Close(p.pfd)
 		syscall.Close(p.efd)
-		p.pfd = -1
-		p.efd = -1
+		//p.pfd = -1
+		//p.efd = -1
 		p.mu.Unlock()
 	}()
 

@@ -578,6 +578,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	for _, e := range pe {
 		if desc, ok := w.descs[e.ident]; ok {
 			if e.ev&EV_READ != 0 {
+				desc.r = true
 				var next *list.Element
 				for elem := desc.readers.Front(); elem != nil; elem = next {
 					next = elem.Next()
@@ -586,16 +587,14 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 						w.deliver(pcb)
 						desc.readers.Remove(elem)
 					} else {
+						desc.r = false
 						break
 					}
-				}
-
-				if desc.readers.Len() == 0 {
-					desc.r = true
 				}
 			}
 
 			if e.ev&EV_WRITE != 0 {
+				desc.w = true
 				var next *list.Element
 				for elem := desc.writers.Front(); elem != nil; elem = next {
 					next = elem.Next()
@@ -604,12 +603,9 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 						w.deliver(pcb)
 						desc.writers.Remove(elem)
 					} else {
+						desc.w = false
 						break
 					}
-				}
-
-				if desc.writers.Len() == 0 {
-					desc.w = true
 				}
 			}
 		}

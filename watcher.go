@@ -188,7 +188,8 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 				r = append(r, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
 				aiocbPool.Put(pcb)
 			}
-			atomic.StoreInt32(&w.shouldSwap, 1)
+
+			atomic.CompareAndSwapInt32(&w.shouldSwap, 0, 1)
 
 			return r, nil
 		case <-w.die:
@@ -261,7 +262,7 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 		}
 
 		cb := aiocbPool.Get().(*aiocb)
-		*cb = aiocb{op: op, ptr: ptr, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
+		*cb = aiocb{op: op, ptr: ptr, size: 0, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
 
 		w.pendingMutex.Lock()
 		w.pendingCreate = append(w.pendingCreate, cb)

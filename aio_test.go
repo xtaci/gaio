@@ -649,7 +649,7 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 	ln := echoServer(t, msgsize)
 	defer ln.Close()
 
-	w, err := NewWatcher()
+	w, err := NewWatcherSize(par * msgsize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -685,7 +685,7 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 			case OpWrite:
 				// recv
 				if res.Error != nil {
-					continue
+					t.Fatal(res.Error)
 				}
 
 				// inject random nil buffer to test internal buffer
@@ -695,7 +695,7 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 				if allswap || rnd%13 == 0 {
 					err = w.Read(nil, res.Conn, nil)
 				} else {
-					err = w.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
+					err = w.Read(nil, res.Conn, make([]byte, 1024))
 				}
 
 				if err != nil {
@@ -705,10 +705,6 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 				if res.Error != nil {
 					continue
 				}
-				if res.Size == 0 {
-					continue
-				}
-
 				nbytes += res.Size
 				if nbytes >= ntotal {
 					t.Log("completed:", nbytes)

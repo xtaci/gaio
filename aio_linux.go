@@ -93,10 +93,14 @@ func (p *poller) Close() error {
 }
 
 func (p *poller) Watch(fd int) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLONESHOT | syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
 }
 
 func (p *poller) Rearm(fd int) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_MOD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLONESHOT | syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
 }
 

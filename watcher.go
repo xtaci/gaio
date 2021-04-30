@@ -552,7 +552,6 @@ func (w *watcher) handlePending(pending []*aiocb) {
 					w.deliver(pcb)
 					continue
 				}
-				w.pfd.Rearm(ident)
 			}
 
 			if !desc.armed {

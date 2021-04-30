@@ -9,7 +9,7 @@ import (
 
 const (
 	// poller wait max events count
-	maxEvents = 128
+	maxEvents = 1024
 	// default internal buffer size
 	defaultInternalBufferSize = 65536
 )

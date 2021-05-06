@@ -92,16 +92,18 @@ func (p *poller) Close() error {
 	return p.wakeup()
 }
 
-func (p *poller) Watch(fd int) error {
+func (p *poller) Watch(fd int) (err error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLONESHOT | syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
+	err = syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLONESHOT | syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
+	p.mu.Unlock()
+	return
 }
 
-func (p *poller) Rearm(fd int) error {
+func (p *poller) Rearm(fd int) (err error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_MOD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLONESHOT | syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
+	err = syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_MOD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLONESHOT | syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
+	p.mu.Unlock()
+	return
 }
 
 // wakeup interrupt epoll_wait

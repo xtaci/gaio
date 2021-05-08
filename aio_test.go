@@ -9,12 +9,26 @@ import (
 	"net"
 	"net/http"
 	_ "net/http/pprof"
+	"runtime"
 	"testing"
 	"time"
 )
 
 func init() {
 	go http.ListenAndServe(":6060", nil)
+}
+
+type echoListener struct {
+	w *Watcher
+	net.Listener
+}
+
+func (eln echoListener) Close() error {
+	eln.w.Close()
+	err := eln.Listener.Close()
+
+	runtime.GC()
+	return err
 }
 
 func echoServer(t testing.TB, bufsize int) net.Listener {
@@ -87,7 +101,8 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 			}
 		}
 	}()
-	return ln
+
+	return echoListener{w, ln}
 }
 
 // simulate a server hangup, no read/write
@@ -824,6 +839,7 @@ func BenchmarkEcho128KParallel(b *testing.B) {
 }
 
 func benchmarkEcho(b *testing.B, bufsize int, numconn int) {
+	defer runtime.GC()
 	b.Log("benchmark echo with message size:", bufsize, "with", numconn, "parallel connections, for", b.N, "times")
 	ln := echoServer(b, bufsize)
 	defer ln.Close()
@@ -835,9 +851,9 @@ func benchmarkEcho(b *testing.B, bufsize int, numconn int) {
 	defer w.Close()
 
 	addr, _ := net.ResolveTCPAddr("tcp", ln.Addr().String())
+	tx := make([]byte, bufsize)
 	for i := 0; i < numconn; i++ {
 		rx := make([]byte, bufsize)
-		tx := make([]byte, bufsize)
 		conn, err := net.DialTCP("tcp", nil, addr)
 		if err != nil {
 			b.Fatal("dial:", err)

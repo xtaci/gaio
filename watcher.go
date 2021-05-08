@@ -537,12 +537,6 @@ func (w *watcher) handlePending(pending []*aiocb) {
 					continue
 				}
 			}
-
-			if !desc.armed {
-				w.pfd.Rearm(ident)
-				desc.armed = true
-			}
-
 			// enqueue for poller events
 			pcb.l = &desc.readers
 			pcb.elem = pcb.l.PushBack(pcb)
@@ -554,13 +548,14 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				}
 			}
 
-			if !desc.armed {
-				w.pfd.Rearm(ident)
-				desc.armed = true
-			}
-
 			pcb.l = &desc.writers
 			pcb.elem = pcb.l.PushBack(pcb)
+		}
+
+		// try rearm descriptor
+		if !desc.armed {
+			w.pfd.Rearm(ident)
+			desc.armed = true
 		}
 
 		// push to heap for timeout operation
@@ -570,7 +565,6 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				w.timer.Reset(time.Until(pcb.deadline))
 			}
 		}
-
 	}
 }
 

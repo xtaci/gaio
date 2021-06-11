@@ -587,8 +587,6 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	//log.Println(e)
 	for _, e := range pe {
 		if desc, ok := w.descs[e.ident]; ok {
-			var shouldRearmRead bool
-			var shouldRearmWrite bool
 			if e.ev&EV_READ != 0 {
 				desc.r_armed = false
 				var next *list.Element
@@ -604,7 +602,6 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 				}
 
 				if desc.readers.Len() > 0 {
-					shouldRearmRead = true
 					desc.r_armed = true
 				}
 			}
@@ -624,13 +621,12 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 				}
 
 				if desc.writers.Len() > 0 {
-					shouldRearmWrite = true
 					desc.w_armed = true
 				}
 			}
 
-			if shouldRearmRead || shouldRearmWrite {
-				w.pfd.Rearm(e.ident, shouldRearmRead, shouldRearmWrite)
+			if desc.r_armed || desc.w_armed {
+				w.pfd.Rearm(e.ident, desc.r_armed, desc.w_armed)
 			}
 		}
 	}

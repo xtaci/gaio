@@ -83,7 +83,7 @@ func (p *poller) Watch(fd int) error {
 	return p.wakeup()
 }
 
-func (p *poller) Rearm(fd int) error {
+func (p *poller) Rearm(fd int, read bool, write bool) (err error) {
 	return nil
 }
 

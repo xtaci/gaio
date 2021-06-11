@@ -99,9 +99,18 @@ func (p *poller) Watch(fd int) (err error) {
 	return
 }
 
-func (p *poller) Rearm(fd int) (err error) {
+func (p *poller) Rearm(fd int, read bool, write bool) (err error) {
 	p.mu.Lock()
-	err = syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_MOD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLONESHOT | syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
+	var flag uint32
+	flag = syscall.EPOLLONESHOT | _EPOLLET
+	if read {
+		flag |= syscall.EPOLLIN | syscall.EPOLLRDHUP
+	}
+	if write {
+		flag |= syscall.EPOLLOUT
+	}
+
+	err = syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_MOD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: flag})
 	p.mu.Unlock()
 	return
 }

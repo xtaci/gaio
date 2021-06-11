@@ -34,7 +34,8 @@ type fdDesc struct {
 	readers list.List // all read/write requests
 	writers list.List
 	ptr     uintptr // pointer to net.Conn
-	armed   bool
+	r_armed bool
+	w_armed bool
 }
 
 // watcher will monitor events and process async-io request(s),
@@ -540,6 +541,12 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			// enqueue for poller events
 			pcb.l = &desc.readers
 			pcb.elem = pcb.l.PushBack(pcb)
+
+			// try rearm descriptor
+			if !desc.r_armed {
+				w.pfd.Rearm(ident, true, false)
+				desc.r_armed = true
+			}
 		case OpWrite:
 			if desc.writers.Len() == 0 {
 				if w.tryWrite(ident, pcb) {
@@ -550,12 +557,12 @@ func (w *watcher) handlePending(pending []*aiocb) {
 
 			pcb.l = &desc.writers
 			pcb.elem = pcb.l.PushBack(pcb)
-		}
 
-		// try rearm descriptor
-		if !desc.armed {
-			w.pfd.Rearm(ident)
-			desc.armed = true
+			// try rearm descriptor
+			if !desc.w_armed {
+				w.pfd.Rearm(ident, false, true)
+				desc.w_armed = true
+			}
 		}
 
 		// push to heap for timeout operation
@@ -581,8 +588,8 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	//log.Println(e)
 	for _, e := range pe {
 		if desc, ok := w.descs[e.ident]; ok {
-			desc.armed = false
 			if e.ev&EV_READ != 0 {
+				desc.r_armed = false
 				var next *list.Element
 				for elem := desc.readers.Front(); elem != nil; elem = next {
 					next = elem.Next()
@@ -594,9 +601,16 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 						break
 					}
 				}
+
+				if desc.readers.Len() > 0 {
+					w.pfd.Rearm(e.ident, true, false)
+					desc.r_armed = true
+				}
+
 			}
 
 			if e.ev&EV_WRITE != 0 {
+				desc.w_armed = false
 				var next *list.Element
 				for elem := desc.writers.Front(); elem != nil; elem = next {
 					next = elem.Next()
@@ -608,11 +622,11 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 						break
 					}
 				}
-			}
 
-			if desc.readers.Len() > 0 || desc.writers.Len() > 0 {
-				w.pfd.Rearm(e.ident)
-				desc.armed = true
+				if desc.writers.Len() > 0 {
+					w.pfd.Rearm(e.ident, false, true)
+					desc.w_armed = true
+				}
 			}
 		}
 	}

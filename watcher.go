@@ -542,9 +542,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			pcb.l = &desc.readers
 			pcb.elem = pcb.l.PushBack(pcb)
 
-			// try rearm descriptor
 			if !desc.r_armed {
-				w.pfd.Rearm(ident, true, false)
 				desc.r_armed = true
 			}
 		case OpWrite:
@@ -558,12 +556,13 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			pcb.l = &desc.writers
 			pcb.elem = pcb.l.PushBack(pcb)
 
-			// try rearm descriptor
 			if !desc.w_armed {
-				w.pfd.Rearm(ident, false, true)
 				desc.w_armed = true
 			}
 		}
+
+		// try rearm descriptor
+		w.pfd.Rearm(ident, desc.r_armed, desc.w_armed)
 
 		// push to heap for timeout operation
 		if !pcb.deadline.IsZero() {

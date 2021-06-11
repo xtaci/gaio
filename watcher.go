@@ -603,7 +603,6 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 				}
 
 				if desc.readers.Len() > 0 {
-					w.pfd.Rearm(e.ident, true, false)
 					desc.r_armed = true
 				}
 
@@ -624,9 +623,12 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 				}
 
 				if desc.writers.Len() > 0 {
-					w.pfd.Rearm(e.ident, false, true)
 					desc.w_armed = true
 				}
+			}
+
+			if desc.r_armed || desc.w_armed {
+				w.pfd.Rearm(e.ident, desc.r_armed, desc.w_armed)
 			}
 		}
 	}

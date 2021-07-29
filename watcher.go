@@ -387,9 +387,6 @@ func (w *watcher) releaseConn(ident int) {
 		// delete from heap
 		for e := desc.readers.Front(); e != nil; e = e.Next() {
 			tcb := e.Value.(*aiocb)
-			if !tcb.deadline.IsZero() {
-				heap.Remove(&w.timeouts, tcb.idx)
-			}
 			// notify caller
 			tcb.err = io.ErrClosedPipe
 			w.deliver(tcb)
@@ -397,9 +394,6 @@ func (w *watcher) releaseConn(ident int) {
 
 		for e := desc.writers.Front(); e != nil; e = e.Next() {
 			tcb := e.Value.(*aiocb)
-			if !tcb.deadline.IsZero() {
-				heap.Remove(&w.timeouts, tcb.idx)
-			}
 			tcb.err = io.ErrClosedPipe
 			w.deliver(tcb)
 		}

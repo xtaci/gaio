@@ -390,6 +390,9 @@ func (w *watcher) releaseConn(ident int) {
 			if !tcb.deadline.IsZero() {
 				heap.Remove(&w.timeouts, tcb.idx)
 			}
+			// notify caller
+			tcb.err = io.ErrClosedPipe
+			w.deliver(tcb)
 		}
 
 		for e := desc.writers.Front(); e != nil; e = e.Next() {
@@ -397,6 +400,8 @@ func (w *watcher) releaseConn(ident int) {
 			if !tcb.deadline.IsZero() {
 				heap.Remove(&w.timeouts, tcb.idx)
 			}
+			tcb.err = io.ErrClosedPipe
+			w.deliver(tcb)
 		}
 
 		delete(w.descs, ident)

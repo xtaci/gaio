@@ -178,8 +178,8 @@ func (w *watcher) notifyPending() {
 }
 
 // WaitIO blocks until any read/write completion, or error.
-// An internal 'buf' returned or 'r []OpResult' are safe to use BEFORE next call to WaitIO().
-func (w *watcher) WaitIO() (r []OpResult, err error) {
+// An internal 'buf' returned or '[]OpResult' are safe to use BEFORE next call to WaitIO().
+func (w *watcher) WaitIO(r []OpResult) ([]OpResult, error) {
 	// recycle previous aiocb
 	for k := range w.recycles {
 		aiocbPool.Put(w.recycles[k])

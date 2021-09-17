@@ -66,7 +66,7 @@ import (
 func echoServer(w *gaio.Watcher) {
         for {
                 // loop wait for any IO events
-                results, err := w.WaitIO()
+                results, err := w.WaitIO(nil)
                 if err != nil {
                         log.Println(err)
                         return
@@ -124,6 +124,27 @@ func main() {
 
 ```
 
+Notice that in the example above, ```Watcher.WaitIO()``` will allocate a slice object each time as the returned value. To eliminate these allocations, you can reuse the returned slice in this way:
+
+```go
+func server(w *gaio.Watcher) {
+        var reused []gaio.OpResult
+        for {
+                results, err := w.WaitIO(reused)
+                if err != nil {
+                        log.Println(err)
+                        return
+                }
+                for _, res := range results {
+                        // do something...
+                }
+                if results != nil {
+                        reused = results[:0]
+                }
+        }
+}
+```
+
 ### More examples
 
 <details>
@@ -166,7 +187,7 @@ func main() {
         // watcher.WaitIO goroutine
         go func() {
                 for {
-                        results, err := w.WaitIO()
+                        results, err := w.WaitIO(nil)
                         if err != nil {
                                 log.Println(err)
                                 return

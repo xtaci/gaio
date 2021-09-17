@@ -46,7 +46,7 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 	// ping-pong scheme echo server
 	go func() {
 		for {
-			results, err := w.WaitIO()
+			results, err := w.WaitIO(nil)
 			if err != nil {
 				log.Println(err)
 				return
@@ -206,7 +206,7 @@ func TestUnsupportedConn(t *testing.T) {
 	w.Read(nil, p2, make([]byte, 1))
 
 	for {
-		results, err := w.WaitIO()
+		results, err := w.WaitIO(nil)
 		if err != nil {
 			t.Log(err)
 		}
@@ -252,7 +252,7 @@ func testSingleDeadline(t *testing.T, w *Watcher) {
 
 READTEST:
 	for {
-		results, err := w.WaitIO()
+		results, err := w.WaitIO(nil)
 		if err != nil {
 			t.Log(err)
 			break READTEST
@@ -283,7 +283,7 @@ READTEST:
 
 WRITETEST:
 	for {
-		results, err := w.WaitIO()
+		results, err := w.WaitIO(nil)
 		if err != nil {
 			t.Log(err)
 			break WRITETEST
@@ -371,7 +371,7 @@ func testBidirectionWatcher(t *testing.T, w *Watcher) {
 	}()
 
 	for {
-		results, err := w.WaitIO()
+		results, err := w.WaitIO(nil)
 		if err != nil {
 			t.Log(err)
 			return
@@ -434,7 +434,7 @@ func TestReadFull(t *testing.T) {
 	}
 
 	for {
-		results, err := w.WaitIO()
+		results, err := w.WaitIO(nil)
 		if err != nil {
 			t.Log(err)
 			return
@@ -485,7 +485,7 @@ func TestSocketClose(t *testing.T) {
 		log.Fatal(err)
 	}
 	for {
-		results, err := w.WaitIO()
+		results, err := w.WaitIO(nil)
 		if err != nil {
 			t.Log(err)
 			return
@@ -531,7 +531,7 @@ func TestWriteOnClosedConn(t *testing.T) {
 	}()
 
 	for {
-		results, err := w.WaitIO()
+		results, err := w.WaitIO(nil)
 		if err != nil {
 			t.Log(err)
 			return
@@ -615,7 +615,7 @@ func testParallel(t *testing.T, par int, msgsize int) {
 	nbytes := 0
 	ntotal := msgsize * par
 	for {
-		results, err := w.WaitIO()
+		results, err := w.WaitIO(nil)
 		if err != nil {
 			t.Log(err)
 			return
@@ -689,7 +689,7 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 	nbytes := 0
 	ntotal := msgsize * par
 	for {
-		results, err := w.WaitIO()
+		results, err := w.WaitIO(nil)
 		if err != nil {
 			t.Log(err)
 			return
@@ -776,7 +776,7 @@ func testDeadline(t *testing.T, par int) {
 
 	nerrs := 0
 	for {
-		results, err := w.WaitIO()
+		results, err := w.WaitIO(nil)
 		if err != nil {
 			t.Log(err)
 			return
@@ -871,7 +871,7 @@ func benchmarkEcho(b *testing.B, bufsize int, numconn int) {
 	count := 0
 	target := bufsize * b.N * numconn
 	for {
-		results, err := w.WaitIO()
+		results, err := w.WaitIO(nil)
 		if err != nil {
 			b.Fatal("waitio:", err)
 			return

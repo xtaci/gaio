@@ -1,4 +1,4 @@
-// +build linux darwin netbsd freebsd openbsd dragonfly
+//go:build linux || darwin || netbsd || freebsd || openbsd || dragonfly
 
 // Package gaio is an Async-IO library for Golang.
 //
@@ -283,6 +283,7 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 
 // tryRead will try to read data on aiocb and notify
 func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
+	// step 1. bind to proper buffer
 	buf := pcb.buffer
 
 	useSwap := false
@@ -303,6 +304,7 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 		}
 	}
 
+	// step 2. read into buffer
 	for {
 		nr, er := rawRead(fd, buf[pcb.size:])
 		if er == syscall.EAGAIN {
@@ -329,6 +331,8 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 		break
 	}
 
+	// step 3.check read full operation
+	// 	the buffer of readfull operation is guaranteed from caller
 	if pcb.readFull { // read full operation
 		if pcb.err != nil {
 			return true
@@ -339,6 +343,7 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 		return false
 	}
 
+	// step 4. non read-full operations
 	if useSwap { // IO completed with internal buffer
 		pcb.useSwap = true
 		pcb.buffer = buf[:pcb.size] // set len to pcb.size

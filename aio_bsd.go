@@ -1,4 +1,4 @@
-// +build darwin netbsd freebsd openbsd dragonfly
+//go:build darwin || netbsd || freebsd || openbsd || dragonfly
 
 package gaio
 

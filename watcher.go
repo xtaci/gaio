@@ -193,6 +193,8 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 		select {
 		case pcb := <-w.chResults:
 			r = append(r, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+			// avoid memory leak
+			pcb.ctx = nil
 			w.recycles = append(w.recycles, pcb)
 			for len(w.chResults) > 0 {
 				pcb := <-w.chResults

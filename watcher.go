@@ -1,4 +1,5 @@
 //go:build linux || darwin || netbsd || freebsd || openbsd || dragonfly
+// +build linux darwin netbsd freebsd openbsd dragonfly
 
 // Package gaio is an Async-IO library for Golang.
 //
@@ -183,6 +184,8 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 	// recycle previous aiocb
 	for k := range w.recycles {
 		aiocbPool.Put(w.recycles[k])
+		// avoid memory leak
+		w.recycles[k] = nil
 	}
 	w.recycles = w.recycles[:0]
 
@@ -190,10 +193,14 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 		select {
 		case pcb := <-w.chResults:
 			r = append(r, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+			// avoid memory leak
+			pcb.ctx = nil
 			w.recycles = append(w.recycles, pcb)
 			for len(w.chResults) > 0 {
 				pcb := <-w.chResults
 				r = append(r, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+				// avoid memory leak
+				pcb.ctx = nil
 				w.recycles = append(w.recycles, pcb)
 			}
 
@@ -437,6 +444,9 @@ func (w *watcher) loop() {
 			// swap w.pending with w.pending2
 			w.pendingMutex.Lock()
 			w.pendingCreate, w.pendingProcessing = w.pendingProcessing, w.pendingCreate
+			for i := 0; i < len(w.pendingCreate); i++ {
+				w.pendingCreate[i] = nil
+			}
 			w.pendingCreate = w.pendingCreate[:0]
 			w.pendingMutex.Unlock()
 			w.handlePending(w.pendingProcessing)

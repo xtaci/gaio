@@ -1,10 +1,11 @@
-// +build linux
+//go:build linux
 
 package gaio
 
 import (
 	"net"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 )
@@ -16,14 +17,11 @@ const (
 )
 
 type poller struct {
+	poolGeneric
 	mu     sync.Mutex // mutex to protect fd closing
 	pfd    int        // epoll fd
 	efd    int        // eventfd
 	efdbuf []byte
-
-	// awaiting for poll
-	awaiting      []int
-	awaitingMutex sync.Mutex
 
 	// closing signal
 	die     chan struct{}
@@ -68,7 +66,7 @@ func openPoll() (*poller, error) {
 
 	if err := syscall.EpollCtl(fd, syscall.EPOLL_CTL_ADD, int(r0),
 		&syscall.EpollEvent{Fd: int32(r0),
-			Events: syscall.EPOLLIN,
+			Events: syscall.EPOLLIN | _EPOLLET,
 		},
 	); err != nil {
 		syscall.Close(fd)
@@ -81,6 +79,7 @@ func openPoll() (*poller, error) {
 	p.efd = int(r0)
 	p.efdbuf = make([]byte, 8)
 	p.die = make(chan struct{})
+	p.cpuid = -1
 
 	return p, err
 }
@@ -93,12 +92,27 @@ func (p *poller) Close() error {
 	return p.wakeup()
 }
 
-func (p *poller) Watch(fd int) error {
-	p.awaitingMutex.Lock()
-	p.awaiting = append(p.awaiting, fd)
-	p.awaitingMutex.Unlock()
+func (p *poller) Watch(fd int) (err error) {
+	p.mu.Lock()
+	err = syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLONESHOT | syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
+	p.mu.Unlock()
+	return
+}
 
-	return p.wakeup()
+func (p *poller) Rearm(fd int, read bool, write bool) (err error) {
+	p.mu.Lock()
+	var flag uint32
+	flag = syscall.EPOLLONESHOT | _EPOLLET
+	if read {
+		flag |= syscall.EPOLLIN | syscall.EPOLLRDHUP
+	}
+	if write {
+		flag |= syscall.EPOLLOUT
+	}
+
+	err = syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_MOD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: flag})
+	p.mu.Unlock()
+	return
 }
 
 // wakeup interrupt epoll_wait
@@ -116,6 +130,7 @@ func (p *poller) wakeup() error {
 }
 
 func (p *poller) Wait(chEventNotify chan pollerEvents) {
+	p.initCache(cap(chEventNotify) + 2)
 	events := make([]syscall.EpollEvent, maxEvents)
 	// close poller fd & eventfd in defer
 	defer func() {
@@ -127,20 +142,17 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 		p.mu.Unlock()
 	}()
 
+	const (
+		rSet = syscall.EPOLLIN | syscall.EPOLLRDHUP
+		wSet = syscall.EPOLLOUT
+	)
+
 	// epoll eventloop
 	for {
 		select {
 		case <-p.die:
 			return
 		default:
-			// check for new awaiting
-			p.awaitingMutex.Lock()
-			for _, fd := range p.awaiting {
-				syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
-			}
-			p.awaiting = p.awaiting[:0]
-			p.awaitingMutex.Unlock()
-
 			n, err := syscall.EpollWait(p.pfd, events, -1)
 			if err == syscall.EINTR {
 				continue
@@ -149,12 +161,18 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 				return
 			}
 
+			// load from cache
+			pe := p.loadCache(n)
 			// event processing
-			var pe pollerEvents
 			for i := 0; i < n; i++ {
 				ev := &events[i]
 				if int(ev.Fd) == p.efd {
 					syscall.Read(p.efd, p.efdbuf) // simply consume
+					// check cpuid
+					if cpuid := atomic.LoadInt32(&p.cpuid); cpuid != -1 {
+						setAffinity(cpuid)
+						atomic.StoreInt32(&p.cpuid, -1)
+					}
 				} else {
 					e := event{ident: int(ev.Fd)}
 
@@ -163,11 +181,11 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 					// half of connection.  (This flag is especially useful for writ-
 					// ing simple code to detect peer shutdown when using Edge Trig-
 					// gered monitoring.)
-					if ev.Events&(syscall.EPOLLIN|syscall.EPOLLERR|syscall.EPOLLHUP|syscall.EPOLLRDHUP) != 0 {
-						e.r = true
+					if ev.Events&rSet != 0 {
+						e.ev |= EV_READ
 					}
-					if ev.Events&(syscall.EPOLLOUT|syscall.EPOLLERR|syscall.EPOLLHUP) != 0 {
-						e.w = true
+					if ev.Events&wSet != 0 {
+						e.ev |= EV_WRITE
 					}
 
 					pe = append(pe, e)
@@ -181,4 +199,61 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 			}
 		}
 	}
+}
+
+// Errno values.
+var (
+	errEAGAIN error = syscall.EAGAIN
+	errEINVAL error = syscall.EINVAL
+	errENOENT error = syscall.ENOENT
+)
+
+// errnoErr returns common boxed Errno values, to prevent
+// allocations at runtime.
+func errnoErr(e syscall.Errno) error {
+	switch e {
+	case 0:
+		return nil
+	case syscall.EAGAIN:
+		return errEAGAIN
+	case syscall.EINVAL:
+		return errEINVAL
+	case syscall.ENOENT:
+		return errENOENT
+	}
+	return e
+}
+
+var _zero uintptr
+
+// raw read for nonblocking op to avert context switch
+func rawRead(fd int, p []byte) (n int, err error) {
+	var _p0 unsafe.Pointer
+	if len(p) > 0 {
+		_p0 = unsafe.Pointer(&p[0])
+	} else {
+		_p0 = unsafe.Pointer(&_zero)
+	}
+	r0, _, e1 := syscall.RawSyscall(syscall.SYS_READ, uintptr(fd), uintptr(_p0), uintptr(len(p)))
+	n = int(r0)
+	if e1 != 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+// raw write for nonblocking op to avert context switch
+func rawWrite(fd int, p []byte) (n int, err error) {
+	var _p0 unsafe.Pointer
+	if len(p) > 0 {
+		_p0 = unsafe.Pointer(&p[0])
+	} else {
+		_p0 = unsafe.Pointer(&_zero)
+	}
+	r0, _, e1 := syscall.RawSyscall(syscall.SYS_WRITE, uintptr(fd), uintptr(_p0), uintptr(len(p)))
+	n = int(r0)
+	if e1 != 0 {
+		err = errnoErr(e1)
+	}
+	return
 }

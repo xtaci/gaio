@@ -9,12 +9,26 @@ import (
 	"net"
 	"net/http"
 	_ "net/http/pprof"
+	"runtime"
 	"testing"
 	"time"
 )
 
 func init() {
 	go http.ListenAndServe(":6060", nil)
+}
+
+type echoListener struct {
+	w *Watcher
+	net.Listener
+}
+
+func (eln echoListener) Close() error {
+	eln.w.Close()
+	err := eln.Listener.Close()
+
+	runtime.GC()
+	return err
 }
 
 func echoServer(t testing.TB, bufsize int) net.Listener {
@@ -87,7 +101,8 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 			}
 		}
 	}()
-	return ln
+
+	return echoListener{w, ln}
 }
 
 // simulate a server hangup, no read/write
@@ -649,7 +664,7 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 	ln := echoServer(t, msgsize)
 	defer ln.Close()
 
-	w, err := NewWatcher()
+	w, err := NewWatcherSize(par * msgsize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -685,7 +700,7 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 			case OpWrite:
 				// recv
 				if res.Error != nil {
-					continue
+					t.Fatal(res.Error)
 				}
 
 				// inject random nil buffer to test internal buffer
@@ -695,7 +710,7 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 				if allswap || rnd%13 == 0 {
 					err = w.Read(nil, res.Conn, nil)
 				} else {
-					err = w.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
+					err = w.Read(nil, res.Conn, make([]byte, 1024))
 				}
 
 				if err != nil {
@@ -705,10 +720,6 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 				if res.Error != nil {
 					continue
 				}
-				if res.Size == 0 {
-					continue
-				}
-
 				nbytes += res.Size
 				if nbytes >= ntotal {
 					t.Log("completed:", nbytes)
@@ -828,6 +839,7 @@ func BenchmarkEcho128KParallel(b *testing.B) {
 }
 
 func benchmarkEcho(b *testing.B, bufsize int, numconn int) {
+	defer runtime.GC()
 	b.Log("benchmark echo with message size:", bufsize, "with", numconn, "parallel connections, for", b.N, "times")
 	ln := echoServer(b, bufsize)
 	defer ln.Close()
@@ -839,9 +851,9 @@ func benchmarkEcho(b *testing.B, bufsize int, numconn int) {
 	defer w.Close()
 
 	addr, _ := net.ResolveTCPAddr("tcp", ln.Addr().String())
+	tx := make([]byte, bufsize)
 	for i := 0; i < numconn; i++ {
 		rx := make([]byte, bufsize)
-		tx := make([]byte, bufsize)
 		conn, err := net.DialTCP("tcp", nil, addr)
 		if err != nil {
 			b.Fatal("dial:", err)

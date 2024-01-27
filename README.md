@@ -29,14 +29,15 @@ And by eliminating **one goroutine per one connection scheme** with **Edge-Trigg
 
 ## Features
 
-1. Designed for **>C10K** concurrent connections, **maximized parallelism**, and nice single connection throughput. 
-2. [Read(ctx, conn, buffer)](https://godoc.org/github.com/xtaci/gaio#Watcher.Read) can be called with `nil` buffer to make use of **internal swap buffer**.
-3. **Non-intrusive** design, this library works with [net.Listener](https://golang.org/pkg/net/#Listener) and [net.Conn](https://golang.org/pkg/net/#Conn). (with [syscall.RawConn](https://golang.org/pkg/syscall/#RawConn) support), **easy to be integrated** into your existing software.
-4. **Amortized context switching cost** for tiny messages, able to handle frequent chat message exchanging.
-5. Application can decide **when to delegate** [net.Conn](https://golang.org/pkg/net/#Conn) to `gaio`, for example, you can delegate [net.Conn](https://golang.org/pkg/net/#Conn) to `gaio` after some handshaking procedure, or having some [net.TCPConn](https://golang.org/pkg/net/#TCPConn) settings done.
-6. Application can decide **when to submit** read or write requests, per-connection [back-pressure](https://en.wikipedia.org/wiki/Transmission_Control_Protocol#Flow_control) can be propagated to peer to slow down sending. This features is particular useful to transmit data from A to B via gaio, which B is slower than A.
-7. Tiny, around 1000 LOC, easy to debug.
-8. Support for Linux, BSD.
+1. Tested in **High Frequency Trading** for handling HTTP requests for **30K~40K RPS** on a single HVM server.
+2. Designed for **>C10K** concurrent connections, **maximized parallelism**, and nice single connection throughput. 
+3. [Read(ctx, conn, buffer)](https://godoc.org/github.com/xtaci/gaio#Watcher.Read) can be called with `nil` buffer to make use of **internal swap buffer**.
+4. **Non-intrusive** design, this library works with [net.Listener](https://golang.org/pkg/net/#Listener) and [net.Conn](https://golang.org/pkg/net/#Conn). (with [syscall.RawConn](https://golang.org/pkg/syscall/#RawConn) support), **easy to be integrated** into your existing software.
+5. **Amortized context switching cost** for tiny messages, able to handle frequent chat message exchanging.
+6. Application can decide **when to delegate** [net.Conn](https://golang.org/pkg/net/#Conn) to `gaio`, for example, you can delegate [net.Conn](https://golang.org/pkg/net/#Conn) to `gaio` after some handshaking procedure, or having some [net.TCPConn](https://golang.org/pkg/net/#TCPConn) settings done.
+7. Application can decide **when to submit** read or write requests, per-connection [back-pressure](https://en.wikipedia.org/wiki/Transmission_Control_Protocol#Flow_control) can be propagated to peer to slow down sending. This features is particular useful to transmit data from A to B via gaio, which B is slower than A.
+8. Tiny, around 1000 LOC, easy to debug.
+9. Support for Linux, BSD.
 
 ## Conventions
 

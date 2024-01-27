@@ -1,4 +1,4 @@
-// +build darwin netbsd freebsd openbsd dragonfly
+//go:build darwin || netbsd || freebsd || openbsd || dragonfly
 
 package gaio
 
@@ -9,6 +9,7 @@ import (
 )
 
 type poller struct {
+	poolGeneric
 	mu sync.Mutex // mutex to protect fd closing
 	fd int        // kqueue fd
 
@@ -82,6 +83,10 @@ func (p *poller) Watch(fd int) error {
 	return p.wakeup()
 }
 
+func (p *poller) Rearm(fd int, read bool, write bool) (err error) {
+	return nil
+}
+
 // wakeup interrupt kevent
 func (p *poller) wakeup() error {
 	p.mu.Lock()
@@ -100,6 +105,7 @@ func (p *poller) wakeup() error {
 }
 
 func (p *poller) Wait(chEventNotify chan pollerEvents) {
+	p.initCache(cap(chEventNotify) + 2)
 	events := make([]syscall.Kevent_t, maxEvents)
 	defer func() {
 		p.mu.Lock()
@@ -135,14 +141,15 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 			}
 			changes = changes[:0]
 
+			// load from cache
+			pe := p.loadCache(n)
 			// event processing
-			var pe pollerEvents
 			for i := 0; i < n; i++ {
 				ev := &events[i]
 				if ev.Ident != 0 {
 					e := event{ident: int(ev.Ident)}
 					if ev.Filter == syscall.EVFILT_READ {
-						e.r = true
+						e.ev |= EV_READ
 						// https://golang.org/src/runtime/netpoll_kqueue.go
 						// On some systems when the read end of a pipe
 						// is closed the write end will not get a
@@ -154,10 +161,10 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 						// and the appropriate thing will happen based
 						// on what that write returns (success, EPIPE, EAGAIN).
 						if ev.Flags&syscall.EV_EOF != 0 {
-							e.w = true
+							e.ev |= EV_WRITE
 						}
 					} else if ev.Filter == syscall.EVFILT_WRITE {
-						e.w = true
+						e.ev |= EV_WRITE
 					}
 
 					pe = append(pe, e)
@@ -171,4 +178,12 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 			}
 		}
 	}
+}
+
+func rawRead(fd int, p []byte) (n int, err error) {
+	return syscall.Read(fd, p)
+}
+
+func rawWrite(fd int, p []byte) (n int, err error) {
+	return syscall.Write(fd, p)
 }

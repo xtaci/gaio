@@ -9,9 +9,7 @@ import (
 
 const (
 	// poller wait max events count
-	maxEvents = 1024
-	// suggested eventQueueSize
-	eventQueueSize = 1
+	maxEvents = 4096
 	// default internal buffer size
 	defaultInternalBufferSize = 65536
 )
@@ -33,6 +31,8 @@ var (
 	ErrEmptyBuffer = errors.New("empty buffer")
 	// ErrInvalidDetachResult means the result cannot be used
 	ErrInvalidDetachResult = errors.New("invalid detach result")
+	// ErrCPUID indicates the given cpuid is invalid
+	ErrCPUID = errors.New("no such core")
 )
 
 var (
@@ -53,17 +53,46 @@ const (
 	opDelete
 )
 
+const (
+	EV_READ  = 0x1
+	EV_WRITE = 0x2
+)
+
 // event represent a file descriptor event
 type event struct {
-	ident int  // identifier of this event, usually file descriptor
-	r     bool // readable
-	w     bool // writable
+	ident int // identifier of this event, usually file descriptor
+	ev    int // event mark
 }
 
 // events from epoll_wait passing to loop,should be in batch for atomicity.
 // and batch processing is the key to amortize context switching costs for
 // tiny messages.
 type pollerEvents []event
+
+// generic poll struct
+type poolGeneric struct {
+	cpuid        int32
+	cachedEvents []pollerEvents
+	cacheIndex   uint
+}
+
+func (pg *poolGeneric) initCache(numCache int) {
+	pg.cachedEvents = make([]pollerEvents, numCache)
+	for k := range pg.cachedEvents {
+		pg.cachedEvents[k] = make([]event, 1024)
+	}
+}
+
+func (pg *poolGeneric) loadCache(size int) pollerEvents {
+	pe := pg.cachedEvents[pg.cacheIndex]
+	if cap(pe) < size {
+		pe = make([]event, 0, 2*size)
+		pg.cachedEvents[pg.cacheIndex] = pe
+	}
+	pe = pe[:0]
+	pg.cacheIndex = (pg.cacheIndex + 1) % uint(len(pg.cachedEvents))
+	return pe
+}
 
 // OpResult is the result of an aysnc-io
 type OpResult struct {
@@ -85,20 +114,20 @@ type OpResult struct {
 
 // aiocb contains all info for a single request
 type aiocb struct {
-	l            *list.List // list where this request belongs to
-	elem         *list.Element
-	ctx          interface{} // user context associated with this request
-	ptr          uintptr     // pointer to conn
-	op           OpType      // read or write
-	conn         net.Conn    // associated connection for nonblocking-io
-	err          error       // error for last operation
-	size         int         // size received or sent
-	buffer       []byte
-	readFull     bool // requests will read full or error
-	useSwap      bool // mark if the buffer is internal swap buffer
-	notifyCaller bool // mark if the caller have to wakeup caller to swap buffer.
-	idx          int  // index for heap op
-	deadline     time.Time
+	l          *list.List // list where this request belongs to
+	elem       *list.Element
+	ctx        interface{} // user context associated with this request
+	ptr        uintptr     // pointer to conn
+	op         OpType      // read or write
+	conn       net.Conn    // associated connection for nonblocking-io
+	err        error       // error for last operation
+	size       int         // size received or sent
+	buffer     []byte
+	backBuffer [16]byte // small byte buffer used when internal buffer exhausted
+	readFull   bool     // requests will read full or error
+	useSwap    bool     // mark if the buffer is internal swap buffer
+	idx        int      // index for heap op
+	deadline   time.Time
 }
 
 // Watcher will monitor events and process async-io request(s),

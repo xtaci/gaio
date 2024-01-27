@@ -1,7 +1,6 @@
 package gaio
 
 import (
-	"container/list"
 	"errors"
 	"net"
 	"time"
@@ -110,8 +109,7 @@ type OpResult struct {
 
 // aiocb contains all info for a single request
 type aiocb struct {
-	l          *list.List // list where this request belongs to
-	elem       *list.Element
+	l          *cbList // list where this request belongs to
 	ctx        interface{} // user context associated with this request
 	ptr        uintptr     // pointer to conn
 	op         OpType      // read or write

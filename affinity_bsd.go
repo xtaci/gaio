@@ -24,5 +24,7 @@
 
 package gaio
 
+// setAffinity sets the affinity of the current thread to the given cpuid
+// on BSD systems, this is not supported yet.
 func setAffinity(cpuid int32) {
 }

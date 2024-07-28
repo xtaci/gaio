@@ -30,6 +30,7 @@ import (
 	"syscall"
 )
 
+// poller is a kqueue based poller
 type poller struct {
 	poolGeneric
 	mu sync.Mutex // mutex to protect fd closing
@@ -68,6 +69,7 @@ func dupconn(conn net.Conn) (newfd int, err error) {
 	return
 }
 
+// openPoll creates a new poller
 func openPoll() (*poller, error) {
 	fd, err := syscall.Kqueue()
 	if err != nil {

@@ -38,6 +38,7 @@ const (
 	_EFD_NONBLOCK = 0x800
 )
 
+// poller is a epoll based poller
 type poller struct {
 	poolGeneric
 	mu     sync.Mutex // mutex to protect fd closing

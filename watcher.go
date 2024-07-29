@@ -144,6 +144,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	go w.loop()
 
 	// watcher finalizer for system resources
+	// NOTE: we need a manual garbage collection mechanism for watcher
 	wrapper := &Watcher{watcher: w}
 	runtime.SetFinalizer(wrapper, func(wrapper *Watcher) {
 		wrapper.Close()
@@ -222,8 +223,8 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 				w.recycles = append(w.recycles, pcb)
 			}
 
-			// There is a coveat here:
-			// we use a triple back buffer swapping mechanism to synchronize with user,
+			// There is a covenant here:
+			// We use a triple back buffer swapping mechanism to synchronize with user,
 			// that the returned 'Buffer' will be overwritten by next call to WaitIO()
 			//
 			// 3-TYPES OF REQUESTS:

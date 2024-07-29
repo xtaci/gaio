@@ -222,6 +222,28 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 				w.recycles = append(w.recycles, pcb)
 			}
 
+			// There is a coveat here:
+			// we use a triple back buffer swapping mechanism to synchronize with user,
+			// that the returned 'Buffer' will be overwritten by next call to WaitIO()
+			//
+			// 3-TYPES OF REQUESTS:
+			// 1. DONE: results received from chResults, and being accessed by users.
+			// 2. INFLIGHT: results is done, but it's on the way to deliver to chResults
+			// 3. WRITING: the results is being written to buffer
+			//
+			// 	T0: DONE(B0) | INFLIGHT DELIVERY(B0)
+			// switching to B1
+			// 	T0': WRITING(B1)
+			//
+			// 	T1: DONE(B0+B1) | INFLIGHT DELIVERY(B1)
+			// switching to B2
+			// 	T1': WRITING(B2)
+			//
+			// 	T2: DONE(B1+B2) | INFLIGHT DELIVERY(B2)
+			// switching to B0
+			//	T2': WRITING(B0)
+			// ......
+			//
 			atomic.CompareAndSwapInt32(&w.shouldSwap, 0, 1)
 
 			return r, nil

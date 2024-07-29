@@ -20,33 +20,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-//go:build netbsd || freebsd || openbsd || dragonfly
+//go:build !(linux || netbsd || freebsd || openbsd || dragonfly)
 
 package gaio
 
-/*
-#include <pthread_np.h>
-#include <pthread.h>
-#include <sys/_cpuset.h>
-#include <sys/cpuset.h>
-
-void lock_thread(int cpuid) {
-    cpuset_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET(cpuid, &cpuset);
-
-    pthread_t tid = pthread_self();
-    pthread_setaffinity_np(tid, sizeof(cpuset_t), &cpuset);
-}
-*/
-
-import "C"
-import (
-	"runtime"
-)
-
 // bind thread & goroutine to a specific CPU
 func setAffinity(cpuId int32) {
-	runtime.LockOSThread()
-	C.lock_thread(C.int(cpuId))
 }

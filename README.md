@@ -13,7 +13,7 @@
 [9]: https://codecov.io/gh/xtaci/gaio/branch/master/graph/badge.svg
 [10]: https://codecov.io/gh/xtaci/gaio
 
-<img src="logo.png" alt="gaio" height="300px" /> 
+<img src="assets/logo.png" alt="gaio" height="300px" /> 
 
 ## Introduction
 [中文介绍](https://zhuanlan.zhihu.com/p/102890337)
@@ -239,7 +239,7 @@ For complete documentation, see the associated [Godoc](https://godoc.org/github.
 
 ### Regression
 
-![regression](regression.png)
+![regression](assets/regression.png)
 
 X -> number of concurrent connections, Y -> time of completion in seconds
 

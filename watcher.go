@@ -63,11 +63,14 @@ type watcher struct {
 	chEventNotify chan pollerEvents
 
 	// events from user
-	chPendingNotify   chan struct{}
+	chPendingNotify chan struct{}
+	// pendingXXX will be used interchangeably, like back buffer
+	// pendingCreate <--> pendingProcessing
 	pendingCreate     []*aiocb
-	pendingProcessing []*aiocb // swaped pending
-	pendingMutex      sync.Mutex
-	recycles          []*aiocb
+	pendingProcessing []*aiocb
+
+	pendingMutex sync.Mutex
+	recycles     []*aiocb
 
 	// IO-completion events to user
 	chResults chan *aiocb
@@ -304,6 +307,8 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 }
 
 // tryRead will try to read data on aiocb and notify
+// returns true if operation is completed
+// returns false if operation is not completed and will retry later
 func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 	// step 1. bind to proper buffer
 	buf := pcb.buffer
@@ -357,9 +362,12 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 	// 	the buffer of readfull operation is guaranteed from caller
 	if pcb.readFull { // read full operation
 		if pcb.err != nil {
+			// the operation is completed due to error
 			return true
 		}
+
 		if pcb.size == len(pcb.buffer) {
+			// the operation is completed normally
 			return true
 		}
 		return false
@@ -370,12 +378,15 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 		pcb.useSwap = true
 		pcb.buffer = buf[:pcb.size] // set len to pcb.size
 		w.bufferOffset += pcb.size
-	} else if backBuffer { // internal buffer exhausted
+	} else if backBuffer { // use per request tiny buffer
 		pcb.buffer = buf
 	}
 	return true
 }
 
+// tryWrite will try to write data on aiocb and notify
+// returns true if operation is completed
+// returns false if operation is not completed and will retry later
 func (w *watcher) tryWrite(fd int, pcb *aiocb) bool {
 	var nw int
 	var ew error
@@ -384,10 +395,14 @@ func (w *watcher) tryWrite(fd int, pcb *aiocb) bool {
 		for {
 			nw, ew = rawWrite(fd, pcb.buffer[pcb.size:])
 			pcb.err = ew
+
+			// socket buffer is full
 			if ew == syscall.EAGAIN {
 				return false
 			}
 
+			// On MacOS we can see EINTR here if the user
+			// pressed ^Z.
 			if ew == syscall.EINTR {
 				continue
 			}
@@ -400,33 +415,38 @@ func (w *watcher) tryWrite(fd int, pcb *aiocb) bool {
 		}
 	}
 
-	// all bytes written or has error
-	// nil buffer still returns
+	// returns true if all bytes has been written or has errors on socket
 	if pcb.size == len(pcb.buffer) || ew != nil {
 		return true
 	}
+
+	// should retry later
 	return false
 }
 
 // release connection related resources
 func (w *watcher) releaseConn(ident int) {
 	if desc, ok := w.descs[ident]; ok {
-		// delete from heap
+		// remove all pending read-requests
 		for e := desc.readers.Front(); e != nil; e = e.Next() {
 			tcb := e.Value.(*aiocb)
-			// notify caller
+			// notify caller with error
 			tcb.err = io.ErrClosedPipe
 			w.deliver(tcb)
 		}
 
+		// remove all pending write-requests
 		for e := desc.writers.Front(); e != nil; e = e.Next() {
 			tcb := e.Value.(*aiocb)
+			// notify caller with error
 			tcb.err = io.ErrClosedPipe
 			w.deliver(tcb)
 		}
 
+		// purge the fdDesc
 		delete(w.descs, ident)
 		delete(w.connIdents, desc.ptr)
+
 		// close socket file descriptor duplicated from net.Conn
 		syscall.Close(ident)
 	}
@@ -464,12 +484,14 @@ func (w *watcher) loop() {
 			}
 			w.pendingCreate = w.pendingCreate[:0]
 			w.pendingMutex.Unlock()
+
+			// handlePending is a synchronous operation
 			w.handlePending(w.pendingProcessing)
 
 		case pe := <-w.chEventNotify: // poller events
 			w.handleEvents(pe)
 
-		case <-w.timer.C: // timeout heap
+		case <-w.timer.C: //  a global timeout heap to handle all timeouts
 			for w.timeouts.Len() > 0 {
 				now := time.Now()
 				pcb := w.timeouts[0]
@@ -478,6 +500,7 @@ func (w *watcher) loop() {
 					pcb.err = ErrDeadline
 					// remove from list
 					pcb.l.Remove(pcb.elem)
+					// deliver with error: ErrDeadline
 					w.deliver(pcb)
 				} else {
 					w.timer.Reset(pcb.deadline.Sub(now))
@@ -508,7 +531,7 @@ func (w *watcher) loop() {
 	}
 }
 
-// for loop handling pending requests
+// handlePending acts like a reception desk to new requests.
 func (w *watcher) handlePending(pending []*aiocb) {
 	for _, pcb := range pending {
 		ident, ok := w.connIdents[pcb.ptr]
@@ -518,11 +541,12 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			continue
 		}
 
-		// handling new connection
+		// check if the file descriptor is already registered
 		var desc *fdDesc
 		if ok {
 			desc = w.descs[ident]
 		} else {
+			// new file descriptor registration
 			if dupfd, err := dupconn(pcb.conn); err != nil {
 				// unexpected situation, should notify caller if we cannot dup(2)
 				pcb.err = err
@@ -535,19 +559,21 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				// assign idents
 				ident = dupfd
 
+				// let epoll or kqueue to watch this fd!
 				werr := w.pfd.Watch(ident)
 				if werr != nil {
+					// unexpected situation, should notify caller if we cannot watch
 					pcb.err = werr
 					w.deliver(pcb)
 					continue
 				}
 
-				// file description bindings
+				// update registration table
 				desc = &fdDesc{ptr: pcb.ptr}
 				w.descs[ident] = desc
 				w.connIdents[pcb.ptr] = ident
 
-				// the conn is still useful for GC finalizer.
+				// the 'conn' object is still useful for GC finalizer.
 				// note finalizer function cannot hold reference to net.Conn,
 				// if not it will never be GC-ed.
 				runtime.SetFinalizer(pcb.conn, func(c net.Conn) {
@@ -564,17 +590,20 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			}
 		}
 
-		// operations splitted into different buckets
+		// as the file descriptor is registered, we can proceed to IO operations
 		switch pcb.op {
 		case OpRead:
-			// try immediately queue is empty
+			// if there's no pending read requests
+			// we can try to read immediately
 			if desc.readers.Len() == 0 {
 				if w.tryRead(ident, pcb) {
 					w.deliver(pcb)
+					// request fulfilled, continue to next
 					continue
 				}
 			}
-			// enqueue for poller events
+
+			// if the request is not fulfilled, we should queue it
 			pcb.l = &desc.readers
 			pcb.elem = pcb.l.PushBack(pcb)
 
@@ -600,7 +629,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 		// try rearm descriptor
 		w.pfd.Rearm(ident, desc.r_armed, desc.w_armed)
 
-		// push to heap for timeout operation
+		// if the request has deadline set, we should push it to timeout heap
 		if !pcb.deadline.IsZero() {
 			heap.Push(&w.timeouts, pcb)
 			if w.timeouts.Len() == 1 {
@@ -626,6 +655,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 			if e.ev&EV_READ != 0 {
 				desc.r_armed = false
 				var next *list.Element
+				// try to complete all read requests
 				for elem := desc.readers.Front(); elem != nil; elem = next {
 					next = elem.Next()
 					pcb := elem.Value.(*aiocb)
@@ -633,6 +663,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 						w.deliver(pcb)
 						desc.readers.Remove(elem)
 					} else {
+						// break here if we cannot read more
 						break
 					}
 				}
@@ -666,4 +697,5 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 			}
 		}
 	}
+
 }

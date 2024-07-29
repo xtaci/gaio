@@ -39,7 +39,6 @@ void lock_thread(int cpuid) {
     pthread_setaffinity_np(tid, sizeof(cpuset_t), &cpuset);
 }
 */
-
 import "C"
 import (
 	"runtime"

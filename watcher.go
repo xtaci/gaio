@@ -339,8 +339,33 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 	useSwap := false
 	backBuffer := false
 
-	if buf == nil { // internal or backBuffer
+	if buf == nil {
 		if atomic.CompareAndSwapInt32(&w.shouldSwap, 1, 0) {
+			// A successful CAS operation triggers internal buffer swapping:
+			//
+			// Initial State:
+			//
+			// +-------+    +--------+    +------+
+			// | Front | -> | Middle | -> | Back |
+			// +-------+    +--------+    +------+
+			//      |                        ^
+			//      |________________________|
+			//
+			// After One Circular Shift:
+			//
+			// +--------+    +------+    +-------+
+			// | Middle | -> | Back | -> | Front |
+			// +--------+    +------+    +-------+
+			//      |                        ^
+			//      |________________________|
+			//
+			// After Two Circular Shifts:
+			//
+			// +------+    +-------+    +--------+
+			// | Back | -> | Front | -> | Middle |
+			// +------+    +-------+    +--------+
+			//      |                        ^
+			//      |________________________|
 			w.swapBufferFront, w.swapBufferMiddle, w.swapBufferBack = w.swapBufferMiddle, w.swapBufferBack, w.swapBufferFront
 			w.bufferOffset = 0
 		}

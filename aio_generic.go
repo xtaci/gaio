@@ -51,6 +51,8 @@ var (
 	ErrDeadline = errors.New("operation exceeded deadline")
 	// ErrEmptyBuffer means the buffer is nil
 	ErrEmptyBuffer = errors.New("empty buffer")
+	// ErrInvalidDetachResult means the result cannot be used
+	ErrInvalidDetachResult = errors.New("invalid detach result")
 	// ErrCPUID indicates the given cpuid is invalid
 	ErrCPUID = errors.New("no such core")
 )
@@ -67,6 +69,8 @@ const (
 	OpRead OpType = iota
 	// OpWrite means the aiocb is a write operation
 	OpWrite
+	// OpDetach means the aiocb is a detach operation
+	OpDetach
 	// internal operation to delete an related resource
 	opDelete
 )

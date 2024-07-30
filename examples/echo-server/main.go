@@ -12,7 +12,7 @@ import (
 func echoServer(w *gaio.Watcher) {
 	for {
 		// loop wait for any IO events
-		results, err := w.WaitIO()
+		results, err := w.WaitIO(nil)
 		if err != nil {
 			log.Println(err)
 			return

@@ -33,7 +33,7 @@ func main() {
 	// watcher.WaitIO goroutine
 	go func() {
 		for {
-			results, err := w.WaitIO()
+			results, err := w.WaitIO(nil)
 			if err != nil {
 				log.Println(err)
 				return

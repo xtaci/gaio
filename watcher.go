@@ -50,8 +50,6 @@ type fdDesc struct {
 	readers list.List // all read/write requests
 	writers list.List
 	ptr     uintptr // pointer to net.Conn
-	r_armed bool
-	w_armed bool
 }
 
 // watcher will monitor events and process async-io request(s),
@@ -639,6 +637,8 @@ func (w *watcher) handlePending(pending []*aiocb) {
 		}
 
 		// as the file descriptor is registered, we can proceed to IO operations
+		var armRead, armWrite bool
+
 		switch pcb.op {
 		case OpRead:
 			// if there's no pending read requests
@@ -654,10 +654,8 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			// if the request is not fulfilled, we should queue it
 			pcb.l = &desc.readers
 			pcb.elem = pcb.l.PushBack(pcb)
+			armRead = true
 
-			if !desc.r_armed {
-				desc.r_armed = true
-			}
 		case OpWrite:
 			if desc.writers.Len() == 0 {
 				if w.tryWrite(ident, pcb) {
@@ -668,14 +666,14 @@ func (w *watcher) handlePending(pending []*aiocb) {
 
 			pcb.l = &desc.writers
 			pcb.elem = pcb.l.PushBack(pcb)
+			armWrite = true
 
-			if !desc.w_armed {
-				desc.w_armed = true
-			}
 		}
 
 		// try rearm descriptor
-		w.pfd.Rearm(ident, desc.r_armed, desc.w_armed)
+		if armRead || armWrite {
+			w.pfd.Rearm(ident, armRead, armWrite)
+		}
 
 		// if the request has deadline set, we should push it to timeout heap
 		if !pcb.deadline.IsZero() {
@@ -699,9 +697,9 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	// then IO operation is impossible to misread or miswrite on re-created fd.
 	//log.Println(e)
 	for _, e := range pe {
+		var armRead, armWrite bool
 		if desc, ok := w.descs[e.ident]; ok {
 			if e.ev&EV_READ != 0 {
-				desc.r_armed = false
 				var next *list.Element
 				// try to complete all read requests
 				for elem := desc.readers.Front(); elem != nil; elem = next {
@@ -717,12 +715,11 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 				}
 
 				if desc.readers.Len() > 0 {
-					desc.r_armed = true
+					armRead = true
 				}
 			}
 
 			if e.ev&EV_WRITE != 0 {
-				desc.w_armed = false
 				var next *list.Element
 				for elem := desc.writers.Front(); elem != nil; elem = next {
 					next = elem.Next()
@@ -736,12 +733,12 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 				}
 
 				if desc.writers.Len() > 0 {
-					desc.w_armed = true
+					armWrite = true
 				}
 			}
 
-			if desc.r_armed || desc.w_armed {
-				w.pfd.Rearm(e.ident, desc.r_armed, desc.w_armed)
+			if armRead || armWrite {
+				w.pfd.Rearm(e.ident, armRead, armWrite)
 			}
 		}
 	}

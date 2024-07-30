@@ -237,6 +237,18 @@ For complete documentation, see the associated [Godoc](https://godoc.org/github.
 | Linux AMD64 | 0.94s |
 | Raspberry Pi4 | 2.09s |
 
+## Testing Directives
+On MacOS, you need to increase the max open files limit to run the benchmarks.
+
+```bash
+sysctl -w kern.maxfiles=100000
+sysctl -w kern.maxfilesperproc=100000
+sysctl -w net.inet.ip.portrange.first=1024
+sysctl -w net.inet.ip.portrange.last=65535
+
+ulimint -S -n 65536
+```
+
 ### Regression
 
 ![regression](assets/regression.png)

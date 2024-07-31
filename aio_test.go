@@ -66,6 +66,7 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 	}
 
 	// ping-pong scheme echo server
+	wbuf := make([]byte, bufsize)
 	go func() {
 		for {
 			results, err := w.WaitIO()
@@ -86,9 +87,10 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 					}
 
 					if res.Size > 0 {
+						copy(wbuf, res.Buffer[:res.Size])
 						// write the data, we won't start to read again until write completes.
 						// so we only need at most 1 shared read/write buffer for a connection to echo
-						w.Write(nil, res.Conn, res.Buffer[:res.Size])
+						w.Write(nil, res.Conn, wbuf[:res.Size])
 					}
 				case OpWrite:
 					if res.Error != nil {
@@ -411,7 +413,6 @@ func testBidirectionWatcher(t *testing.T, w *Watcher) {
 					t.Fatal(res.Error)
 				}
 
-				t.Log("written:", res.Error, res.Size)
 				err := w.Read(nil, conn, tx)
 				if err != nil {
 					t.Fatal(err)
@@ -458,7 +459,6 @@ func TestReadFull(t *testing.T) {
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	for {
 		results, err := w.WaitIO()
 		if err != nil {
@@ -473,7 +473,6 @@ func TestReadFull(t *testing.T) {
 				if res.Error != nil {
 					t.Fatal(res.Error)
 				}
-
 				t.Log("written:", res.Error, res.Size)
 			case OpRead:
 				t.Log("read:", res.Error, res.Size)

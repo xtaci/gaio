@@ -45,11 +45,18 @@ func init() {
 	}
 }
 
+const (
+	ARM_READ  = 0x1
+	ARM_WRITE = 0x2
+	ARM_BOTH  = 0x3
+)
+
 // fdDesc contains all data structures associated to fd
 type fdDesc struct {
-	readers list.List // all read/write requests
-	writers list.List
-	ptr     uintptr // pointer to net.Conn
+	readers  list.List // all read/write requests
+	writers  list.List
+	ptr      uintptr // pointer to net.Conn
+	armState uint8
 }
 
 // watcher will monitor events and process async-io request(s),
@@ -637,8 +644,6 @@ func (w *watcher) handlePending(pending []*aiocb) {
 		}
 
 		// as the file descriptor is registered, we can proceed to IO operations
-		var armRead, armWrite bool
-
 		switch pcb.op {
 		case OpRead:
 			// if there's no pending read requests
@@ -654,7 +659,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			// if the request is not fulfilled, we should queue it
 			pcb.l = &desc.readers
 			pcb.elem = pcb.l.PushBack(pcb)
-			armRead = true
+			desc.armState |= ARM_READ
 
 		case OpWrite:
 			if desc.writers.Len() == 0 {
@@ -666,13 +671,12 @@ func (w *watcher) handlePending(pending []*aiocb) {
 
 			pcb.l = &desc.writers
 			pcb.elem = pcb.l.PushBack(pcb)
-			armWrite = true
-
+			desc.armState |= ARM_WRITE
 		}
 
 		// try rearm descriptor
-		if armRead || armWrite {
-			w.pfd.Rearm(ident, armRead, armWrite)
+		if desc.armState != 0 {
+			w.pfd.Rearm(ident, desc.armState&ARM_READ != 0, desc.armState&ARM_WRITE != 0)
 		}
 
 		// if the request has deadline set, we should push it to timeout heap
@@ -697,7 +701,6 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	// then IO operation is impossible to misread or miswrite on re-created fd.
 	//log.Println(e)
 	for _, e := range pe {
-		var armRead, armWrite bool
 		if desc, ok := w.descs[e.ident]; ok {
 			if e.ev&EV_READ != 0 {
 				var next *list.Element
@@ -715,7 +718,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 				}
 
 				if desc.readers.Len() > 0 {
-					armRead = true
+					desc.armState |= ARM_READ
 				}
 			}
 
@@ -733,12 +736,12 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 				}
 
 				if desc.writers.Len() > 0 {
-					armWrite = true
+					desc.armState |= ARM_WRITE
 				}
 			}
 
-			if armRead || armWrite {
-				w.pfd.Rearm(e.ident, armRead, armWrite)
+			if desc.armState != 0 {
+				w.pfd.Rearm(e.ident, desc.armState&ARM_READ != 0, desc.armState&ARM_WRITE != 0)
 			}
 		}
 	}

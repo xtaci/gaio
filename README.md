@@ -246,7 +246,7 @@ sysctl -w kern.maxfilesperproc=100000
 sysctl -w net.inet.ip.portrange.first=1024
 sysctl -w net.inet.ip.portrange.last=65535
 
-ulimint -S -n 65536
+ulimit -S -n 65536
 ```
 
 ### Regression

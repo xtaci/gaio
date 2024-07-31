@@ -45,12 +45,6 @@ func init() {
 	}
 }
 
-const (
-	ARM_READ  = 0x1
-	ARM_WRITE = 0x2
-	ARM_BOTH  = 0x3
-)
-
 // fdDesc contains all data structures associated to fd
 type fdDesc struct {
 	readers list.List // all read/write requests

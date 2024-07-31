@@ -53,10 +53,9 @@ const (
 
 // fdDesc contains all data structures associated to fd
 type fdDesc struct {
-	readers  list.List // all read/write requests
-	writers  list.List
-	ptr      uintptr // pointer to net.Conn
-	armState uint8
+	readers list.List // all read/write requests
+	writers list.List
+	ptr     uintptr // pointer to net.Conn
 }
 
 // watcher will monitor events and process async-io request(s),
@@ -650,7 +649,6 @@ func (w *watcher) handlePending(pending []*aiocb) {
 		}
 
 		// as the file descriptor is registered, we can proceed to IO operations
-		currentState := desc.armState
 		switch pcb.op {
 		case OpRead:
 			// if there's no pending read requests
@@ -666,7 +664,6 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			// if the request is not fulfilled, we should queue it
 			pcb.l = &desc.readers
 			pcb.elem = pcb.l.PushBack(pcb)
-			currentState |= ARM_READ
 
 		case OpWrite:
 			if desc.writers.Len() == 0 {
@@ -678,13 +675,6 @@ func (w *watcher) handlePending(pending []*aiocb) {
 
 			pcb.l = &desc.writers
 			pcb.elem = pcb.l.PushBack(pcb)
-			currentState |= ARM_WRITE
-		}
-
-		// state changed, try rearm descriptor
-		if currentState != desc.armState {
-			desc.armState = currentState
-			w.pfd.Rearm(ident, desc.armState&ARM_READ != 0, desc.armState&ARM_WRITE != 0)
 		}
 
 		// if the request has deadline set, we should push it to timeout heap
@@ -710,7 +700,6 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	//log.Println(e)
 	for _, e := range pe {
 		if desc, ok := w.descs[e.ident]; ok {
-			desc.armState = 0
 			if e.ev&EV_READ != 0 {
 				var next *list.Element
 				// try to complete all read requests
@@ -727,10 +716,6 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 				}
 
 			}
-			// if there's still read requests pending, rearm.
-			if desc.readers.Len() > 0 {
-				desc.armState |= ARM_READ
-			}
 
 			if e.ev&EV_WRITE != 0 {
 				var next *list.Element
@@ -746,15 +731,6 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 				}
 
 			}
-			if desc.writers.Len() > 0 {
-				desc.armState |= ARM_WRITE
-			}
-
-			// rearm
-			if desc.armState != 0 {
-				w.pfd.Rearm(e.ident, desc.armState&ARM_READ != 0, desc.armState&ARM_WRITE != 0)
-			}
 		}
 	}
-
 }

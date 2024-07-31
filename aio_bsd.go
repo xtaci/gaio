@@ -82,10 +82,6 @@ func (p *poller) Watch(fd int) error {
 	return p.wakeup()
 }
 
-func (p *poller) Rearm(fd int, read bool, write bool) (err error) {
-	return nil
-}
-
 // wakeup interrupt kevent
 func (p *poller) wakeup() error {
 	p.mu.Lock()

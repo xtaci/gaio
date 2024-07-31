@@ -28,6 +28,7 @@ import (
 	"net"
 	"sync"
 	"syscall"
+	"unsafe"
 )
 
 // poller is a kqueue based poller
@@ -204,10 +205,34 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 	}
 }
 
+// raw read for nonblocking op to avert context switch
 func rawRead(fd int, p []byte) (n int, err error) {
-	return syscall.Read(fd, p)
+	var _p0 unsafe.Pointer
+	if len(p) > 0 {
+		_p0 = unsafe.Pointer(&p[0])
+	} else {
+		_p0 = unsafe.Pointer(&_zero)
+	}
+	r0, _, e1 := syscall.RawSyscall(syscall.SYS_READ, uintptr(fd), uintptr(_p0), uintptr(len(p)))
+	n = int(r0)
+	if e1 != 0 {
+		err = errnoErr(e1)
+	}
+	return
 }
 
+// raw write for nonblocking op to avert context switch
 func rawWrite(fd int, p []byte) (n int, err error) {
-	return syscall.Write(fd, p)
+	var _p0 unsafe.Pointer
+	if len(p) > 0 {
+		_p0 = unsafe.Pointer(&p[0])
+	} else {
+		_p0 = unsafe.Pointer(&_zero)
+	}
+	r0, _, e1 := syscall.RawSyscall(syscall.SYS_WRITE, uintptr(fd), uintptr(_p0), uintptr(len(p)))
+	n = int(r0)
+	if e1 != 0 {
+		err = errnoErr(e1)
+	}
+	return
 }

@@ -32,9 +32,9 @@ import (
 
 // poller is a kqueue based poller
 type poller struct {
-	poolGeneric
-	mu sync.Mutex // mutex to protect fd closing
-	fd int        // kqueue fd
+	cpuid int32
+	mu    sync.Mutex // mutex to protect fd closing
+	fd    int        // kqueue fd
 
 	// awaiting for poll
 	awaiting      []int
@@ -99,9 +99,13 @@ func (p *poller) wakeup() error {
 	return ErrPollerClosed
 }
 
-func (p *poller) Wait(chEventNotify chan pollerEvents) {
-	p.initCache(cap(chEventNotify) + 2)
+func (p *poller) Wait(chEventNotify chan eventPackage) {
+	var pe pollerEvents
 	events := make([]syscall.Kevent_t, maxEvents)
+	eventpkg := eventPackage{
+		done: make(chan struct{}, 1),
+	}
+
 	defer func() {
 		p.mu.Lock()
 		syscall.Close(p.fd)
@@ -136,8 +140,6 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 			}
 			changes = changes[:0]
 
-			// load from cache
-			pe := p.loadCache(n)
 			// event processing
 			for i := 0; i < n; i++ {
 				ev := &events[i]
@@ -166,8 +168,19 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 				}
 			}
 
+			// notify watcher
+			eventpkg.events = pe
+
 			select {
-			case chEventNotify <- pe:
+			case chEventNotify <- eventpkg:
+			case <-p.die:
+				return
+			}
+
+			// wait for the watcher to finish processing
+			select {
+			case <-eventpkg.done:
+				pe = pe[:0]
 			case <-p.die:
 				return
 			}

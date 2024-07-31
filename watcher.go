@@ -58,7 +58,7 @@ type watcher struct {
 	pfd *poller
 
 	// netpoll events
-	chEventNotify chan pollerEvents
+	chEventNotify chan eventPackage
 
 	// events from user
 	chPendingNotify chan struct{}
@@ -121,7 +121,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 
 	// loop related chan
 	w.chCPUID = make(chan int32)
-	w.chEventNotify = make(chan pollerEvents)
+	w.chEventNotify = make(chan eventPackage, 1)
 	w.chPendingNotify = make(chan struct{}, 1)
 	w.chResults = make(chan *aiocb, maxEvents*4)
 	w.die = make(chan struct{})
@@ -540,8 +540,13 @@ func (w *watcher) loop() {
 			// handlePending is a synchronous operation
 			w.handlePending(w.pendingProcessing)
 
-		case pe := <-w.chEventNotify: // poller events
-			w.handleEvents(pe)
+		case pkg := <-w.chEventNotify: // poller events
+			w.handleEvents(pkg.events)
+			select {
+			case pkg.done <- struct{}{}:
+			case <-w.die:
+				return
+			}
 
 		case <-w.timer.C: //  a global timeout heap to handle all timeouts
 			for w.timeouts.Len() > 0 {
@@ -585,6 +590,7 @@ func (w *watcher) loop() {
 
 // handlePending acts like a reception desk to new requests.
 func (w *watcher) handlePending(pending []*aiocb) {
+PENDING:
 	for _, pcb := range pending {
 		ident, ok := w.connIdents[pcb.ptr]
 		// resource releasing operation
@@ -651,7 +657,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 				if w.tryRead(ident, pcb) {
 					w.deliver(pcb)
 					// request fulfilled, continue to next
-					continue
+					continue PENDING
 				}
 			}
 
@@ -663,7 +669,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			if desc.writers.Len() == 0 {
 				if w.tryWrite(ident, pcb) {
 					w.deliver(pcb)
-					continue
+					continue PENDING
 				}
 			}
 

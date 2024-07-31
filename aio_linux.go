@@ -39,7 +39,7 @@ const (
 
 // poller is a epoll based poller
 type poller struct {
-	poolGeneric
+	cpuid  int32
 	mu     sync.Mutex // mutex to protect fd closing
 	pfd    int        // epoll fd
 	efd    int        // eventfd
@@ -76,7 +76,6 @@ func openPoll() (*poller, error) {
 	p.efd = int(r0)
 	p.efdbuf = make([]byte, 8)
 	p.die = make(chan struct{})
-	p.cpuid = -1
 
 	return p, err
 }
@@ -110,9 +109,13 @@ func (p *poller) wakeup() error {
 	return ErrPollerClosed
 }
 
-func (p *poller) Wait(chEventNotify chan pollerEvents) {
-	p.initCache(cap(chEventNotify) + 2)
+func (p *poller) Wait(chEventNotify chan eventPackage) {
+	var pe pollerEvents
 	events := make([]syscall.EpollEvent, maxEvents)
+	eventpkg := eventPackage{
+		done: make(chan struct{}, 1),
+	}
+
 	// close poller fd & eventfd in defer
 	defer func() {
 		p.mu.Lock()
@@ -143,13 +146,11 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 			}
 
 			// load from cache
-			pe := p.loadCache(n)
 			// event processing
 			for i := 0; i < n; i++ {
 				ev := &events[i]
 				if int(ev.Fd) == p.efd {
 					syscall.Read(p.efd, p.efdbuf) // simply consume
-					// check cpuid
 					if cpuid := atomic.LoadInt32(&p.cpuid); cpuid != -1 {
 						setAffinity(cpuid)
 						atomic.StoreInt32(&p.cpuid, -1)
@@ -173,8 +174,19 @@ func (p *poller) Wait(chEventNotify chan pollerEvents) {
 				}
 			}
 
+			// notify watcher
+			eventpkg.events = pe
+
 			select {
-			case chEventNotify <- pe:
+			case chEventNotify <- eventpkg:
+			case <-p.die:
+				return
+			}
+
+			// wait for the watcher to finish processing
+			select {
+			case <-eventpkg.done:
+				pe = pe[:0]
 			case <-p.die:
 				return
 			}

@@ -79,8 +79,8 @@ const (
 
 // event represent a file descriptor event
 type event struct {
-	ident int // identifier of this event, usually file descriptor
-	ev    int // event mark
+	ident int  // identifier of this event, usually file descriptor
+	ev    int8 // event mark
 }
 
 // events from epoll_wait passing to loop,should be in batch for atomicity.
@@ -88,29 +88,11 @@ type event struct {
 // tiny messages.
 type pollerEvents []event
 
-// generic poll struct
-type poolGeneric struct {
-	cpuid        int32
-	cachedEvents []pollerEvents
-	cacheIndex   uint
-}
-
-func (pg *poolGeneric) initCache(numCache int) {
-	pg.cachedEvents = make([]pollerEvents, numCache)
-	for k := range pg.cachedEvents {
-		pg.cachedEvents[k] = make([]event, 1024)
-	}
-}
-
-func (pg *poolGeneric) loadCache(size int) pollerEvents {
-	pe := pg.cachedEvents[pg.cacheIndex]
-	if cap(pe) < size {
-		pe = make([]event, 0, 2*size)
-		pg.cachedEvents[pg.cacheIndex] = pe
-	}
-	pe = pe[:0]
-	pg.cacheIndex = (pg.cacheIndex + 1) % uint(len(pg.cachedEvents))
-	return pe
+// eventPackage is a package of events when you've done with events, you should
+// send a signal to done channel.
+type eventPackage struct {
+	events pollerEvents
+	done   chan struct{}
 }
 
 // OpResult is the result of an aysnc-io

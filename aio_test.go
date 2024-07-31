@@ -65,6 +65,9 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 		t.Fatal(err)
 	}
 
+	w.SetPollerAffinity(0)
+	w.SetPollerAffinity(1)
+
 	// ping-pong scheme echo server
 	wbuf := make([]byte, bufsize)
 	rbuf := make([]byte, bufsize)

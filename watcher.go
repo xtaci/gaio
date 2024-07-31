@@ -455,6 +455,7 @@ func (w *watcher) tryWrite(fd int, pcb *aiocb) bool {
 			}
 
 			// On MacOS/BSDs, if mbufs ran out, a ENOBUFS will be returned
+			// https://man.freebsd.org/cgi/man.cgi?query=mbuf&sektion=9&format=html
 			if ew == syscall.ENOBUFS {
 				return false
 			}

@@ -454,6 +454,11 @@ func (w *watcher) tryWrite(fd int, pcb *aiocb) bool {
 				return false
 			}
 
+			// On MacOS/BSDs, if mbufs ran out, a ENOBUFS will be returned
+			if ew == syscall.ENOBUFS {
+				return false
+			}
+
 			// On MacOS we can see EINTR here if the user
 			// pressed ^Z.
 			if ew == syscall.EINTR {

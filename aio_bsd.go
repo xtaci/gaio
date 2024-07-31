@@ -25,7 +25,6 @@
 package gaio
 
 import (
-	"net"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -43,31 +42,6 @@ type poller struct {
 	// closing signal
 	die     chan struct{}
 	dieOnce sync.Once
-}
-
-// dupconn use RawConn to dup() file descriptor
-func dupconn(conn net.Conn) (newfd int, err error) {
-	sc, ok := conn.(interface {
-		SyscallConn() (syscall.RawConn, error)
-	})
-	if !ok {
-		return -1, ErrUnsupported
-	}
-	rc, err := sc.SyscallConn()
-	if err != nil {
-		return -1, ErrUnsupported
-	}
-
-	// Control() guarantees the integrity of file descriptor
-	ec := rc.Control(func(fd uintptr) {
-		newfd, err = syscall.Dup(int(fd))
-	})
-
-	if ec != nil {
-		return -1, ec
-	}
-
-	return
 }
 
 // openPoll creates a new poller

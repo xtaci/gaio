@@ -78,6 +78,9 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 				switch res.Operation {
 				case OpRead:
 					if res.Error != nil {
+						if res.Error != io.EOF {
+							log.Println("echoServer read:", res.Error)
+						}
 						w.Free(res.Conn)
 						continue
 					}
@@ -89,13 +92,14 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 					}
 				case OpWrite:
 					if res.Error != nil {
+						log.Println("echoServer write:", res.Error)
 						w.Free(res.Conn)
 						continue
 					}
 
 					if res.Size > 0 {
 						// write complete, start read again
-						w.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
+						w.Read(nil, res.Conn, nil)
 					}
 				}
 			}
@@ -651,7 +655,7 @@ func testParallel(t *testing.T, par int, msgsize int) {
 					continue
 				}
 
-				err = w.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
+				err = w.Read(nil, res.Conn, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -863,7 +867,7 @@ func BenchmarkEcho128KParallel(b *testing.B) {
 func benchmarkEcho(b *testing.B, bufsize int, numconn int) {
 	defer runtime.GC()
 	b.Log("benchmark echo with message size:", bufsize, "with", numconn, "parallel connections, for", b.N, "times")
-	ln := echoServer(b, bufsize)
+	ln := echoServer(b, bufsize*numconn)
 	defer ln.Close()
 
 	w, err := NewWatcher()
@@ -890,8 +894,10 @@ func benchmarkEcho(b *testing.B, bufsize int, numconn int) {
 	b.SetBytes(int64(bufsize * numconn))
 	b.ResetTimer()
 
-	count := 0
 	target := bufsize * b.N * numconn
+	numWritten := bufsize
+	numRead := 0
+
 	for {
 		results, err := w.WaitIO()
 		if err != nil {
@@ -902,25 +908,32 @@ func benchmarkEcho(b *testing.B, bufsize int, numconn int) {
 		for _, res := range results {
 			switch res.Operation {
 			case OpWrite:
-				if res.Error != nil {
-					b.Fatal("read:", res.Error)
+				if numWritten < target {
+					if res.Error == nil {
+						numWritten += bufsize
+					} else {
+						b.Log("write:", res.Error)
+					}
+
+					err := w.Write(nil, res.Conn, res.Buffer)
+					if err != nil {
+						b.Log("write:", err)
+					}
 				}
-				err := w.Write(nil, res.Conn, res.Buffer)
-				if err != nil {
-					b.Log("wirte:", err)
-				}
+
 			case OpRead:
 				if res.Error != nil {
 					b.Fatal("read:", res.Error)
-				}
-				count += res.Size
-				if count >= target {
-					return
 				}
 				//log.Println("count:", count, "target:", target)
 				err := w.Read(nil, res.Conn, res.Buffer)
 				if err != nil {
 					b.Log("read:", err)
+				}
+
+				numRead += bufsize
+				if numRead >= target {
+					return
 				}
 			}
 		}

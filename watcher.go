@@ -644,6 +644,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 		}
 
 		// as the file descriptor is registered, we can proceed to IO operations
+		currentState := desc.armState
 		switch pcb.op {
 		case OpRead:
 			// if there's no pending read requests
@@ -659,7 +660,7 @@ func (w *watcher) handlePending(pending []*aiocb) {
 			// if the request is not fulfilled, we should queue it
 			pcb.l = &desc.readers
 			pcb.elem = pcb.l.PushBack(pcb)
-			desc.armState |= ARM_READ
+			currentState |= ARM_READ
 
 		case OpWrite:
 			if desc.writers.Len() == 0 {
@@ -671,11 +672,12 @@ func (w *watcher) handlePending(pending []*aiocb) {
 
 			pcb.l = &desc.writers
 			pcb.elem = pcb.l.PushBack(pcb)
-			desc.armState |= ARM_WRITE
+			currentState |= ARM_WRITE
 		}
 
-		// try rearm descriptor
-		if desc.armState != 0 {
+		// state changed, try rearm descriptor
+		if currentState != desc.armState {
+			desc.armState = currentState
 			w.pfd.Rearm(ident, desc.armState&ARM_READ != 0, desc.armState&ARM_WRITE != 0)
 		}
 

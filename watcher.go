@@ -702,6 +702,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	//log.Println(e)
 	for _, e := range pe {
 		if desc, ok := w.descs[e.ident]; ok {
+			desc.armState = 0
 			if e.ev&EV_READ != 0 {
 				var next *list.Element
 				// try to complete all read requests
@@ -717,9 +718,10 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 					}
 				}
 
-				if desc.readers.Len() > 0 {
-					desc.armState |= ARM_READ
-				}
+			}
+			// if there's still read requests pending, rearm.
+			if desc.readers.Len() > 0 {
+				desc.armState |= ARM_READ
 			}
 
 			if e.ev&EV_WRITE != 0 {
@@ -735,11 +737,12 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 					}
 				}
 
-				if desc.writers.Len() > 0 {
-					desc.armState |= ARM_WRITE
-				}
+			}
+			if desc.writers.Len() > 0 {
+				desc.armState |= ARM_WRITE
 			}
 
+			// rearm
 			if desc.armState != 0 {
 				w.pfd.Rearm(e.ident, desc.armState&ARM_READ != 0, desc.armState&ARM_WRITE != 0)
 			}

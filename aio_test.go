@@ -67,6 +67,7 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 
 	// ping-pong scheme echo server
 	wbuf := make([]byte, bufsize)
+	rbuf := make([]byte, bufsize)
 	go func() {
 		for {
 			results, err := w.WaitIO()
@@ -101,7 +102,7 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 
 					if res.Size > 0 {
 						// write complete, start read again
-						w.Read(nil, res.Conn, nil)
+						w.Read(nil, res.Conn, rbuf)
 					}
 				}
 			}

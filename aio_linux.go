@@ -39,7 +39,7 @@ const (
 
 // poller is a epoll based poller
 type poller struct {
-	cpuid  int32
+	cpuid  int32      // the cpu id to bind to
 	mu     sync.Mutex // mutex to protect fd closing
 	pfd    int        // epoll fd
 	efd    int        // eventfd
@@ -76,6 +76,7 @@ func openPoll() (*poller, error) {
 	p.efd = int(r0)
 	p.efdbuf = make([]byte, 8)
 	p.die = make(chan struct{})
+	p.cpuid = -1
 
 	return p, err
 }

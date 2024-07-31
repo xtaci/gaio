@@ -26,6 +26,7 @@ package gaio
 
 import (
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 )
@@ -64,6 +65,8 @@ func openPoll() (*poller, error) {
 	p := new(poller)
 	p.fd = fd
 	p.die = make(chan struct{})
+	p.cpuid = -1
+
 	return p, nil
 }
 
@@ -129,6 +132,12 @@ func (p *poller) Wait(chSignal chan Signal) {
 			}
 			p.awaiting = p.awaiting[:0]
 			p.awaitingMutex.Unlock()
+
+			// check if we need to bind cpu
+			if cpuid := atomic.LoadInt32(&p.cpuid); cpuid != -1 {
+				setAffinity(cpuid)
+				atomic.StoreInt32(&p.cpuid, -1)
+			}
 
 			// poll
 			n, err := syscall.Kevent(p.fd, changes, events, nil)

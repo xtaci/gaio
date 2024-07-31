@@ -688,7 +688,7 @@ PENDING:
 }
 
 // handle poller events
-func (w *watcher) handleEvents(pe pollerEvents) {
+func (w *watcher) handleEvents(events pollerEvents) {
 	// suppose fd(s) being polled is closed by conn.Close() from outside after chanrecv,
 	// and a new conn has re-opened with the same handler number(fd). The read and write
 	// on this fd is fatal.
@@ -698,7 +698,7 @@ func (w *watcher) handleEvents(pe pollerEvents) {
 	// identified by 'e.ident', all library operation will be based on 'e.ident',
 	// then IO operation is impossible to misread or miswrite on re-created fd.
 	//log.Println(e)
-	for _, e := range pe {
+	for _, e := range events {
 		if desc, ok := w.descs[e.ident]; ok {
 			if e.ev&EV_READ != 0 {
 				var next *list.Element

@@ -207,14 +207,7 @@ func (w *watcher) notifyPending() {
 // The method operates as follows:
 // 1. It recycles previously used aiocb objects to avoid memory leaks and reuse them for new I/O operations.
 // 2. It waits for completion notifications from the chResults channel and accumulates results.
-// 3. It ensures that the buffer in OpResult is not overwritten by subsequent calls by using a buffer swapping mechanism.
-//
-// Note on Buffer Swapping:
-//   - The method uses a triple buffer swapping strategy to manage read and write operations efficiently.
-//   - Buffers are swapped to ensure that the buffer provided in OpResult does not get overwritten by the next call
-//     to WaitIO() while it is still being used by the user.
-//
-// A synchronization primitive (atomic.CompareAndSwapInt32) is used to manage buffer swapping.
+// 3. It ensures that the buffer in OpResult is not overwritten until the next call to WaitIO.
 func (w *watcher) WaitIO() (r []OpResult, err error) {
 	// recycle previous aiocb
 	for k := range w.recycles {
@@ -240,7 +233,8 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 			}
 
 			// The buffer swapping mechanism ensures that the 'Buffer' in the returned OpResult
-			// is not overwritten by subsequent calls to WaitIO().
+			// is not overwritten until the next call to WaitIO. This allows the user to safely
+			// access the buffer without worrying about it being modified by subsequent operations.
 			//
 			// We use a triple buffer system to manage the buffers efficiently. This system
 			// maintains three types of buffer states during operations:

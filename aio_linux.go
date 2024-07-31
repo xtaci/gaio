@@ -109,10 +109,10 @@ func (p *poller) wakeup() error {
 	return ErrPollerClosed
 }
 
-func (p *poller) Wait(chEventNotify chan eventPackage) {
+func (p *poller) Wait(chSignal chan Signal) {
 	var pe pollerEvents
 	events := make([]syscall.EpollEvent, maxEvents)
-	eventpkg := eventPackage{
+	sig := Signal{
 		done: make(chan struct{}, 1),
 	}
 
@@ -175,17 +175,17 @@ func (p *poller) Wait(chEventNotify chan eventPackage) {
 			}
 
 			// notify watcher
-			eventpkg.events = pe
+			sig.events = pe
 
 			select {
-			case chEventNotify <- eventpkg:
+			case chSignal <- sig:
 			case <-p.die:
 				return
 			}
 
 			// wait for the watcher to finish processing
 			select {
-			case <-eventpkg.done:
+			case <-sig.done:
 				pe = pe[:0]
 			case <-p.die:
 				return

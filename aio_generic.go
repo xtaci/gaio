@@ -88,9 +88,9 @@ type event struct {
 // tiny messages.
 type pollerEvents []event
 
-// eventPackage is a package of events when you've done with events, you should
+// Signal is a package of events when you've done with events, you should
 // send a signal to done channel.
-type eventPackage struct {
+type Signal struct {
 	events pollerEvents
 	done   chan struct{}
 }

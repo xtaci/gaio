@@ -57,8 +57,8 @@ type watcher struct {
 	// poll fd
 	pfd *poller
 
-	// netpoll events
-	chEventNotify chan eventPackage
+	// netpoll signals
+	chSignal chan Signal
 
 	// events from user
 	chPendingNotify chan struct{}
@@ -121,7 +121,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 
 	// loop related chan
 	w.chCPUID = make(chan int32)
-	w.chEventNotify = make(chan eventPackage, 1)
+	w.chSignal = make(chan Signal, 1)
 	w.chPendingNotify = make(chan struct{}, 1)
 	w.chResults = make(chan *aiocb, maxEvents*4)
 	w.die = make(chan struct{})
@@ -138,7 +138,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.gcNotify = make(chan struct{}, 1)
 	w.timer = time.NewTimer(0)
 
-	go w.pfd.Wait(w.chEventNotify)
+	go w.pfd.Wait(w.chSignal)
 	go w.loop()
 
 	// watcher finalizer for system resources
@@ -540,10 +540,10 @@ func (w *watcher) loop() {
 			// handlePending is a synchronous operation
 			w.handlePending(w.pendingProcessing)
 
-		case pkg := <-w.chEventNotify: // poller events
-			w.handleEvents(pkg.events)
+		case sig := <-w.chSignal: // poller events
+			w.handleEvents(sig.events)
 			select {
-			case pkg.done <- struct{}{}:
+			case sig.done <- struct{}{}:
 			case <-w.die:
 				return
 			}

@@ -867,6 +867,14 @@ func BenchmarkEcho128KParallel(b *testing.B) {
 	benchmarkEcho(b, 128*1024, 128)
 }
 
+func BenchmarkEcho4KParallel1024(b *testing.B) {
+	benchmarkEcho(b, 4096, 1024)
+}
+
+func BenchmarkEcho16KParallel1024(b *testing.B) {
+	benchmarkEcho(b, 4096, 1024)
+}
+
 func benchmarkEcho(b *testing.B, bufsize int, numconn int) {
 	defer runtime.GC()
 	b.Log("benchmark echo with message size:", bufsize, "with", numconn, "parallel connections, for", b.N, "times")

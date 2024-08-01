@@ -282,6 +282,18 @@ Number of XY pairs	6
 Equation	Y = 8.613e-005*X + 0.08278
 ```
 
+## FAQ
+1. if you encounter something like:
+
+```
+# github.com/xtaci/gaio [github.com/xtaci/gaio.test]
+./aio_linux.go:155:7: undefined: setAffinity
+./watcher.go:588:4: undefined: setAffinity
+FAIL	github.com/xtaci/gaio [build failed]
+FAIL
+```
+
+make sure you have gcc installed.
 
 ## License
 

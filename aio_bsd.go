@@ -31,21 +31,21 @@ import (
 	"unsafe"
 )
 
-// poller is a kqueue based poller
+// poller represents a kqueue-based poller for monitoring file descriptors.
 type poller struct {
 	cpuid int32
 	mu    sync.Mutex // mutex to protect fd closing
 	fd    int        // kqueue fd
 
-	// awaiting for poll
-	awaiting      []int
-	awaitingMutex sync.Mutex
+	// watchQueue for poll
+	watchQueue      []int
+	watchQueueMutex sync.Mutex
 	// closing signal
 	die     chan struct{}
 	dieOnce sync.Once
 }
 
-// openPoll creates a new poller
+// openPoll creates and initializes a new poller.
 func openPoll() (*poller, error) {
 	fd, err := syscall.Kqueue()
 	if err != nil {
@@ -70,6 +70,7 @@ func openPoll() (*poller, error) {
 	return p, nil
 }
 
+// Close shuts down the poller, ensuring cleanup is done only once.
 func (p *poller) Close() error {
 	p.dieOnce.Do(func() {
 		close(p.die)
@@ -77,10 +78,11 @@ func (p *poller) Close() error {
 	return p.wakeup()
 }
 
+// Watch adds a file descriptor to the list of awaiting-to-be-watched descriptors and wakes up the poller.
 func (p *poller) Watch(fd int) error {
-	p.awaitingMutex.Lock()
-	p.awaiting = append(p.awaiting, fd)
-	p.awaitingMutex.Unlock()
+	p.watchQueueMutex.Lock()
+	p.watchQueue = append(p.watchQueue, fd)
+	p.watchQueueMutex.Unlock()
 
 	return p.wakeup()
 }
@@ -102,6 +104,7 @@ func (p *poller) wakeup() error {
 	return ErrPollerClosed
 }
 
+// Wait waits for events happen on the file descriptors.
 func (p *poller) Wait(chSignal chan Signal) {
 	var pe pollerEvents
 	events := make([]syscall.Kevent_t, maxEvents)
@@ -123,17 +126,17 @@ func (p *poller) Wait(chSignal chan Signal) {
 		case <-p.die:
 			return
 		default:
-			p.awaitingMutex.Lock()
-			for _, fd := range p.awaiting {
+			p.watchQueueMutex.Lock()
+			for _, fd := range p.watchQueue {
 				changes = append(changes,
 					syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_READ},
 					syscall.Kevent_t{Ident: uint64(fd), Flags: syscall.EV_ADD | syscall.EV_CLEAR, Filter: syscall.EVFILT_WRITE},
 				)
 			}
-			p.awaiting = p.awaiting[:0]
-			p.awaitingMutex.Unlock()
+			p.watchQueue = p.watchQueue[:0]
+			p.watchQueueMutex.Unlock()
 
-			// check if we need to bind cpu
+			// Set affinity if cpuid is set
 			if cpuid := atomic.LoadInt32(&p.cpuid); cpuid != -1 {
 				setAffinity(cpuid)
 				atomic.StoreInt32(&p.cpuid, -1)
@@ -198,6 +201,9 @@ func (p *poller) Wait(chSignal chan Signal) {
 }
 
 // raw read for nonblocking op to avert context switch
+// NOTE:
+//  1. we need to make sure that the fd has O_NONBLOCK set.
+//  2. use RawSyscall to avoid context switch
 func rawRead(fd int, p []byte) (n int, err error) {
 	var _p0 unsafe.Pointer
 	if len(p) > 0 {

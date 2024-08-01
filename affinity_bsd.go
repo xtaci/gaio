@@ -30,13 +30,15 @@ package gaio
 #include <sys/_cpuset.h>
 #include <sys/cpuset.h>
 
+// lock_thread sets the CPU affinity for the calling thread to the specified CPU.
+// This ensures the thread runs only on the designated CPU.
 void lock_thread(int cpuid) {
     cpuset_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET(cpuid, &cpuset);
+    CPU_ZERO(&cpuset);         // Initialize the CPU set to be empty
+    CPU_SET(cpuid, &cpuset);   // Add the specified CPU to the set
 
-    pthread_t tid = pthread_self();
-    pthread_setaffinity_np(tid, sizeof(cpuset_t), &cpuset);
+    pthread_t tid = pthread_self();  // Get the ID of the calling thread
+    pthread_setaffinity_np(tid, sizeof(cpuset_t), &cpuset);  // Set the thread's CPU affinity
 }
 */
 import "C"
@@ -44,8 +46,9 @@ import (
 	"runtime"
 )
 
-// bind thread & goroutine to a specific CPU
+// setAffinity binds the current goroutine and its underlying thread to a specific CPU.
+// This is useful for performance optimization on multi-core systems.
 func setAffinity(cpuId int32) {
-	runtime.LockOSThread()
-	C.lock_thread(C.int(cpuId))
+	runtime.LockOSThread()      // Lock the current goroutine to its current thread
+	C.lock_thread(C.int(cpuId)) // Set the thread's CPU affinity to the specified CPU
 }

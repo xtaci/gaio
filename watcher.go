@@ -96,9 +96,11 @@ type watcher struct {
 	timer      *time.Timer     // Timer for handling timeouts
 
 	// Garbage collection
-	gc       []net.Conn    // List of connections to be garbage collected
+	gc       []uintptr     // List of connections to be garbage collected
 	gcMutex  sync.Mutex    // Mutex to synchronize access to the gc list
 	gcNotify chan struct{} // Channel to notify the GC processor
+	gcFound  uint32        // number of net.Conn objects found unreachable by runtime
+	gcClosed uint32        // record number of objects closed successfully
 
 	// Shutdown and cleanup
 	die     chan struct{} // Channel for signaling shutdown
@@ -571,19 +573,8 @@ func (w *watcher) loop() {
 					break
 				}
 			}
-
-		case <-w.gcNotify: // GC recycled net.Conn
-			w.gcMutex.Lock()
-			for i, c := range w.gc {
-				ptr := reflect.ValueOf(c).Pointer()
-				if ident, ok := w.connIdents[ptr]; ok {
-					w.releaseConn(ident)
-				}
-				w.gc[i] = nil
-			}
-			w.gc = w.gc[:0]
-			w.gcMutex.Unlock()
-
+		case <-w.gcNotify:
+			w.handleGC()
 		case cpuid := <-w.chCPUID:
 			setAffinity(cpuid)
 
@@ -591,6 +582,22 @@ func (w *watcher) loop() {
 			return
 		}
 	}
+}
+
+// handleGC processes the garbage collection of net.Conn objects.
+func (w *watcher) handleGC() {
+	runtime.GC()
+	w.gcMutex.Lock()
+	if len(w.gc) > 0 {
+		for _, ptr := range w.gc {
+			if ident, ok := w.connIdents[ptr]; ok {
+				w.releaseConn(ident)
+			}
+		}
+		w.gcClosed += uint32(len(w.gc))
+		w.gc = w.gc[:0]
+	}
+	w.gcMutex.Unlock()
 }
 
 // handlePending processes new requests, acting as a reception desk.
@@ -641,7 +648,9 @@ PENDING:
 				// if not it will never be GC-ed.
 				runtime.SetFinalizer(pcb.conn, func(c net.Conn) {
 					w.gcMutex.Lock()
-					w.gc = append(w.gc, c)
+					ptr := reflect.ValueOf(c).Pointer()
+					w.gc = append(w.gc, ptr)
+					w.gcFound++
 					w.gcMutex.Unlock()
 
 					// notify gc processor
@@ -740,4 +749,11 @@ func (w *watcher) handleEvents(events pollerEvents) {
 			}
 		}
 	}
+}
+
+// read gcFound & gcClosed
+func (w *watcher) GetGC() (found uint32, closed uint32) {
+	w.gcMutex.Lock()
+	defer w.gcMutex.Unlock()
+	return w.gcFound, w.gcClosed
 }

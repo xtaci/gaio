@@ -971,3 +971,76 @@ func BenchmarkContextSwitch(b *testing.B) {
 	}
 	close(die)
 }
+
+func TestGC(t *testing.T) {
+	par := 1024
+	msgsize := 65536
+	t.Log("testing GC:", par, "connections")
+	ln := echoServer(t, msgsize)
+	defer ln.Close()
+
+	w, err := NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	for i := 0; i < par; i++ {
+		go func() {
+			data := make([]byte, msgsize)
+			conn, err := net.Dial("tcp", ln.Addr().String())
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			// send
+			err = w.Write(nil, conn, data)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			conn = nil
+		}()
+	}
+
+	count := 0
+LOOP:
+	for {
+		results, err := w.WaitIO()
+		if err != nil {
+			t.Fatal("waitio:", err)
+			return
+		}
+
+		for _, res := range results {
+			switch res.Operation {
+			case OpWrite:
+			case OpRead:
+			}
+			res.Conn = nil
+
+			count++
+			if count >= par {
+				break LOOP
+			}
+		}
+	}
+
+	found, closed := w.GetGC()
+	t.Logf("GC found:%d closed:%d", found, closed)
+	<-time.After(2 * time.Second)
+	runtime.GC()
+
+	found, closed = w.GetGC()
+	t.Logf("GC found:%d closed:%d", found, closed)
+	<-time.After(2 * time.Second)
+	runtime.GC()
+
+	found, closed = w.GetGC()
+	t.Logf("GC found:%d closed:%d", found, closed)
+	<-time.After(2 * time.Second)
+	runtime.GC()
+
+	found, closed = w.GetGC()
+	t.Logf("GC found:%d closed:%d", found, closed)
+}

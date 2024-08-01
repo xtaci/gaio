@@ -6,8 +6,8 @@
 [2]: https://pkg.go.dev/github.com/xtaci/gaio
 [3]: https://img.shields.io/badge/license-MIT-blue.svg
 [4]: LICENSE
-[5]: https://travis-ci.org/xtaci/gaio.svg?branch=master
-[6]: https://travis-ci.org/xtaci/gaio
+[5]: https://img.shields.io/github/created-at/xtaci/gaio
+[6]: https://img.shields.io/github/created-at/xtaci/gaio
 [7]: https://goreportcard.com/badge/github.com/xtaci/gaio
 [8]: https://goreportcard.com/report/github.com/xtaci/gaio
 [9]: https://codecov.io/gh/xtaci/gaio/branch/master/graph/badge.svg

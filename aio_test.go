@@ -1043,4 +1043,9 @@ LOOP:
 
 	found, closed = w.GetGC()
 	t.Logf("GC found:%d closed:%d", found, closed)
+	<-time.After(2 * time.Second)
+
+	if found != closed {
+		t.Fatal("incorrect GC")
+	}
 }

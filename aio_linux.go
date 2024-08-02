@@ -146,7 +146,6 @@ func (p *poller) Wait(chSignal chan Signal) {
 				return
 			}
 
-			// load from cache
 			// event processing
 			for i := 0; i < n; i++ {
 				ev := &events[i]

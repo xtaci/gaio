@@ -241,6 +241,7 @@ For complete documentation, see the associated [Godoc](https://godoc.org/github.
 On MacOS, you need to increase the max open files limit to run the benchmarks.
 
 ```bash
+sysctl -w kern.ipc.somaxconn=4096
 sysctl -w kern.maxfiles=100000
 sysctl -w kern.maxfilesperproc=100000
 sysctl -w net.inet.ip.portrange.first=1024

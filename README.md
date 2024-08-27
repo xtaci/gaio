@@ -294,7 +294,7 @@ FAIL	github.com/xtaci/gaio [build failed]
 FAIL
 ```
 
-make sure you have gcc installed.
+make sure you have gcc/clang installed.
 
 ## License
 

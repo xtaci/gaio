@@ -186,7 +186,7 @@ func (p *poller) Wait(chSignal chan Signal) {
 			// wait for the watcher to finish processing
 			select {
 			case <-sig.done:
-				eventSet = eventSet[:0]
+				eventSet = eventSet[:0:cap(eventSet)]
 			case <-p.die:
 				return
 			}

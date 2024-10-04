@@ -106,7 +106,7 @@ func (p *poller) wakeup() error {
 
 // Wait waits for events happen on the file descriptors.
 func (p *poller) Wait(chSignal chan Signal) {
-	var pe pollerEvents
+	var eventSet pollerEvents
 	events := make([]syscall.Kevent_t, maxEvents)
 	sig := Signal{
 		done: make(chan struct{}, 1),
@@ -176,12 +176,12 @@ func (p *poller) Wait(chSignal chan Signal) {
 						e.ev |= EV_WRITE
 					}
 
-					pe = append(pe, e)
+					eventSet = append(eventSet, e)
 				}
 			}
 
 			// notify watcher
-			sig.events = pe
+			sig.events = eventSet
 
 			select {
 			case chSignal <- sig:
@@ -192,7 +192,7 @@ func (p *poller) Wait(chSignal chan Signal) {
 			// wait for the watcher to finish processing
 			select {
 			case <-sig.done:
-				pe = pe[:0]
+				eventSet = eventSet[:0:cap(eventSet)]
 			case <-p.die:
 				return
 			}

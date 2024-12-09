@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-//go:build !(linux || netbsd || freebsd || openbsd || dragonfly)
+//go:build !linux
 
 package gaio
 

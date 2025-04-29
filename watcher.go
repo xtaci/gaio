@@ -594,6 +594,8 @@ func (w *watcher) handleGC() {
 			if ident, ok := w.connIdents[ptr]; ok {
 				w.releaseConn(ident)
 			}
+			// make sure net.Conn is reachable before releaseConn
+			runtime.KeepAlive(c)
 		}
 		w.gcClosed += uint32(len(w.gc))
 		w.gc = w.gc[:0]

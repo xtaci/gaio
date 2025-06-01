@@ -26,6 +26,43 @@ By eliminating one goroutine per connection through Edge-Triggered I/O Multiplex
 
 The gaio library implements the proactor pattern, effectively addressing both memory constraints and performance objectives.
 
+## How it works?
+
+The dup function was utilized to copy the file descriptor from net.Conn:
+
+```
+NAME
+       dup, dup2, dup3 - duplicate a file descriptor
+
+LIBRARY
+       Standard C library (libc, -lc)
+
+SYNOPSIS
+       #include <unistd.h>
+
+       int dup(int oldfd);
+       int dup2(int oldfd, int newfd);
+
+       #define _GNU_SOURCE             /* See feature_test_macros(7) */
+       #include <fcntl.h>              /* Definition of O_* constants */
+       #include <unistd.h>
+
+       int dup3(int oldfd, int newfd, int flags);
+
+DESCRIPTION
+       The dup() system call allocates a new file descriptor that refers to the same open file description as the de‐
+       scriptor oldfd.  (For an explanation of open file descriptions, see open(2).)  The new file descriptor  number
+       is guaranteed to be the lowest-numbered file descriptor that was unused in the calling process.
+
+       After  a  successful return, the old and new file descriptors may be used interchangeably.  Since the two file
+       descriptors refer to the same open file description, they share file offset and file status flags;  for  exam‐
+       ple,  if  the  file  offset  is  modified by using lseek(2) on one of the file descriptors, the offset is also
+       changed for the other file descriptor.
+
+       The two file descriptors do not share file descriptor flags (the close-on-exec flag).  The close-on-exec  flag
+       (FD_CLOEXEC; see fcntl(2)) for the duplicate descriptor is off.
+```
+
 ## Features
 
 - **High Performance:** Tested in High Frequency Trading environments, handling 30K–40K RPS on a single HVM server.

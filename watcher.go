@@ -79,12 +79,12 @@ type watcher struct {
 	chResults chan *aiocb
 
 	// Internal buffers for managing read operations
-	swapSize         int    // Capacity of the swap buffer (triple buffer system)
-	swapBufferFront  []byte // Front buffer for reading
-	swapBufferMiddle []byte // Middle buffer for reading
-	swapBufferBack   []byte // Back buffer for reading
-	bufferOffset     int    // Offset for the currently used buffer
-	shouldSwap       int32  // Atomic flag indicating if a buffer swap is needed
+	swapSize         int           // Capacity of the swap buffer (triple buffer system)
+	swapBufferFront  []byte        // Front buffer for reading
+	swapBufferMiddle []byte        // Middle buffer for reading
+	swapBufferBack   []byte        // Back buffer for reading
+	bufferOffset     int           // Offset for the currently used buffer
+	shouldSwap       chan struct{} // Atomic flag indicating if a buffer swap is needed
 
 	// Channel for setting CPU affinity in the watcher loop
 	chCPUID chan int32
@@ -138,6 +138,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.swapBufferFront = make([]byte, bufsize)
 	w.swapBufferMiddle = make([]byte, bufsize)
 	w.swapBufferBack = make([]byte, bufsize)
+	w.shouldSwap = make(chan struct{}, 1)
 
 	// Initialize data structures for managing file descriptors and connections
 	w.descs = make(map[int]*fdDesc)
@@ -203,6 +204,14 @@ func (w *watcher) notifyPending() {
 	}
 }
 
+// notify shouldSwap
+func (w *watcher) notifyShouldSwap() {
+	select {
+	case w.shouldSwap <- struct{}{}:
+	default:
+	}
+}
+
 // WaitIO blocks until one or more read/write operations are completed or an error occurs.
 // It returns a slice of OpResult containing details of completed operations and any errors encountered.
 //
@@ -258,8 +267,8 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 			//	T2': WRITING(B0)
 			// - and so on...
 			//
-			// Atomic operation ensures synchronization for buffer swapping.
-			atomic.CompareAndSwapInt32(&w.shouldSwap, 0, 1)
+			// notify buffer swapping.
+			w.notifyShouldSwap()
 
 			return r, nil
 		case <-w.die:
@@ -349,7 +358,8 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 	backBuffer := false
 
 	if buf == nil {
-		if atomic.CompareAndSwapInt32(&w.shouldSwap, 1, 0) {
+		select {
+		case <-w.shouldSwap:
 			// A successful CAS operation triggers internal buffer swapping:
 			//
 			// Initial State:
@@ -377,6 +387,7 @@ func (w *watcher) tryRead(fd int, pcb *aiocb) bool {
 			//      |________________________|
 			w.swapBufferFront, w.swapBufferMiddle, w.swapBufferBack = w.swapBufferMiddle, w.swapBufferBack, w.swapBufferFront
 			w.bufferOffset = 0
+		default:
 		}
 
 		buf = w.swapBufferFront[w.bufferOffset:]

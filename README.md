@@ -18,17 +18,17 @@
 ## Introduction
 [中文介绍](https://zhuanlan.zhihu.com/p/102890337)
 
-In a typical Go network program, you start by accepting a connection with `conn := lis.Accept()`, then initiate a goroutine to handle incoming data using `go func(net.Conn)`. Next, you allocate a buffer with `buf := make([]byte, 4096)` and wait for data with `conn.Read(buf)`.
+In a typical Go network program, you accept a connection with `conn := lis.Accept()`, then spawn a goroutine to handle incoming data using `go func(net.Conn)`. Next, you allocate a buffer with `buf := make([]byte, 4096)` and wait for data with `conn.Read(buf)`.
 
-For a server managing over 10,000 connections with frequent short messages (e.g., <512 bytes), the cost of context switching becomes significantly higher than that of receiving messages—each context switch can require over 1,000 CPU cycles or around 600 ns on a 2.1 GHz processor.
+For servers managing 10,000+ connections with frequent short messages (e.g., <512 bytes), context switching costs significantly exceed message receiving costs—each context switch requires over 1,000 CPU cycles, or approximately 600 ns on a 2.1 GHz processor.
 
-By eliminating one goroutine per connection through Edge-Triggered I/O Multiplexing, you can save the 2KB (R) + 2KB (W) stack space typically used per goroutine. Additionally, by employing an internal swap buffer, you can avoid the need for `buf := make([]byte, 4096)` at the expense of some performance.
+By eliminating the one-goroutine-per-connection model through Edge-Triggered I/O Multiplexing, you can save the 2KB (R) + 2KB (W) stack space typically allocated per goroutine. Additionally, using an internal swap buffer eliminates the need for `buf := make([]byte, 4096)`, trading some performance for memory efficiency.
 
-The gaio library implements the proactor pattern, effectively addressing both memory constraints and performance objectives.
+The gaio library implements the proactor pattern, effectively balancing memory constraints with performance requirements.
 
-## How it works?
+## How It Works
 
-The dup function was utilized to copy the file descriptor from net.Conn:
+The `dup` function is used to copy the file descriptor from `net.Conn`:
 
 ```
 NAME
@@ -65,25 +65,25 @@ DESCRIPTION
 
 ## Features
 
-- **High Performance:** Tested in High Frequency Trading environments, handling 30K–40K RPS on a single HVM server.
-- **Scalability:** Designed for over C10K concurrent connections, optimizing both parallelism and single connection throughput.
+- **High Performance:** Battle-tested in High-Frequency Trading environments, achieving 30K–40K RPS on a single HVM server.
+- **Scalability:** Designed for C10K+ concurrent connections, optimizing both parallelism and per-connection throughput.
 - **Flexible Buffering:** Use `Read(ctx, conn, buffer)` with a nil buffer to leverage the internal swap buffer.
-- **Non-Intrusive Integration:** Compatible with `net.Listener` and `net.Conn` (supports `syscall.RawConn`), allowing easy integration into existing applications.
-- **Efficient Context Switching:** Minimizes context switching costs for small messages, ideal for frequent chat message exchanges.
-- **Customizable Delegation:** Applications can choose when to delegate `net.Conn` to gaio, such as after a handshake or specific `net.TCPConn` settings.
-- **Back-Pressure Handling:** Applications can control when to submit read or write requests, enabling per-connection back-pressure to slow down sending when necessary, particularly useful for transferring data from a faster source (A) to a slower destination (B).
-- **Lightweight and Maintainable:** Approximately 1,000 lines of code, making it easy to debug.
+- **Non-Intrusive Integration:** Compatible with `net.Listener` and `net.Conn` (supports `syscall.RawConn`), enabling seamless integration into existing applications.
+- **Efficient Context Switching:** Minimizes context switching overhead for small messages, ideal for high-frequency message exchanges.
+- **Customizable Delegation:** Applications can control when to delegate `net.Conn` to gaio, such as after handshakes or specific `net.TCPConn` configurations.
+- **Back-Pressure Handling:** Applications can control read/write request submission timing, enabling per-connection back-pressure management to throttle sending when necessary—particularly useful when transferring data from a faster source (A) to a slower destination (B).
+- **Lightweight and Maintainable:** Approximately 1,000 lines of code, facilitating easy debugging and maintenance.
 - **Cross-Platform Support:** Compatible with Linux and BSD.
 
 ## Conventions
 
-- **Connection Delegation:** Once you submit an async read/write request with a related `net.Conn` to `gaio.Watcher`, that connection is delegated to the watcher. Subsequent calls to `conn.Read` or `conn.Write` will return an error, but TCP properties set by `SetReadBuffer()`, `SetWriteBuffer()`, `SetLinger()`, `SetKeepAlive()`, and `SetNoDelay()` will be retained.
+- **Connection Delegation:** Once you submit an async read/write request for a `net.Conn` to `gaio.Watcher`, that connection becomes delegated to the watcher. Subsequent calls to `conn.Read` or `conn.Write` will return errors, but TCP properties set via `SetReadBuffer()`, `SetWriteBuffer()`, `SetLinger()`, `SetKeepAlive()`, and `SetNoDelay()` will be preserved.
   
-- **Resource Management:** If you no longer need a connection, call `Watcher.Free(net.Conn)` to immediately close the socket and free resources. If you forget to call `Watcher.Free`, the runtime garbage collector will clean up system resources if `net.Conn` is not referenced elsewhere. Failing to call `Watcher.Close()` will lead the garbage collector to clean up all related resources if the watcher is unreferenced.
+- **Resource Management:** When you no longer need a connection, call `Watcher.Free(net.Conn)` to immediately close the socket and release resources. If you forget to call `Watcher.Free()`, the runtime garbage collector will clean up system resources when `net.Conn` is no longer referenced elsewhere. Similarly, failing to call `Watcher.Close()` will allow the garbage collector to clean up all related resources once the watcher is unreferenced.
 
-- **Load Balancing:** For connection load balancing, create multiple `gaio.Watcher` instances to distribute `net.Conn` using your preferred strategy. For acceptor load balancing, utilize `go-reuseport` as the listener.
+- **Load Balancing:** For connection load balancing, create multiple `gaio.Watcher` instances and distribute `net.Conn` using your preferred strategy. For acceptor load balancing, use `go-reuseport` as the listener.
 
-- **Safe Read Requests:** When submitting read requests with a 'nil' buffer, the returned `[]byte` from `Watcher.WaitIO()` is safe to use until the next call to `Watcher.WaitIO()`.
+- **Safe Read Requests:** When submitting read requests with a nil buffer, the `[]byte` slice returned from `Watcher.WaitIO()` remains valid until the next `Watcher.WaitIO()` call.
 
 ## TL;DR
 
@@ -97,8 +97,8 @@ import (
         "github.com/xtaci/gaio"
 )
 
-// this goroutine will wait for all io events, and sents back everything it received
-// in async way
+// this goroutine waits for all I/O events and sends back everything it receives
+// in an async manner
 func echoServer(w *gaio.Watcher) {
         for {
                 // loop wait for any IO events
@@ -259,7 +259,7 @@ For complete documentation, see the associated [Godoc](https://godoc.org/github.
 
 | Test Case | Throughput test with 64KB buffer |
 |:-------------:|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Description | A client keep on sending 64KB bytes to server, server keeps on reading and sending back whatever it received, the client keeps on receiving whatever the server sent back until all bytes received successfully |
+| Description | A client continuously sends 64KB of data to the server. The server reads the data and echoes it back. The client continues receiving until all bytes are successfully received. |
 | Command | `go test -v -run=^$ -bench Echo` |
 | Macbook Pro | 1695.27 MB/s 518 B/op 4 allocs/op|
 | Linux AMD64 | 1883.23 MB/s 518 B/op 4 allocs/op|
@@ -267,14 +267,14 @@ For complete documentation, see the associated [Godoc](https://godoc.org/github.
 
 | Test Case | 8K concurrent connection echo test |
 |:-------------:|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-|Description| Start 8192 clients, each client send 1KB data to server, server keeps on reading and sending back whatever it received, the client keeps on receiving whatever the server sent back until all bytes received successfully.|
+|Description| Starts 8192 clients, each sending 1KB of data to the server. The server reads and echoes back the data, and each client continues receiving until all bytes are successfully received.|
 | Command | `go test -v -run=8k` |
 | Macbook Pro | 1.09s |
 | Linux AMD64 | 0.94s |
 | Raspberry Pi4 | 2.09s |
 
 ## Testing Directives
-On MacOS, you need to increase the max open files limit to run the benchmarks.
+On macOS, you need to increase the maximum open files limit to run the benchmarks.
 
 ```bash
 sysctl -w kern.ipc.somaxconn=4096
@@ -320,7 +320,7 @@ Equation	Y = 8.613e-005*X + 0.08278
 ```
 
 ## FAQ
-1. if you encounter something like:
+1. If you encounter an error like:
 
 ```
 # github.com/xtaci/gaio [github.com/xtaci/gaio.test]
@@ -330,11 +330,11 @@ FAIL	github.com/xtaci/gaio [build failed]
 FAIL
 ```
 
-make sure you have gcc/clang installed.
+ensure that gcc/clang is installed.
 
 ## License
 
-`gaio` source code is available under the MIT [License](/LICENSE).
+The `gaio` source code is available under the MIT [License](/LICENSE).
 
 ## References
 

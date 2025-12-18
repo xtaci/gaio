@@ -161,20 +161,24 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 }
 
 // Set Poller Affinity for Epoll/Kqueue
-func (w *watcher) SetPollerAffinity(cpuid int) (err error) {
-	if cpuid >= runtime.NumCPU() {
+func (w *watcher) SetPollerAffinity(cpuid int) error {
+	if cpuid < 0 || cpuid >= runtime.NumCPU() {
 		return ErrCPUID
 	}
 
 	// store and wakeup
 	atomic.StoreInt32(&w.pfd.cpuid, int32(cpuid))
-	w.pfd.wakeup()
+	if err := w.pfd.wakeup(); err != nil {
+		// rollback so the next successful call can retry
+		atomic.StoreInt32(&w.pfd.cpuid, -1)
+		return err
+	}
 	return nil
 }
 
 // Set Loop Affinity for syscall.Read/syscall.Write
-func (w *watcher) SetLoopAffinity(cpuid int) (err error) {
-	if cpuid >= runtime.NumCPU() {
+func (w *watcher) SetLoopAffinity(cpuid int) error {
+	if cpuid < 0 || cpuid >= runtime.NumCPU() {
 		return ErrCPUID
 	}
 
@@ -631,48 +635,47 @@ PENDING:
 			desc = w.descs[ident]
 		} else {
 			// New file descriptor registration
-			if dupfd, err := dupconn(pcb.conn); err != nil {
+			dupfd, err := dupconn(pcb.conn)
+			if err != nil {
 				// unexpected situation, should notify caller if we cannot dup(2)
 				pcb.err = err
 				w.deliver(pcb)
 				continue
-			} else {
-				// as we duplicated successfully, we're safe to
-				// close the original connection
-				pcb.conn.Close()
-				// assign idents
-				ident = dupfd
-
-				// let epoll or kqueue to watch this fd!
-				werr := w.pfd.Watch(ident)
-				if werr != nil {
-					// unexpected situation, should notify caller if we cannot watch
-					pcb.err = werr
-					w.deliver(pcb)
-					continue
-				}
-
-				// update registration table
-				desc = &fdDesc{ptr: pcb.ptr}
-				w.descs[ident] = desc
-				w.connIdents[pcb.ptr] = ident
-
-				// the 'conn' object is still useful for GC finalizer.
-				// note finalizer function cannot hold reference to net.Conn,
-				// if not it will never be GC-ed.
-				runtime.SetFinalizer(pcb.conn, func(c net.Conn) {
-					w.gcMutex.Lock()
-					w.gc = append(w.gc, c)
-					w.gcFound++
-					w.gcMutex.Unlock()
-
-					// notify gc processor
-					select {
-					case w.gcNotify <- struct{}{}:
-					default:
-					}
-				})
 			}
+
+			// let epoll or kqueue watch this fd before we close the original
+			if werr := w.pfd.Watch(dupfd); werr != nil {
+				// ensure we don't leak the duplicated fd
+				syscall.Close(dupfd)
+				pcb.err = werr
+				w.deliver(pcb)
+				continue
+			}
+
+			// we own the duplicated fd now, safe to close the original connection
+			pcb.conn.Close()
+			ident = dupfd
+
+			// update registration table
+			desc = &fdDesc{ptr: pcb.ptr}
+			w.descs[ident] = desc
+			w.connIdents[pcb.ptr] = ident
+
+			// the 'conn' object is still useful for GC finalizer.
+			// note finalizer function cannot hold reference to net.Conn,
+			// if not it will never be GC-ed.
+			runtime.SetFinalizer(pcb.conn, func(c net.Conn) {
+				w.gcMutex.Lock()
+				w.gc = append(w.gc, c)
+				w.gcFound++
+				w.gcMutex.Unlock()
+
+				// notify gc processor
+				select {
+				case w.gcNotify <- struct{}{}:
+				default:
+				}
+			})
 		}
 
 		// as the file descriptor is registered, we can proceed to IO operations
@@ -707,7 +710,7 @@ PENDING:
 		// if the request has deadline set, we should push it to timeout heap
 		if !pcb.deadline.IsZero() {
 			heap.Push(&w.timeouts, pcb)
-			if w.timeouts.Len() == 1 {
+			if w.timeouts.Len() > 0 && w.timeouts[0] == pcb {
 				w.timer.Reset(time.Until(pcb.deadline))
 			}
 		}

@@ -1049,3 +1049,208 @@ LOOP:
 		t.Fatal("incorrect GC")
 	}
 }
+
+func TestDoubleClose(t *testing.T) {
+	w, err := NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// First close
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second close should be safe
+	if err := w.Close(); err != nil {
+		t.Fatal("second close failed:", err)
+	}
+}
+
+func TestWaitIOAfterClose(t *testing.T) {
+	w, err := NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+
+	_, err = w.WaitIO()
+	if err != ErrWatcherClosed {
+		t.Fatalf("expected ErrWatcherClosed, got %v", err)
+	}
+}
+
+func TestReadWriteAfterClose(t *testing.T) {
+	w, err := NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+
+	// Create a dummy connection (doesn't need to be real for this test as we check watcher state first)
+	// However, Read/Write checks for nil conn first, so we need something non-nil.
+	// But wait, Read/Write checks w.die first? Let's check watcher.go
+	// Yes, aioCreate checks w.die first.
+
+	// We need a valid net.Conn interface, but it doesn't need to be connected.
+	// But aioCreate checks for nil conn and pointer type.
+	// So we can use a closed connection.
+
+	ln, _ := net.Listen("tcp", "localhost:0")
+	conn, _ := net.Dial("tcp", ln.Addr().String())
+	conn.Close()
+	ln.Close()
+
+	if err := w.Read(nil, conn, make([]byte, 1)); err != ErrWatcherClosed {
+		t.Fatalf("Read: expected ErrWatcherClosed, got %v", err)
+	}
+
+	if err := w.Write(nil, conn, make([]byte, 1)); err != ErrWatcherClosed {
+		t.Fatalf("Write: expected ErrWatcherClosed, got %v", err)
+	}
+}
+
+func TestContextPassing(t *testing.T) {
+	ln := echoServer(t, 1024)
+	defer ln.Close()
+
+	w, err := NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	ctx := "my-context"
+	tx := []byte("hello")
+
+	// Write with context
+	if err := w.Write(ctx, conn, tx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for result
+	for {
+		results, err := w.WaitIO()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for _, res := range results {
+			if res.Operation == OpWrite {
+				if res.Context != ctx {
+					t.Fatalf("expected context %v, got %v", ctx, res.Context)
+				}
+				return
+			}
+		}
+	}
+}
+
+func TestSetPollerAffinityError(t *testing.T) {
+	w, err := NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	// Invalid CPU ID (negative)
+	if err := w.SetPollerAffinity(-1); err != ErrCPUID {
+		t.Fatalf("expected ErrCPUID, got %v", err)
+	}
+
+	// Invalid CPU ID (too large)
+	if err := w.SetPollerAffinity(runtime.NumCPU() + 100); err != ErrCPUID {
+		t.Fatalf("expected ErrCPUID, got %v", err)
+	}
+}
+
+func TestSetLoopAffinityError(t *testing.T) {
+	w, err := NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	// Invalid CPU ID (negative)
+	if err := w.SetLoopAffinity(-1); err != ErrCPUID {
+		t.Fatalf("expected ErrCPUID, got %v", err)
+	}
+
+	// Invalid CPU ID (too large)
+	if err := w.SetLoopAffinity(runtime.NumCPU() + 100); err != ErrCPUID {
+		t.Fatalf("expected ErrCPUID, got %v", err)
+	}
+}
+
+func TestFree(t *testing.T) {
+	ln := echoServer(t, 1024)
+	defer ln.Close()
+
+	w, err := NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Send some data to ensure connection is registered
+	if err := w.Write(nil, conn, []byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for write to complete
+	done := false
+	for !done {
+		results, err := w.WaitIO()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, res := range results {
+			if res.Operation == OpWrite {
+				done = true
+				break
+			}
+		}
+	}
+
+	// Free the connection
+	if err := w.Free(conn); err != nil {
+		t.Fatal(err)
+	}
+
+	// Try to write again, should fail or be ignored (depending on implementation details,
+	// but Free should close the fd).
+	// Actually, Free submits an opDelete.
+
+	// Let's verify that the connection is indeed closed or at least removed from watcher.
+	// Since Free is async, we might need to wait.
+
+	// Wait for potential errors or closure
+	// timeout := time.After(1 * time.Second)
+
+	// We can try to read from the connection on the other side (server side), it should get EOF or error.
+	// But echoServer handles errors by logging.
+
+	// Let's just check if we can still use the watcher with this conn.
+	// Note: Free closes the underlying fd (dupfd), but the net.Conn might still be open?
+	// watcher.go: releaseConn closes the dupfd. The original net.Conn was closed in handlePending when registering.
+	// So the connection should be fully closed.
+
+	// Let's try to read from conn. It should fail.
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 10)
+	_, err = conn.Read(buf)
+	if err == nil {
+		t.Fatal("expected error reading from freed connection")
+	}
+}

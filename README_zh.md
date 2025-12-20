@@ -15,20 +15,20 @@
 
 <img src="assets/logo.png" alt="gaio" height="300px" /> 
 
-## Introduction
-[中文文档](README_zh.md) | [中文介绍(知乎)](https://zhuanlan.zhihu.com/p/102890337)
+## 简介
+[English](README.md)
 
-In a typical Go network program, you accept a connection with `conn := lis.Accept()`, then spawn a goroutine to handle incoming data using `go func(net.Conn)`. Next, you allocate a buffer with `buf := make([]byte, 4096)` and wait for data with `conn.Read(buf)`.
+在典型的 Go 网络程序中，通常使用 `conn := lis.Accept()` 接受连接，然后使用 `go func(net.Conn)` 启动一个 goroutine 来处理传入数据。接着，使用 `buf := make([]byte, 4096)` 分配缓冲区，并使用 `conn.Read(buf)` 等待数据。
 
-For servers managing 10,000+ connections with frequent short messages (e.g., <512 bytes), context switching costs significantly exceed message receiving costs—each context switch requires over 1,000 CPU cycles, or approximately 600 ns on a 2.1 GHz processor.
+对于管理 10,000+ 连接且频繁处理短消息（例如 <512 字节）的服务器，上下文切换的成本显著超过了消息接收的成本——每次上下文切换需要超过 1,000 个 CPU 周期，在 2.1 GHz 处理器上大约需要 600 纳秒。
 
-By eliminating the one-goroutine-per-connection model through Edge-Triggered I/O Multiplexing, you can save the 2KB (R) + 2KB (W) stack space typically allocated per goroutine. Additionally, using an internal swap buffer eliminates the need for `buf := make([]byte, 4096)`, trading some performance for memory efficiency.
+通过边缘触发（Edge-Triggered）I/O 多路复用消除“每个连接一个 goroutine”的模型，可以节省通常为每个 goroutine 分配的 2KB (R) + 2KB (W) 栈空间。此外，使用内部交换缓冲区消除了 `buf := make([]byte, 4096)` 的需求，以牺牲少量性能为代价换取内存效率。
 
-The gaio library implements the proactor pattern, effectively balancing memory constraints with performance requirements.
+gaio 库实现了 Proactor 模式，有效地在内存限制和性能要求之间取得了平衡。
 
-## How It Works
+## 工作原理
 
-The `dup` function is used to copy the file descriptor from `net.Conn`:
+`dup` 函数用于从 `net.Conn` 复制文件描述符：
 
 ```
 NAME
@@ -63,29 +63,29 @@ DESCRIPTION
        (FD_CLOEXEC; see fcntl(2)) for the duplicate descriptor is off.
 ```
 
-## Features
+## 特性
 
-- **High Performance:** Battle-tested in High-Frequency Trading environments, achieving 30K–40K RPS on a single HVM server.
-- **Scalability:** Designed for C10K+ concurrent connections, optimizing both parallelism and per-connection throughput.
-- **Flexible Buffering:** Use `Read(ctx, conn, buffer)` with a nil buffer to leverage the internal swap buffer.
-- **Non-Intrusive Integration:** Compatible with `net.Listener` and `net.Conn` (supports `syscall.RawConn`), enabling seamless integration into existing applications.
-- **Efficient Context Switching:** Minimizes context switching overhead for small messages, ideal for high-frequency message exchanges.
-- **Customizable Delegation:** Applications can control when to delegate `net.Conn` to gaio, such as after handshakes or specific `net.TCPConn` configurations.
-- **Back-Pressure Handling:** Applications can control read/write request submission timing, enabling per-connection back-pressure management to throttle sending when necessary—particularly useful when transferring data from a faster source (A) to a slower destination (B).
-- **Lightweight and Maintainable:** Approximately 1,000 lines of code, facilitating easy debugging and maintenance.
-- **Cross-Platform Support:** Compatible with Linux and BSD.
+- **高性能：** 在高频交易环境中经过实战检验，在单台 HVM 服务器上实现了 30K–40K RPS。
+- **可扩展性：** 专为 C10K+ 并发连接设计，优化了并行性和单连接吞吐量。
+- **灵活的缓冲：** 使用带有 nil 缓冲区的 `Read(ctx, conn, buffer)` 来利用内部交换缓冲区。
+- **非侵入式集成：** 兼容 `net.Listener` 和 `net.Conn`（支持 `syscall.RawConn`），能够无缝集成到现有应用程序中。
+- **高效的上下文切换：** 最小化小消息的上下文切换开销，非常适合高频消息交换。
+- **可定制的托管：** 应用程序可以控制何时将 `net.Conn` 托管给 gaio，例如在握手之后或特定的 `net.TCPConn` 配置之后。
+- **背压处理：** 应用程序可以控制读/写请求的提交时机，从而实现每连接的背压管理，以便在必要时限制发送——特别是在将数据从较快的源 (A) 传输到较慢的目的地 (B) 时非常有用。
+- **轻量级且易于维护：** 大约 1,000 行代码，便于调试和维护。
+- **跨平台支持：** 兼容 Linux 和 BSD。
 
-## Conventions
+## 约定
 
-- **Connection Delegation:** Once you submit an async read/write request for a `net.Conn` to `gaio.Watcher`, that connection becomes delegated to the watcher. Subsequent calls to `conn.Read` or `conn.Write` will return errors, but TCP properties set via `SetReadBuffer()`, `SetWriteBuffer()`, `SetLinger()`, `SetKeepAlive()`, and `SetNoDelay()` will be preserved.
+- **连接托管：** 一旦向 `gaio.Watcher` 提交了 `net.Conn` 的异步读/写请求，该连接即被托管给 watcher。随后调用 `conn.Read` 或 `conn.Write` 将返回错误，但通过 `SetReadBuffer()`、`SetWriteBuffer()`、`SetLinger()`、`SetKeepAlive()` 和 `SetNoDelay()` 设置的 TCP 属性将被保留。
   
-- **Resource Management:** When you no longer need a connection, call `Watcher.Free(net.Conn)` to immediately close the socket and release resources. If you forget to call `Watcher.Free()`, the runtime garbage collector will clean up system resources when `net.Conn` is no longer referenced elsewhere. Similarly, failing to call `Watcher.Close()` will allow the garbage collector to clean up all related resources once the watcher is unreferenced.
+- **资源管理：** 当不再需要连接时，调用 `Watcher.Free(net.Conn)` 以立即关闭套接字并释放资源。如果忘记调用 `Watcher.Free()`，运行时垃圾回收器将在 `net.Conn` 不再被其他地方引用时清理系统资源。同样，如果未能调用 `Watcher.Close()`，垃圾回收器将在 watcher 不再被引用时清理所有相关资源。
 
-- **Load Balancing:** For connection load balancing, create multiple `gaio.Watcher` instances and distribute `net.Conn` using your preferred strategy. For acceptor load balancing, use `go-reuseport` as the listener.
+- **负载均衡：** 对于连接负载均衡，创建多个 `gaio.Watcher` 实例并使用您喜欢的策略分发 `net.Conn`。对于接收器（acceptor）负载均衡，请使用 `go-reuseport` 作为监听器。
 
-- **Safe Read Requests:** When submitting read requests with a nil buffer, the `[]byte` slice returned from `Watcher.WaitIO()` remains valid until the next `Watcher.WaitIO()` call.
+- **安全的读请求：** 当提交带有 nil 缓冲区的读请求时，从 `Watcher.WaitIO()` 返回的 `[]byte` 切片在下一次 `Watcher.WaitIO()` 调用之前保持有效。
 
-## TL;DR
+## 快速开始 (TL;DR)
 
 ```go
 package main
@@ -97,11 +97,10 @@ import (
         "github.com/xtaci/gaio"
 )
 
-// this goroutine waits for all I/O events and sends back everything it receives
-// in an async manner
+// 这个 goroutine 等待所有 I/O 事件并以异步方式回发接收到的所有内容
 func echoServer(w *gaio.Watcher) {
         for {
-                // loop wait for any IO events
+                // 循环等待任何 IO 事件
                 results, err := w.WaitIO()
                 if err != nil {
                         log.Println(err)
@@ -110,15 +109,15 @@ func echoServer(w *gaio.Watcher) {
 
                 for _, res := range results {
                         switch res.Operation {
-                        case gaio.OpRead: // read completion event
+                        case gaio.OpRead: // 读完成事件
                                 if res.Error == nil {
-                                        // send back everything, we won't start to read again until write completes.
-                                        // submit an async write request
+                                        // 回发所有内容，在写完成之前我们不会再次开始读取。
+                                        // 提交一个异步写请求
                                         w.Write(nil, res.Conn, res.Buffer[:res.Size])
                                 }
-                        case gaio.OpWrite: // write completion event
+                        case gaio.OpWrite: // 写完成事件
                                 if res.Error == nil {
-                                        // since write has completed, let's start read on this conn again
+                                        // 既然写已完成，让我们再次开始读取此连接
                                         w.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
                                 }
                         }
@@ -149,7 +148,7 @@ func main() {
                 }
                 log.Println("new client", conn.RemoteAddr())
 
-                // submit the first async read IO request
+                // 提交第一个异步读 IO 请求
                 err = w.Read(nil, conn, make([]byte, 128))
                 if err != nil {
                         log.Println(err)
@@ -160,10 +159,10 @@ func main() {
 
 ```
 
-### More examples
+### 更多示例
 
 <details>
-	<summary> Push server </summary>
+	<summary> 推送服务器 (Push server) </summary>
         package main
 
 ```go
@@ -179,7 +178,7 @@ import (
 )
 
 func main() {
-        // by simply replace net.Listen with reuseport.Listen, everything is the same as in push-server
+        // 只需将 net.Listen 替换为 reuseport.Listen，其他一切与 push-server 相同
         // ln, err := reuseport.Listen("tcp", "localhost:0")
         ln, err := net.Listen("tcp", "localhost:0")
         if err != nil {
@@ -188,13 +187,13 @@ func main() {
 
         log.Println("pushing server listening on", ln.Addr(), ", use telnet to receive push")
 
-        // create a watcher
+        // 创建一个 watcher
         w, err := gaio.NewWatcher()
         if err != nil {
                 log.Fatal(err)
         }
 
-        // channel
+        // 通道
         ticker := time.NewTicker(time.Second)
         chConn := make(chan net.Conn)
         chIO := make(chan gaio.OpResult)
@@ -214,30 +213,30 @@ func main() {
                 }
         }()
 
-        // main logic loop, like your program core loop.
+        // 主逻辑循环，类似于您的程序核心循环。
         go func() {
                 var conns []net.Conn
                 for {
                         select {
-                        case res := <-chIO: // receive IO events from watcher
+                        case res := <-chIO: // 从 watcher 接收 IO 事件
                                 if res.Error != nil {
                                         continue
                                 }
                                 conns = append(conns, res.Conn)
-                        case t := <-ticker.C: // receive ticker events
+                        case t := <-ticker.C: // 接收 ticker 事件
                                 push := []byte(fmt.Sprintf("%s\n", t))
-                                // all conn will receive the same 'push' content
+                                // 所有连接将接收相同的 'push' 内容
                                 for _, conn := range conns {
                                         w.Write(nil, conn, push)
                                 }
                                 conns = nil
-                        case conn := <-chConn: // receive new connection events
+                        case conn := <-chConn: // 接收新连接事件
                                 conns = append(conns, conn)
                         }
                 }
         }()
 
-        // this loop keeps on accepting connections and send to main loop
+        // 此循环持续接受连接并发送到主循环
         for {
                 conn, err := ln.Accept()
                 if err != nil {
@@ -251,30 +250,30 @@ func main() {
 ```
 </details>
 
-## Documentation
+## 文档
 
-For complete documentation, see the associated [Godoc](https://godoc.org/github.com/xtaci/gaio).
+有关完整文档，请参阅关联的 [Godoc](https://godoc.org/github.com/xtaci/gaio)。
 
-## Benchmarks
+## 基准测试
 
-| Test Case | Throughput test with 64KB buffer |
+| 测试用例 | 64KB 缓冲区吞吐量测试 |
 |:-------------:|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Description | A client continuously sends 64KB of data to the server. The server reads the data and echoes it back. The client continues receiving until all bytes are successfully received. |
-| Command | `go test -v -run=^$ -bench Echo` |
+| 描述 | 客户端持续向服务器发送 64KB 数据。服务器读取数据并将其回显。客户端持续接收直到所有字节都成功接收。 |
+| 命令 | `go test -v -run=^$ -bench Echo` |
 | Macbook Pro | 1695.27 MB/s 518 B/op 4 allocs/op|
 | Linux AMD64 | 1883.23 MB/s 518 B/op 4 allocs/op|
 | Raspberry Pi4 | 354.59 MB/s 334 B/op 4 allocs/op|
 
-| Test Case | 8K concurrent connection echo test |
+| 测试用例 | 8K 并发连接回显测试 |
 |:-------------:|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-|Description| Starts 8192 clients, each sending 1KB of data to the server. The server reads and echoes back the data, and each client continues receiving until all bytes are successfully received.|
-| Command | `go test -v -run=8k` |
+|描述| 启动 8192 个客户端，每个向服务器发送 1KB 数据。服务器读取并回显数据，每个客户端持续接收直到所有字节都成功接收。|
+| 命令 | `go test -v -run=8k` |
 | Macbook Pro | 1.09s |
 | Linux AMD64 | 0.94s |
 | Raspberry Pi4 | 2.09s |
 
-## Testing Directives
-On macOS, you need to increase the maximum open files limit to run the benchmarks.
+## 测试指令
+在 macOS 上，您需要增加最大打开文件限制以运行基准测试。
 
 ```bash
 sysctl -w kern.ipc.somaxconn=4096
@@ -286,11 +285,11 @@ sysctl -w net.inet.ip.portrange.last=65535
 ulimit -S -n 65536
 ```
 
-### Regression
+### 回归测试
 
 ![regression](assets/regression.png)
 
-X -> number of concurrent connections, Y -> time of completion in seconds
+X -> 并发连接数, Y -> 完成时间（秒）
 
 ```
 Best-fit values	 
@@ -319,8 +318,8 @@ Number of XY pairs	6
 Equation	Y = 8.613e-005*X + 0.08278
 ```
 
-## FAQ
-1. If you encounter an error like:
+## 常见问题 (FAQ)
+1. 如果您遇到如下错误：
 
 ```
 # github.com/xtaci/gaio [github.com/xtaci/gaio.test]
@@ -330,16 +329,16 @@ FAIL	github.com/xtaci/gaio [build failed]
 FAIL
 ```
 
-ensure that gcc/clang is installed.
+请确保已安装 gcc/clang。
 
-## License
+## 许可证
 
-The `gaio` source code is available under the MIT [License](/LICENSE).
+`gaio` 源代码在 MIT [许可证](/LICENSE)下可用。
 
-## References
+## 参考资料
 
 * https://zhuanlan.zhihu.com/p/102890337 -- gaio小记
-* https://github.com/xtaci/grasshopper -- A secure chained relayer for UDP made of gaio
+* https://github.com/xtaci/grasshopper -- 由 gaio 构成的安全链式中继器
 * https://github.com/golang/go/issues/15735 -- net: add mechanism to wait for readability on a TCPConn
 * https://en.wikipedia.org/wiki/C10k_problem -- C10K
 * https://golang.org/src/runtime/netpoll_epoll.go -- epoll in golang 
@@ -348,6 +347,6 @@ The `gaio` source code is available under the MIT [License](/LICENSE).
 * https://en.wikipedia.org/wiki/Transmission_Control_Protocol#Flow_control -- TCP Flow Control 
 * http://www.idc-online.com/technical_references/pdfs/data_communications/Congestion_Control.pdf -- Back-pressure
 
-## Status
+## 状态
 
-Stable
+稳定

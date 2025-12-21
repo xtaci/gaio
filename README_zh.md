@@ -331,7 +331,3 @@ FAIL
 * https://idea.popcount.org/2017-02-20-epoll-is-fundamentally-broken-12/ -- epoll is fundamentally broken
 * https://en.wikipedia.org/wiki/Transmission_Control_Protocol\#Flow_control -- TCP Flow Control 
 * http://www.idc-online.com/technical_references/pdfs/data_communications/Congestion_Control.pdf -- Back-pressure
-
-## 状态
-
-稳定

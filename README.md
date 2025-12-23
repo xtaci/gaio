@@ -28,6 +28,8 @@ The gaio library implements the proactor pattern, effectively balancing memory c
 
 ## How It Works
 
+![alt text](assets/gaio.jpg)
+
 The `dup` function is used to copy the file descriptor from `net.Conn`:
 
 ```

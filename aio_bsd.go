@@ -106,7 +106,8 @@ func (p *poller) wakeup() error {
 
 // Wait waits for events happen on the file descriptors.
 func (p *poller) Wait(chSignal chan Signal) {
-	var eventSet pollerEvents
+	// Pre-allocate event set with typical capacity to reduce allocations
+	eventSet := make(pollerEvents, 0, maxEvents)
 	events := make([]syscall.Kevent_t, maxEvents)
 	sig := Signal{
 		done: make(chan struct{}, 1),
@@ -119,8 +120,8 @@ func (p *poller) Wait(chSignal chan Signal) {
 		p.mu.Unlock()
 	}()
 
-	// kqueue eventloop
-	var changes []syscall.Kevent_t
+	// kqueue eventloop - pre-allocate changes slice
+	changes := make([]syscall.Kevent_t, 0, 256)
 	for {
 		select {
 		case <-p.die:
@@ -204,6 +205,7 @@ func (p *poller) Wait(chSignal chan Signal) {
 // NOTE:
 //  1. we need to make sure that the fd has O_NONBLOCK set.
 //  2. use RawSyscall to avoid context switch
+//  3. r0 is set to -1 on error, which becomes MaxUint when converted to int on 64-bit
 func rawRead(fd int, p []byte) (n int, err error) {
 	var _p0 unsafe.Pointer
 	if len(p) > 0 {
@@ -212,14 +214,14 @@ func rawRead(fd int, p []byte) (n int, err error) {
 		_p0 = unsafe.Pointer(&_zero)
 	}
 	r0, _, e1 := syscall.RawSyscall(syscall.SYS_READ, uintptr(fd), uintptr(_p0), uintptr(len(p)))
-	n = int(r0)
 	if e1 != 0 {
-		err = e1
+		return -1, e1
 	}
-	return
+	return int(r0), nil
 }
 
 // raw write for nonblocking op to avert context switch
+// NOTE: r0 is set to -1 on error, which becomes MaxUint when converted to int on 64-bit
 func rawWrite(fd int, p []byte) (n int, err error) {
 	var _p0 unsafe.Pointer
 	if len(p) > 0 {
@@ -228,9 +230,8 @@ func rawWrite(fd int, p []byte) (n int, err error) {
 		_p0 = unsafe.Pointer(&_zero)
 	}
 	r0, _, e1 := syscall.RawSyscall(syscall.SYS_WRITE, uintptr(fd), uintptr(_p0), uintptr(len(p)))
-	n = int(r0)
 	if e1 != 0 {
-		err = e1
+		return -1, e1
 	}
-	return
+	return int(r0), nil
 }

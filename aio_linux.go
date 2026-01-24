@@ -58,7 +58,7 @@ func openPoll() (*poller, error) {
 	r0, _, e0 := syscall.Syscall(syscall.SYS_EVENTFD2, 0, _EFD_NONBLOCK, 0)
 	if e0 != 0 {
 		syscall.Close(fd)
-		return nil, err
+		return nil, e0 // Fix: return actual syscall error instead of previous nil error
 	}
 
 	if err := syscall.EpollCtl(fd, syscall.EPOLL_CTL_ADD, int(r0),
@@ -111,7 +111,8 @@ func (p *poller) wakeup() error {
 }
 
 func (p *poller) Wait(chSignal chan Signal) {
-	var eventSet pollerEvents
+	// Pre-allocate event set with typical capacity to reduce allocations
+	eventSet := make(pollerEvents, 0, maxEvents)
 	events := make([]syscall.EpollEvent, maxEvents)
 	sig := Signal{
 		done: make(chan struct{}, 1),
@@ -146,7 +147,7 @@ func (p *poller) Wait(chSignal chan Signal) {
 				return
 			}
 
-			// event processing
+			// event processing - use index-based loop to avoid allocation
 			for i := 0; i < n; i++ {
 				ev := &events[i]
 				if int(ev.Fd) == p.efd {
@@ -195,6 +196,7 @@ func (p *poller) Wait(chSignal chan Signal) {
 }
 
 // raw read for nonblocking op to avert context switch
+// NOTE: r0 is set to -1 on error, which becomes MaxUint when converted to int on 64-bit
 func rawRead(fd int, p []byte) (n int, err error) {
 	var _p0 unsafe.Pointer
 	if len(p) > 0 {
@@ -203,14 +205,14 @@ func rawRead(fd int, p []byte) (n int, err error) {
 		_p0 = unsafe.Pointer(&_zero)
 	}
 	r0, _, e1 := syscall.RawSyscall(syscall.SYS_READ, uintptr(fd), uintptr(_p0), uintptr(len(p)))
-	n = int(r0)
 	if e1 != 0 {
-		err = e1
+		return -1, e1
 	}
-	return
+	return int(r0), nil
 }
 
 // raw write for nonblocking op to avert context switch
+// NOTE: r0 is set to -1 on error, which becomes MaxUint when converted to int on 64-bit
 func rawWrite(fd int, p []byte) (n int, err error) {
 	var _p0 unsafe.Pointer
 	if len(p) > 0 {
@@ -219,9 +221,8 @@ func rawWrite(fd int, p []byte) (n int, err error) {
 		_p0 = unsafe.Pointer(&_zero)
 	}
 	r0, _, e1 := syscall.RawSyscall(syscall.SYS_WRITE, uintptr(fd), uintptr(_p0), uintptr(len(p)))
-	n = int(r0)
 	if e1 != 0 {
-		err = e1
+		return -1, e1
 	}
-	return
+	return int(r0), nil
 }

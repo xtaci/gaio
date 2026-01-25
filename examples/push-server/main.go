@@ -29,7 +29,7 @@ import (
 )
 
 func main() {
-	// by simply replace net.Listen with reuseport.Listen, everything is the same as in push-server
+	// By simply replacing net.Listen with reuseport.Listen, the rest stays the same.
 	// ln, err := reuseport.Listen("tcp", "localhost:0")
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
@@ -44,7 +44,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// channel
+	// Channels
 	ticker := time.NewTicker(time.Second)
 	chConn := make(chan net.Conn)
 	chIO := make(chan gaio.OpResult)
@@ -64,19 +64,19 @@ func main() {
 		}
 	}()
 
-	// main logic loop, like your program core loop.
+	// Main logic loop, like your program's core loop.
 	go func() {
 		var conns []net.Conn
 		for {
 			select {
-			case res := <-chIO: // receive IO events from watcher
+			case res := <-chIO: // receive I/O events from watcher
 				if res.Error != nil {
 					continue
 				}
 				conns = append(conns, res.Conn)
 			case t := <-ticker.C: // receive ticker events
 				push := []byte(fmt.Sprintf("%s\n", t))
-				// all conn will receive the same 'push' content
+				// all conns will receive the same 'push' content
 				for _, conn := range conns {
 					w.Write(nil, conn, push)
 				}
@@ -87,7 +87,7 @@ func main() {
 		}
 	}()
 
-	// this loop keeps on accepting connections and send to main loop
+	// This loop keeps accepting connections and sends them to the main loop.
 	for {
 		conn, err := ln.Accept()
 		if err != nil {

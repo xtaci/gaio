@@ -31,21 +31,21 @@ import (
 	"unsafe"
 )
 
-// _EPOLLET value is incorrect in syscall
+// _EPOLLET value is incorrect in syscall.
 const (
 	_EPOLLET      = 0x80000000
 	_EFD_NONBLOCK = 0x800
 )
 
-// poller is a epoll based poller
+// poller is an epoll-based poller.
 type poller struct {
-	cpuid  int32      // the cpu id to bind to
-	mu     sync.Mutex // mutex to protect fd closing
+	cpuid  int32      // the CPU ID to bind to
+	mu     sync.Mutex // mutex to protect fd closure
 	pfd    int        // epoll fd
 	efd    int        // eventfd
 	efdbuf []byte
 
-	// closing signal
+	// shutdown signal
 	die     chan struct{}
 	dieOnce sync.Once
 }
@@ -81,7 +81,7 @@ func openPoll() (*poller, error) {
 	return p, err
 }
 
-// Close the poller
+// Close shuts down the poller.
 func (p *poller) Close() error {
 	p.dieOnce.Do(func() {
 		close(p.die)
@@ -96,12 +96,12 @@ func (p *poller) Watch(fd int) (err error) {
 	return
 }
 
-// wakeup interrupt epoll_wait
+// wakeup interrupts epoll_wait.
 func (p *poller) wakeup() error {
 	p.mu.Lock()
 	if p.efd != -1 {
 		var x uint64 = 1
-		// eventfd has set with EFD_NONBLOCK
+		// eventfd is set with EFD_NONBLOCK
 		_, err := syscall.Write(p.efd, (*(*[8]byte)(unsafe.Pointer(&x)))[:])
 		p.mu.Unlock()
 		return err
@@ -133,7 +133,7 @@ func (p *poller) Wait(chSignal chan Signal) {
 		wSet = syscall.EPOLLOUT
 	)
 
-	// epoll eventloop
+	// epoll event loop
 	for {
 		select {
 		case <-p.die:
@@ -147,7 +147,7 @@ func (p *poller) Wait(chSignal chan Signal) {
 				return
 			}
 
-			// event processing - use index-based loop to avoid allocation
+			// Event processing - use an index-based loop to avoid allocation.
 			for i := 0; i < n; i++ {
 				ev := &events[i]
 				if int(ev.Fd) == p.efd {
@@ -195,7 +195,7 @@ func (p *poller) Wait(chSignal chan Signal) {
 	}
 }
 
-// raw read for nonblocking op to avert context switch
+// rawRead performs non-blocking reads to avoid context switches.
 // NOTE: r0 is set to -1 on error, which becomes MaxUint when converted to int on 64-bit
 func rawRead(fd int, p []byte) (n int, err error) {
 	var _p0 unsafe.Pointer
@@ -211,7 +211,7 @@ func rawRead(fd int, p []byte) (n int, err error) {
 	return int(r0), nil
 }
 
-// raw write for nonblocking op to avert context switch
+// rawWrite performs non-blocking writes to avoid context switches.
 // NOTE: r0 is set to -1 on error, which becomes MaxUint when converted to int on 64-bit
 func rawWrite(fd int, p []byte) (n int, err error) {
 	var _p0 unsafe.Pointer

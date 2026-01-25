@@ -31,26 +31,26 @@ import (
 )
 
 const (
-	// poller wait max events count
+	// Maximum number of events per poll.
 	maxEvents = 4096
-	// default internal buffer size
+	// Default internal buffer size.
 	defaultInternalBufferSize = 65536
 )
 
 var (
 	// ErrUnsupported means the watcher cannot support this type of connection
 	ErrUnsupported = errors.New("unsupported connection type")
-	// ErrNoRawConn means the connection has not implemented SyscallConn
+	// ErrNoRawConn means the connection does not implement SyscallConn
 	ErrNoRawConn = errors.New("net.Conn does implement net.RawConn")
 	// ErrWatcherClosed means the watcher is closed
 	ErrWatcherClosed = errors.New("watcher closed")
-	// ErrPollerClosed suggest that poller has closed
+	// ErrPollerClosed suggests that the poller has closed
 	ErrPollerClosed = errors.New("poller closed")
-	// ErrConnClosed means the user called Free() on related connection
+	// ErrConnClosed means the user called Free() on the related connection
 	ErrConnClosed = errors.New("connection closed")
-	// ErrDeadline means the specific operation has exceeded deadline before completion
+	// ErrDeadline means the operation exceeded its deadline before completion
 	ErrDeadline = errors.New("operation exceeded deadline")
-	// ErrEmptyBuffer means the buffer is nil
+	// ErrEmptyBuffer means the buffer is empty
 	ErrEmptyBuffer = errors.New("empty buffer")
 	// ErrCPUID indicates the given cpuid is invalid
 	ErrCPUID = errors.New("no such core")
@@ -60,7 +60,7 @@ var (
 	zeroTime = time.Time{}
 )
 
-// OpType defines Operation Type
+// OpType defines the operation type.
 type OpType int
 
 const (
@@ -68,7 +68,7 @@ const (
 	OpRead OpType = iota
 	// OpWrite means the aiocb is a write operation
 	OpWrite
-	// internal operation to delete an related resource
+	// Internal operation to delete a related resource
 	opDelete
 )
 
@@ -77,69 +77,67 @@ const (
 	EV_WRITE = 0x2
 )
 
-// event represent a file descriptor event
+// event represents a file descriptor event
 type event struct {
 	ident int  // identifier of this event, usually file descriptor
 	ev    int8 // event mark
 }
 
-// events from epoll_wait passing to loop,should be in batch for atomicity.
-// and batch processing is the key to amortize context switching costs for
-// tiny messages.
+// Events from epoll_wait are passed to the loop in batches for atomicity.
+// Batch processing amortizes context-switching costs for tiny messages.
 type pollerEvents []event
 
-// Signal is a package of events when you've done with events, you should
-// send a signal to done channel.
+// Signal packages events; when processing is done, signal on the done channel.
 type Signal struct {
 	events pollerEvents
 	done   chan struct{}
 }
 
-// OpResult is the result of an aysnc-io
+// OpResult is the result of an async I/O operation.
 type OpResult struct {
 	// Operation Type
 	Operation OpType
-	// User context associated with this requests
+	// User context associated with this request
 	Context interface{}
 	// Related net.Conn to this result
 	Conn net.Conn
 	// Buffer points to user's supplied buffer or watcher's internal swap buffer
 	Buffer []byte
-	// IsSwapBuffer marks true if the buffer internal one
+	// IsSwapBuffer marks true if the buffer is an internal swap buffer
 	IsSwapBuffer bool
 	// Number of bytes sent or received, Buffer[:Size] is the content sent or received.
 	Size int
-	// IO error,timeout error
+	// I/O error or timeout error
 	Error error
 }
 
-// aiocb contains all info for a single request
+// aiocb contains all information for a single request
 type aiocb struct {
 	l          *list.List // list where this request belongs to
 	elem       *list.Element
 	ctx        interface{} // user context associated with this request
 	ptr        uintptr     // pointer to conn
 	op         OpType      // read or write
-	conn       net.Conn    // associated connection for nonblocking-io
+	conn       net.Conn    // associated connection for non-blocking I/O
 	err        error       // error for last operation
 	size       int         // size received or sent
 	buffer     []byte
-	backBuffer [16]byte // per request small byte buffer used when internal buffer exhausted
-	readFull   bool     // requests will read full or error
-	useSwap    bool     // mark if the buffer is internal swap buffer
-	idx        int      // index for heap op
+	backBuffer [16]byte // per-request small buffer used when internal buffer is exhausted
+	readFull   bool     // requests will read full or return an error
+	useSwap    bool     // marks whether the buffer is an internal swap buffer
+	idx        int      // index for heap ops
 	deadline   time.Time
 }
 
-// Watcher will monitor events and process async-io request(s),
+// Watcher monitors events and processes async I/O requests.
 type Watcher struct {
-	// a wrapper for watcher for gc purpose
+	// A wrapper for watcher for GC purposes
 	*watcher
 }
 
 var _zero uintptr
 
-// dupconn use RawConn to dup() file descriptor
+// dupconn uses RawConn to dup() a file descriptor
 func dupconn(conn net.Conn) (newfd int, err error) {
 	sc, ok := conn.(interface {
 		SyscallConn() (syscall.RawConn, error)

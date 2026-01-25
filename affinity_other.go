@@ -24,6 +24,6 @@
 
 package gaio
 
-// bind thread & goroutine to a specific CPU
+// bind the thread and goroutine to a specific CPU
 func setAffinity(cpuId int32) {
 }

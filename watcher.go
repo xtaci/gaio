@@ -608,6 +608,7 @@ func (w *watcher) loop() {
 			for w.timeouts.Len() > 0 {
 				pcb := w.timeouts[0]
 				// Check if the aiocb has already been removed (idx == -1 means already delivered)
+				// NOTE(xtaci): It should not happen.
 				if pcb.idx == -1 {
 					heap.Pop(&w.timeouts)
 					continue

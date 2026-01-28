@@ -27,12 +27,12 @@ import (
 	"container/list"
 	"io"
 	"net"
-	"reflect"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unsafe"
 )
 
 var (
@@ -93,6 +93,9 @@ type watcher struct {
 	// Channel for setting CPU affinity in the watcher loop
 	chCPUID chan int32
 
+	// Pre-allocated results slice to reduce allocations in WaitIO
+	results []OpResult
+
 	// Maps and structures for managing file descriptors and connections
 	descs      map[int]*fdDesc // Map of file descriptors to their associated fdDesc
 	connIdents map[uintptr]int // Map of net.Conn pointers to unique identifiers (avoids GC issues)
@@ -148,6 +151,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.pendingCreate = make([]*aiocb, 0, 128)
 	w.pendingProcessing = make([]*aiocb, 0, 128)
 	w.recycles = make([]*aiocb, 0, 128)
+	w.results = make([]OpResult, 0, 128)
 
 	// Initialize data structures for managing file descriptors and connections
 	// Pre-allocate maps with reasonable initial capacity for C10K scenarios
@@ -251,16 +255,19 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 	}
 	w.recycles = w.recycles[:0]
 
+	// Reuse pre-allocated results slice to reduce allocations
+	w.results = w.results[:0]
+
 	for {
 		select {
 		case pcb := <-w.chResults:
-			r = append(r, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+			w.results = append(w.results, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
 			// avoid memory leak
 			pcb.ctx = nil
 			w.recycles = append(w.recycles, pcb)
 			for len(w.chResults) > 0 {
 				pcb := <-w.chResults
-				r = append(r, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
+				w.results = append(w.results, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
 				// avoid memory leak
 				pcb.ctx = nil
 				w.recycles = append(w.recycles, pcb)
@@ -293,7 +300,7 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 			// notify buffer swapping.
 			w.notifyShouldSwap()
 
-			return r, nil
+			return w.results, nil
 		case <-w.die:
 			return nil, ErrWatcherClosed
 		}
@@ -352,16 +359,15 @@ func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byt
 	case <-w.die:
 		return ErrWatcherClosed
 	default:
-		// Fast path: get pointer using unsafe instead of reflect for performance
 		if conn == nil {
 			return ErrUnsupported
 		}
-		// Use reflect only for pointer extraction - interface must be pointer to net.Conn
-		rv := reflect.ValueOf(conn)
-		if rv.Kind() != reflect.Ptr {
+		// Fast path: get pointer using unsafe instead of reflect for performance
+		// net.Conn is always an interface containing a pointer to the underlying type
+		ptr := *(*uintptr)(unsafe.Pointer(&conn))
+		if ptr == 0 {
 			return ErrUnsupported
 		}
-		ptr := rv.Pointer()
 
 		cb := aiocbPool.Get().(*aiocb)
 		*cb = aiocb{op: op, ptr: ptr, size: 0, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
@@ -646,7 +652,8 @@ func (w *watcher) handleGC() {
 	w.gcMutex.Lock()
 	if len(w.gc) > 0 {
 		for _, c := range w.gc {
-			ptr := reflect.ValueOf(c).Pointer()
+			// Use unsafe to get pointer instead of reflect for performance
+			ptr := *(*uintptr)(unsafe.Pointer(&c))
 			if ident, ok := w.connIdents[ptr]; ok {
 				w.releaseConn(ident)
 			}

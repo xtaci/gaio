@@ -562,7 +562,7 @@ func (w *watcher) releaseConn(ident int) {
 		fdDescPool.Put(desc)
 
 		// Close the socket file descriptor duplicated from net.Conn
-		syscall.Close(ident)
+		closeFd(ident)
 	}
 }
 
@@ -703,7 +703,7 @@ PENDING:
 			// Register the fd with epoll/kqueue before closing the original.
 			if werr := w.pfd.Watch(dupfd); werr != nil {
 				// ensure we don't leak the duplicated fd
-				syscall.Close(dupfd)
+				closeFd(dupfd)
 				pcb.err = werr
 				w.deliver(pcb)
 				continue

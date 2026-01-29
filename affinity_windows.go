@@ -20,10 +20,31 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-//go:build !linux && !windows
+//go:build windows
 
 package gaio
 
-// bind the thread and goroutine to a specific CPU
+import (
+	"runtime"
+	"syscall"
+	"unsafe"
+)
+
+var (
+	kernel32                  = syscall.NewLazyDLL("kernel32.dll")
+	procSetThreadAffinityMask = kernel32.NewProc("SetThreadAffinityMask")
+	procGetCurrentThread      = kernel32.NewProc("GetCurrentThread")
+)
+
+// setAffinity binds the current goroutine and its underlying thread to a specific CPU.
+// On Windows, this uses SetThreadAffinityMask.
 func setAffinity(cpuId int32) {
+	runtime.LockOSThread() // Lock the current goroutine to its current thread
+
+	// Get pseudo handle for current thread
+	thread, _, _ := procGetCurrentThread.Call()
+
+	// Create a bitmask with only the target CPU bit set
+	var mask uintptr = 1 << uint(cpuId)
+	procSetThreadAffinityMask.Call(thread, uintptr(unsafe.Pointer(&mask)))
 }

@@ -20,10 +20,41 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-//go:build !linux && !windows
+//go:build !windows
 
 package gaio
 
-// bind the thread and goroutine to a specific CPU
-func setAffinity(cpuId int32) {
+import (
+	"net"
+	"syscall"
+)
+
+// dupconn uses RawConn to dup() a file descriptor
+func dupconn(conn net.Conn) (newfd int, err error) {
+	sc, ok := conn.(interface {
+		SyscallConn() (syscall.RawConn, error)
+	})
+	if !ok {
+		return -1, ErrUnsupported
+	}
+	rc, err := sc.SyscallConn()
+	if err != nil {
+		return -1, ErrUnsupported
+	}
+
+	// Control() guarantees the integrity of file descriptor
+	ec := rc.Control(func(fd uintptr) {
+		newfd, err = syscall.Dup(int(fd))
+	})
+
+	if ec != nil {
+		return -1, ec
+	}
+
+	return
+}
+
+// closeFd closes a file descriptor (Unix)
+func closeFd(fd int) error {
+	return syscall.Close(fd)
 }

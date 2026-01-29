@@ -593,14 +593,23 @@ func Test4k(t *testing.T) {
 }
 
 func Test8k(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping on Windows due to system connection limits")
+	}
 	testParallel(t, 8192, 1024)
 }
 
 func Test10k(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping on Windows due to system connection limits")
+	}
 	testParallel(t, 10240, 1024)
 }
 
 func Test12k(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping on Windows due to system connection limits")
+	}
 	testParallel(t, 12288, 1024)
 }
 
@@ -609,10 +618,16 @@ func Test1kTiny(t *testing.T) {
 }
 
 func Test2kTiny(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping on Windows due to system connection limits")
+	}
 	testParallel(t, 2048, 16)
 }
 
 func Test4kTiny(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping on Windows due to system connection limits")
+	}
 	testParallel(t, 4096, 16)
 }
 
@@ -683,10 +698,16 @@ func testParallel(t *testing.T, par int, msgsize int) {
 }
 
 func Test10kRandomSwapBuffer(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping on Windows due to system connection limits")
+	}
 	testParallelRandomInternal(t, 10240, 1024, false)
 }
 
 func Test10kCompleteSwapBuffer(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping on Windows due to system connection limits")
+	}
 	testParallelRandomInternal(t, 10240, 1024, true)
 }
 

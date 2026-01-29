@@ -250,21 +250,29 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 	clear(w.recycles)
 	w.recycles = w.recycles[:0]
 
-	// Reuse pre-allocated results slice to reduce allocations
+	// Clear previous results to allow GC of Conn objects
+	// This is important because the underlying array may still hold references
+	for i := range w.results {
+		w.results[i].Conn = nil
+		w.results[i].Context = nil
+		w.results[i].Buffer = nil
+	}
 	w.results = w.results[:0]
 
 	for {
 		select {
 		case pcb := <-w.chResults:
 			w.results = append(w.results, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
-			// avoid memory leak
+			// Clear references to allow GC of connection objects
 			pcb.ctx = nil
+			pcb.conn = nil
 			w.recycles = append(w.recycles, pcb)
 			for len(w.chResults) > 0 {
 				pcb := <-w.chResults
 				w.results = append(w.results, OpResult{Operation: pcb.op, Conn: pcb.conn, IsSwapBuffer: pcb.useSwap, Buffer: pcb.buffer, Size: pcb.size, Error: pcb.err, Context: pcb.ctx})
-				// avoid memory leak
+				// Clear references to allow GC of connection objects
 				pcb.ctx = nil
+				pcb.conn = nil
 				w.recycles = append(w.recycles, pcb)
 			}
 
@@ -357,9 +365,11 @@ func (w *watcher) aioCreate(ctx any, op OpType, conn net.Conn, buf []byte, deadl
 		if conn == nil {
 			return ErrUnsupported
 		}
-		// Fast path: get pointer using unsafe instead of reflect for performance
-		// net.Conn is always an interface containing a pointer to the underlying type
-		ptr := *(*uintptr)(unsafe.Pointer(&conn))
+		// Get the data pointer from the interface value.
+		// An interface in Go is represented as two words: (type, data).
+		// We need the data pointer (second word) to uniquely identify the connection object.
+		iface := *(*[2]uintptr)(unsafe.Pointer(&conn))
+		ptr := iface[1] // data pointer
 		if ptr == 0 {
 			return ErrUnsupported
 		}
@@ -594,6 +604,11 @@ func (w *watcher) loop() {
 			// handlePending is a synchronous operation to process all pending requests
 			w.handlePending(w.pendingProcessing)
 
+			// Clear pendingProcessing after handling to release pcb references
+			// This is important for GC - pcb.conn references must be released
+			clear(w.pendingProcessing)
+			w.pendingProcessing = w.pendingProcessing[:0]
+
 		case sig := <-w.chSignal: // Poller events
 			w.handleEvents(sig.events)
 			select {
@@ -640,23 +655,26 @@ func (w *watcher) loop() {
 }
 
 // handleGC processes the garbage collection of net.Conn objects.
+// This function is called when a finalizer is triggered on a net.Conn object.
+// The finalizer adds the connection to w.gc slice and notifies this handler.
 func (w *watcher) handleGC() {
-	runtime.GC()
 	w.gcMutex.Lock()
-	if len(w.gc) > 0 {
-		for _, c := range w.gc {
-			// Use unsafe to get pointer instead of reflect for performance
-			ptr := *(*uintptr)(unsafe.Pointer(&c))
-			if ident, ok := w.connIdents[ptr]; ok {
-				w.releaseConn(ident)
-			}
-			// make sure net.Conn is reachable before releaseConn
-			runtime.KeepAlive(c)
+	defer w.gcMutex.Unlock()
+
+	for _, c := range w.gc {
+		// Get data pointer from interface (second word)
+		iface := *(*[2]uintptr)(unsafe.Pointer(&c))
+		ptr := iface[1]
+		if ident, ok := w.connIdents[ptr]; ok {
+			w.releaseConn(ident)
 		}
-		w.gcClosed += uint32(len(w.gc))
-		w.gc = w.gc[:0]
+		// make sure net.Conn is reachable before releaseConn
+		runtime.KeepAlive(c)
 	}
-	w.gcMutex.Unlock()
+	w.gcClosed += uint32(len(w.gc))
+	// Clear the slice to release references
+	clear(w.gc)
+	w.gc = w.gc[:0]
 }
 
 // handlePending processes new requests, acting as a front desk.

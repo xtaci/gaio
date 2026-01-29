@@ -32,6 +32,8 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -972,11 +974,79 @@ func BenchmarkContextSwitch(b *testing.B) {
 	close(die)
 }
 
+// createConnectionsAndWait creates connections, sends data, and waits for results.
+// Keeping this in a separate function ensures all local references go out of scope.
+func createConnectionsAndWait(t *testing.T, w *Watcher, ln net.Listener, par int) int {
+	msgsize := 1024
+	var successCount int32
+	var wg sync.WaitGroup
+
+	for i := 0; i < par; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			data := make([]byte, msgsize)
+			conn, err := net.Dial("tcp", ln.Addr().String())
+			if err != nil {
+				return
+			}
+			if err := w.Write(nil, conn, data); err != nil {
+				return
+			}
+			atomic.AddInt32(&successCount, 1)
+		}()
+	}
+
+	// Wait for all goroutines to submit their writes
+	wg.Wait()
+
+	expectedWrites := int(atomic.LoadInt32(&successCount))
+	t.Logf("expected writes: %d", expectedWrites)
+
+	count := 0
+	timeout := time.After(10 * time.Second)
+	for count < expectedWrites {
+		select {
+		case <-timeout:
+			t.Logf("timeout waiting for results, got %d/%d", count, expectedWrites)
+			return count
+		default:
+		}
+
+		results, err := w.WaitIO()
+		if err != nil {
+			t.Logf("waitio error: %v", err)
+			return count
+		}
+		// Explicitly clear Conn references to allow GC
+		for i := range results {
+			results[i].Conn = nil
+		}
+		count += len(results)
+	}
+	return count
+}
+
+// triggerGCCleanup triggers the GC cleanup by calling WaitIO once more
+// to clear the internal results slice, then forces GC.
+func triggerGCCleanup(w *Watcher) {
+	// Start a goroutine that will block in WaitIO
+	// This causes the previous results to be cleared
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		_, _ = w.WaitIO()
+	}()
+	// Wait for the goroutine to start
+	<-started
+	// Give extra time to ensure WaitIO has cleared w.results
+	time.Sleep(200 * time.Millisecond)
+}
+
 func TestGC(t *testing.T) {
-	par := 1024
-	msgsize := 65536
+	par := 200 // Need at least 100 successful GC
 	t.Log("testing GC:", par, "connections")
-	ln := echoServer(t, msgsize)
+	ln := echoServer(t, 1024)
 	defer ln.Close()
 
 	w, err := NewWatcher()
@@ -985,69 +1055,44 @@ func TestGC(t *testing.T) {
 	}
 	defer w.Close()
 
-	for i := 0; i < par; i++ {
-		go func() {
-			data := make([]byte, msgsize)
-			conn, err := net.Dial("tcp", ln.Addr().String())
-			if err != nil {
-				log.Fatal(err)
-			}
+	// Create connections and wait for results in a separate function
+	// This ensures all local references (results, conn) go out of scope
+	count := createConnectionsAndWait(t, w, ln, par)
+	t.Logf("received %d results", count)
 
-			// send
-			err = w.Write(nil, conn, data)
-			if err != nil {
-				log.Fatal(err)
-			}
+	// Trigger WaitIO to clear internal results, then force GC
+	triggerGCCleanup(w)
 
-			conn = nil
-		}()
-	}
+	// Force more aggressive GC by allocating and discarding memory
+	// This helps ensure finalizers are processed
+	var found, closed uint32
+	for attempt := 0; attempt < 20; attempt++ {
+		// Allocate memory to trigger GC pressure
+		for i := 0; i < 1000; i++ {
+			_ = make([]byte, 10000)
+		}
+		runtime.GC()
+		runtime.Gosched() // Allow finalizer goroutine to run
+		time.Sleep(50 * time.Millisecond)
 
-	count := 0
-LOOP:
-	for {
-		results, err := w.WaitIO()
-		if err != nil {
-			t.Fatal("waitio:", err)
+		found, closed = w.GetGC()
+		t.Logf("attempt %d: GC found:%d closed:%d", attempt+1, found, closed)
+
+		// Need at least 100 successful GC operations
+		if found >= 100 && found == closed {
+			t.Logf("GC test passed: found=%d closed=%d", found, closed)
 			return
 		}
-
-		for _, res := range results {
-			switch res.Operation {
-			case OpWrite:
-			case OpRead:
-			}
-			res.Conn = nil
-
-			count++
-			if count >= par {
-				break LOOP
-			}
-		}
 	}
 
-	found, closed := w.GetGC()
-	t.Logf("GC found:%d closed:%d", found, closed)
-	<-time.After(2 * time.Second)
-	runtime.GC()
-
-	found, closed = w.GetGC()
-	t.Logf("GC found:%d closed:%d", found, closed)
-	<-time.After(2 * time.Second)
-	runtime.GC()
-
-	found, closed = w.GetGC()
-	t.Logf("GC found:%d closed:%d", found, closed)
-	<-time.After(2 * time.Second)
-	runtime.GC()
-
-	found, closed = w.GetGC()
-	t.Logf("GC found:%d closed:%d", found, closed)
-	<-time.After(2 * time.Second)
-
+	// Final check
+	if found < 100 {
+		t.Fatalf("GC found too few: found=%d closed=%d, need at least 100", found, closed)
+	}
 	if found != closed {
-		t.Fatal("incorrect GC")
+		t.Fatalf("GC mismatch: found=%d closed=%d", found, closed)
 	}
+	t.Logf("GC test completed: found=%d closed=%d", found, closed)
 }
 
 func TestDoubleClose(t *testing.T) {

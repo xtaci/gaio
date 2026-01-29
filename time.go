@@ -46,19 +46,19 @@ func (h timedHeap) Swap(i, j int) {
 
 // Push adds an element to the heap.
 // This method is used by the heap.Push function.
-func (h *timedHeap) Push(x interface{}) {
-	*h = append(*h, x.(*aiocb))
-	n := len(*h)
-	(*h)[n-1].idx = n - 1
+func (h *timedHeap) Push(x any) {
+	cb := x.(*aiocb)
+	cb.idx = len(*h)
+	*h = append(*h, cb)
 }
 
 // Pop removes and returns the element with the highest priority (lowest deadline).
 // This method is used by the heap.Pop function.
-func (h *timedHeap) Pop() interface{} {
+func (h *timedHeap) Pop() any {
 	old := *h
 	n := len(old)
 	x := old[n-1]
 	old[n-1] = nil // Avoid memory leak
-	*h = old[0 : n-1]
+	*h = old[:n-1]
 	return x
 }

@@ -83,25 +83,23 @@ func (p *poller) Watch(fd int) error {
 	p.watchQueueMutex.Lock()
 	p.watchQueue = append(p.watchQueue, fd)
 	p.watchQueueMutex.Unlock()
-
 	return p.wakeup()
 }
 
 // wakeup interrupts kevent.
 func (p *poller) wakeup() error {
 	p.mu.Lock()
-	if p.fd != -1 {
-		// notify poller
-		_, err := syscall.Kevent(p.fd, []syscall.Kevent_t{{
-			Ident:  0,
-			Filter: syscall.EVFILT_USER,
-			Fflags: syscall.NOTE_TRIGGER,
-		}}, nil, nil)
-		p.mu.Unlock()
-		return err
+	defer p.mu.Unlock()
+	if p.fd == -1 {
+		return ErrPollerClosed
 	}
-	p.mu.Unlock()
-	return ErrPollerClosed
+	// notify poller
+	_, err := syscall.Kevent(p.fd, []syscall.Kevent_t{{
+		Ident:  0,
+		Filter: syscall.EVFILT_USER,
+		Fflags: syscall.NOTE_TRIGGER,
+	}}, nil, nil)
+	return err
 }
 
 // Wait waits for events on the file descriptors.

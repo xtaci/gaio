@@ -89,25 +89,23 @@ func (p *poller) Close() error {
 	return p.wakeup()
 }
 
-func (p *poller) Watch(fd int) (err error) {
+func (p *poller) Watch(fd int) error {
 	p.mu.Lock()
-	err = syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, int(fd), &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
-	p.mu.Unlock()
-	return
+	defer p.mu.Unlock()
+	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, fd, &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
 }
 
 // wakeup interrupts epoll_wait.
 func (p *poller) wakeup() error {
 	p.mu.Lock()
-	if p.efd != -1 {
-		var x uint64 = 1
-		// eventfd is set with EFD_NONBLOCK
-		_, err := syscall.Write(p.efd, (*(*[8]byte)(unsafe.Pointer(&x)))[:])
-		p.mu.Unlock()
-		return err
+	defer p.mu.Unlock()
+	if p.efd == -1 {
+		return ErrPollerClosed
 	}
-	p.mu.Unlock()
-	return ErrPollerClosed
+	var x uint64 = 1
+	// eventfd is set with EFD_NONBLOCK
+	_, err := syscall.Write(p.efd, (*(*[8]byte)(unsafe.Pointer(&x)))[:])
+	return err
 }
 
 func (p *poller) Wait(chSignal chan Signal) {

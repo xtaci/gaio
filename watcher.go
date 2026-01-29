@@ -36,18 +36,13 @@ import (
 )
 
 var (
-	aiocbPool  sync.Pool
-	fdDescPool sync.Pool
+	aiocbPool = sync.Pool{
+		New: func() any { return new(aiocb) },
+	}
+	fdDescPool = sync.Pool{
+		New: func() any { return new(fdDesc) },
+	}
 )
-
-func init() {
-	aiocbPool.New = func() interface{} {
-		return new(aiocb)
-	}
-	fdDescPool.New = func() interface{} {
-		return new(fdDesc)
-	}
-}
 
 // fdDesc holds all data structures associated with a file descriptor (fd).
 // It maintains lists of pending read and write requests, as well as a pointer
@@ -247,12 +242,12 @@ func (w *watcher) notifyShouldSwap() {
 // 2. It waits for completion notifications from the chResults channel and accumulates results.
 // 3. It ensures that the buffer in OpResult is not overwritten until the next call to WaitIO.
 func (w *watcher) WaitIO() (r []OpResult, err error) {
-	// Recycle previous aiocb objects.
-	for k := range w.recycles {
-		aiocbPool.Put(w.recycles[k])
-		// avoid memory leak
-		w.recycles[k] = nil
+	// Recycle previous aiocb objects using batch put for better performance
+	for _, cb := range w.recycles {
+		aiocbPool.Put(cb)
 	}
+	// Clear the slice to avoid memory leaks while keeping capacity
+	clear(w.recycles)
 	w.recycles = w.recycles[:0]
 
 	// Reuse pre-allocated results slice to reduce allocations
@@ -309,20 +304,20 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 
 // Read submits an asynchronous read request on 'conn' with context 'ctx' and optional buffer 'buf'.
 // If 'buf' is nil, an internal buffer is used. 'ctx' is a user-defined value passed unchanged.
-func (w *watcher) Read(ctx interface{}, conn net.Conn, buf []byte) error {
+func (w *watcher) Read(ctx any, conn net.Conn, buf []byte) error {
 	return w.aioCreate(ctx, OpRead, conn, buf, zeroTime, false)
 }
 
 // ReadTimeout submits an asynchronous read request on 'conn' with context 'ctx' and buffer 'buf',
 // expecting to read some bytes before 'deadline'. 'ctx' is a user-defined value passed unchanged.
-func (w *watcher) ReadTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
+func (w *watcher) ReadTimeout(ctx any, conn net.Conn, buf []byte, deadline time.Time) error {
 	return w.aioCreate(ctx, OpRead, conn, buf, deadline, false)
 }
 
 // ReadFull submits an asynchronous read request on 'conn' with context 'ctx' and buffer 'buf',
 // expecting to fill the buffer before 'deadline'. 'ctx' is a user-defined value passed unchanged.
 // 'buf' must not be nil for ReadFull.
-func (w *watcher) ReadFull(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
+func (w *watcher) ReadFull(ctx any, conn net.Conn, buf []byte, deadline time.Time) error {
 	if len(buf) == 0 {
 		return ErrEmptyBuffer
 	}
@@ -331,7 +326,7 @@ func (w *watcher) ReadFull(ctx interface{}, conn net.Conn, buf []byte, deadline 
 
 // Write submits an asynchronous write request on 'conn' with context 'ctx' and buffer 'buf'.
 // 'ctx' is a user-defined value passed unchanged.
-func (w *watcher) Write(ctx interface{}, conn net.Conn, buf []byte) error {
+func (w *watcher) Write(ctx any, conn net.Conn, buf []byte) error {
 	if len(buf) == 0 {
 		return ErrEmptyBuffer
 	}
@@ -340,7 +335,7 @@ func (w *watcher) Write(ctx interface{}, conn net.Conn, buf []byte) error {
 
 // WriteTimeout submits an asynchronous write request on 'conn' with context 'ctx' and buffer 'buf',
 // expecting to complete writing before 'deadline'. 'ctx' is a user-defined value passed unchanged.
-func (w *watcher) WriteTimeout(ctx interface{}, conn net.Conn, buf []byte, deadline time.Time) error {
+func (w *watcher) WriteTimeout(ctx any, conn net.Conn, buf []byte, deadline time.Time) error {
 	if len(buf) == 0 {
 		return ErrEmptyBuffer
 	}
@@ -354,7 +349,7 @@ func (w *watcher) Free(conn net.Conn) error {
 
 // aioCreate initiates an asynchronous IO operation with the given parameters.
 // It creates an aiocb structure and adds it to the pending queue, then notifies the watcher.
-func (w *watcher) aioCreate(ctx interface{}, op OpType, conn net.Conn, buf []byte, deadline time.Time, readfull bool) error {
+func (w *watcher) aioCreate(ctx any, op OpType, conn net.Conn, buf []byte, deadline time.Time, readfull bool) error {
 	select {
 	case <-w.die:
 		return ErrWatcherClosed
@@ -592,9 +587,7 @@ func (w *watcher) loop() {
 			// Swap w.pendingCreate with w.pendingProcessing
 			w.pendingMutex.Lock()
 			w.pendingCreate, w.pendingProcessing = w.pendingProcessing, w.pendingCreate
-			for i := 0; i < len(w.pendingCreate); i++ {
-				w.pendingCreate[i] = nil
-			}
+			clear(w.pendingCreate) // Clear to avoid memory leaks
 			w.pendingCreate = w.pendingCreate[:0]
 			w.pendingMutex.Unlock()
 

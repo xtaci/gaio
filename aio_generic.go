@@ -98,7 +98,7 @@ type OpResult struct {
 	// Operation Type
 	Operation OpType
 	// User context associated with this request
-	Context interface{}
+	Context any
 	// Related net.Conn to this result
 	Conn net.Conn
 	// Buffer points to user's supplied buffer or watcher's internal swap buffer
@@ -115,12 +115,12 @@ type OpResult struct {
 type aiocb struct {
 	l          *list.List // list where this request belongs to
 	elem       *list.Element
-	ctx        interface{} // user context associated with this request
-	ptr        uintptr     // pointer to conn
-	op         OpType      // read or write
-	conn       net.Conn    // associated connection for non-blocking I/O
-	err        error       // error for last operation
-	size       int         // size received or sent
+	ctx        any      // user context associated with this request
+	ptr        uintptr  // pointer to conn
+	op         OpType   // read or write
+	conn       net.Conn // associated connection for non-blocking I/O
+	err        error    // error for last operation
+	size       int      // size received or sent
 	buffer     []byte
 	backBuffer [16]byte // per-request small buffer used when internal buffer is exhausted
 	readFull   bool     // requests will read full or return an error

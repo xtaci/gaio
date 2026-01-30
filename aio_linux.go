@@ -129,6 +129,7 @@ func (p *poller) Wait(chSignal chan Signal) {
 	const (
 		rSet = syscall.EPOLLIN | syscall.EPOLLRDHUP
 		wSet = syscall.EPOLLOUT
+		eSet = syscall.EPOLLERR | syscall.EPOLLHUP
 	)
 
 	// epoll event loop
@@ -156,6 +157,11 @@ func (p *poller) Wait(chSignal chan Signal) {
 					}
 				} else {
 					e := event{ident: int(ev.Fd)}
+
+					// EPOLLERR/EPOLLHUP should wake both read and write waiters.
+					if ev.Events&eSet != 0 {
+						e.ev |= EV_READ | EV_WRITE
+					}
 
 					// EPOLLRDHUP (since Linux 2.6.17)
 					// Stream socket peer closed connection, or shut down writing

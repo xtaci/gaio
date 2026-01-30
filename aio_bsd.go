@@ -156,7 +156,10 @@ func (p *poller) Wait(chSignal chan Signal) {
 				ev := &events[i]
 				if ev.Ident != 0 {
 					e := event{ident: int(ev.Ident)}
-					if ev.Filter == syscall.EVFILT_READ {
+					if ev.Flags&syscall.EV_ERROR != 0 {
+						// Wake both sides on error to let upper layers handle cleanup.
+						e.ev |= EV_READ | EV_WRITE
+					} else if ev.Filter == syscall.EVFILT_READ {
 						e.ev |= EV_READ
 						// https://golang.org/src/runtime/netpoll_kqueue.go
 						// On some systems when the read end of a pipe

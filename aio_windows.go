@@ -237,8 +237,16 @@ func createSocketPair() (reader, writer uintptr, err error) {
 	}
 
 	// Set non-blocking mode
-	setNonBlocking(readerFd)
-	setNonBlocking(writerFd)
+	if err := setNonBlocking(readerFd); err != nil {
+		closeSocket(readerFd)
+		closeSocket(writerFd)
+		return 0, 0, err
+	}
+	if err := setNonBlocking(writerFd); err != nil {
+		closeSocket(readerFd)
+		closeSocket(writerFd)
+		return 0, 0, err
+	}
 
 	return readerFd, writerFd, nil
 }
@@ -481,6 +489,12 @@ func (p *poller) Wait(chSignal chan Signal) {
 							break
 						}
 					}
+					continue
+				}
+
+				// Remove invalid sockets from poll set
+				if pfd.revents&_POLLNVAL != 0 {
+					p.unwatch(pfd.fd)
 					continue
 				}
 

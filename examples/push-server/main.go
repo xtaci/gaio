@@ -75,7 +75,7 @@ func main() {
 				}
 				conns = append(conns, res.Conn)
 			case t := <-ticker.C: // receive ticker events
-				push := []byte(fmt.Sprintf("%s\n", t))
+				push := fmt.Appendf(nil, "%s\n", t)
 				// all conns will receive the same 'push' content
 				for _, conn := range conns {
 					w.Write(nil, conn, push)

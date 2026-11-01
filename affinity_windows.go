@@ -36,15 +36,15 @@ var (
 	procGetCurrentThread      = kernel32.NewProc("GetCurrentThread")
 )
 
-// setAffinity binds the current goroutine and its underlying thread to a specific CPU.
-// On Windows, this uses SetThreadAffinityMask.
+// setAffinity pins the current goroutine to its OS thread and asks Windows to
+// restrict that thread to the specified CPU.
 func setAffinity(cpuId int32) {
-	runtime.LockOSThread() // Lock the current goroutine to its current thread
+	runtime.LockOSThread()
 
-	// Get pseudo handle for current thread
+	// Get the pseudo-handle for the current thread.
 	thread, _, _ := procGetCurrentThread.Call()
 
-	// Create a bitmask with only the target CPU bit set
+	// Set only the bit corresponding to the target CPU.
 	var mask uintptr = 1 << uint(cpuId)
 	procSetThreadAffinityMask.Call(thread, uintptr(unsafe.Pointer(&mask)))
 }

@@ -29,7 +29,7 @@ import (
 	"syscall"
 )
 
-// dupconn uses RawConn to dup() a file descriptor
+// dupconn duplicates the file descriptor exposed by conn's RawConn.
 func dupconn(conn net.Conn) (newfd int, err error) {
 	sc, ok := conn.(interface {
 		SyscallConn() (syscall.RawConn, error)
@@ -54,7 +54,7 @@ func dupconn(conn net.Conn) (newfd int, err error) {
 	return
 }
 
-// closeFd closes a file descriptor (Unix)
+// closeFd closes a Unix file descriptor.
 func closeFd(fd int) error {
 	return syscall.Close(fd)
 }

@@ -31,7 +31,7 @@ import (
 	"unsafe"
 )
 
-// poller represents a kqueue-based poller for monitoring file descriptors.
+// poller monitors registered sockets with kqueue.
 type poller struct {
 	cpuid int32
 	mu    sync.Mutex // mutex to protect fd closure
@@ -45,7 +45,7 @@ type poller struct {
 	dieOnce sync.Once
 }
 
-// openPoll creates and initializes a new poller.
+// openPoll creates a kqueue instance and registers its user-event wakeup.
 func openPoll() (*poller, error) {
 	fd, err := syscall.Kqueue()
 	if err != nil {
@@ -78,7 +78,7 @@ func (p *poller) Close() error {
 	return p.wakeup()
 }
 
-// Watch adds a file descriptor to the registration queue and wakes up the poller.
+// Watch queues a socket for read/write monitoring and wakes the poller.
 func (p *poller) Watch(fd int) error {
 	p.watchQueueMutex.Lock()
 	p.watchQueue = append(p.watchQueue, fd)
@@ -102,7 +102,7 @@ func (p *poller) wakeup() error {
 	return err
 }
 
-// Wait waits for events on the file descriptors.
+// Wait polls for socket readiness and sends event batches to the watcher loop.
 func (p *poller) Wait(chSignal chan Signal) {
 	// Pre-allocate event set with typical capacity to reduce allocations
 	eventSet := make(pollerEvents, 0, maxEvents)
@@ -135,13 +135,13 @@ func (p *poller) Wait(chSignal chan Signal) {
 			p.watchQueue = p.watchQueue[:0]
 			p.watchQueueMutex.Unlock()
 
-			// Set affinity if cpuid is set
+			// Apply any pending CPU-affinity request before polling.
 			if cpuid := atomic.LoadInt32(&p.cpuid); cpuid != -1 {
 				setAffinity(cpuid)
 				atomic.StoreInt32(&p.cpuid, -1)
 			}
 
-			// poll
+			// Register queued sockets and wait for readiness events.
 			n, err := syscall.Kevent(p.fd, changes, events, nil)
 			if err == syscall.EINTR {
 				continue
@@ -151,7 +151,7 @@ func (p *poller) Wait(chSignal chan Signal) {
 			}
 			changes = changes[:0]
 
-			// Event processing
+			// Translate kqueue events into platform-independent readiness flags.
 			for i := 0; i < n; i++ {
 				ev := &events[i]
 				if ev.Ident != 0 {
@@ -161,16 +161,11 @@ func (p *poller) Wait(chSignal chan Signal) {
 						e.ev |= EV_READ | EV_WRITE
 					} else if ev.Filter == syscall.EVFILT_READ {
 						e.ev |= EV_READ
-						// https://golang.org/src/runtime/netpoll_kqueue.go
-						// On some systems when the read end of a pipe
-						// is closed the write end will not get a
-						// _EVFILT_WRITE event, but will get a
-						// _EVFILT_READ event with EV_EOF set.
-						// Note that setting 'w' here just means that we
-						// will wake up a goroutine waiting to write;
-						// that goroutine will try the write again,
-						// and the appropriate thing will happen based
-						// on what that write returns (success, EPIPE, EAGAIN).
+						// On some systems, closing a pipe's read end does not produce
+						// EVFILT_WRITE; it produces EVFILT_READ|EV_EOF instead. Marking
+						// the event writable wakes pending writers so they can retry
+						// and handle the result (success, EPIPE, or EAGAIN).
+						// https://go.dev/src/runtime/netpoll_kqueue.go
 						if ev.Flags&syscall.EV_EOF != 0 {
 							e.ev |= EV_WRITE
 						}
@@ -202,11 +197,10 @@ func (p *poller) Wait(chSignal chan Signal) {
 	}
 }
 
-// rawRead performs non-blocking reads to avoid context switches.
-// NOTE:
-//  1. we need to make sure that the fd has O_NONBLOCK set.
-//  2. use RawSyscall to avoid a context switch
-//  3. r0 is set to -1 on error, which becomes MaxUint when converted to int on 64-bit
+// rawRead issues a non-blocking read directly through the system call interface.
+// The file descriptor must have O_NONBLOCK set. Using RawSyscall avoids the
+// normal syscall path; on error, RawSyscall returns -1 in r0, represented as
+// MaxUint when converted to int on 64-bit systems.
 func rawRead(fd int, p []byte) (n int, err error) {
 	var _p0 unsafe.Pointer
 	if len(p) > 0 {
@@ -221,8 +215,9 @@ func rawRead(fd int, p []byte) (n int, err error) {
 	return int(r0), nil
 }
 
-// rawWrite performs non-blocking writes to avoid context switches.
-// NOTE: r0 is set to -1 on error, which becomes MaxUint when converted to int on 64-bit
+// rawWrite issues a non-blocking write directly through the system call interface.
+// On error, RawSyscall returns -1 in r0, represented as MaxUint when converted
+// to int on 64-bit systems.
 func rawWrite(fd int, p []byte) (n int, err error) {
 	var _p0 unsafe.Pointer
 	if len(p) > 0 {

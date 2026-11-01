@@ -22,8 +22,7 @@
 
 package gaio
 
-// timedHeap is a min-heap that sorts aiocb elements by their deadline.
-// It implements the heap.Interface from the container/heap package.
+// timedHeap orders requests by deadline, with the earliest deadline at the root.
 type timedHeap []*aiocb
 
 // Len returns the number of elements in the heap.
@@ -31,8 +30,7 @@ func (h timedHeap) Len() int {
 	return len(h)
 }
 
-// Less reports whether the element with index i should sort before the element with index j.
-// It is used to order the elements by their deadline in ascending order.
+// Less reports whether the request at i has an earlier deadline than the one at j.
 func (h timedHeap) Less(i, j int) bool {
 	return h[i].deadline.Before(h[j].deadline)
 }
@@ -44,16 +42,15 @@ func (h timedHeap) Swap(i, j int) {
 	h[j].idx = j
 }
 
-// Push adds an element to the heap.
-// This method is used by the heap.Push function.
+// Push adds a request and records its heap index.
 func (h *timedHeap) Push(x any) {
 	cb := x.(*aiocb)
 	cb.idx = len(*h)
 	*h = append(*h, cb)
 }
 
-// Pop removes and returns the element with the highest priority (lowest deadline).
-// This method is used by the heap.Pop function.
+// Pop removes and returns the last element in the backing slice. container/heap
+// moves the earliest-deadline element there before calling this method.
 func (h *timedHeap) Pop() any {
 	old := *h
 	n := len(old)

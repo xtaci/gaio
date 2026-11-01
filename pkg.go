@@ -1,5 +1,5 @@
-// Package gaio is an asynchronous I/O library for Go.
+// Package gaio provides asynchronous network I/O for Go.
 //
-// gaio acts in proactor mode, https://en.wikipedia.org/wiki/Proactor_pattern.
-// Users submit async I/O operations and wait for completion signals.
+// It follows the proactor pattern: callers submit I/O operations and receive
+// their results through a watcher.
 package gaio

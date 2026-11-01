@@ -29,7 +29,7 @@ import (
 )
 
 func main() {
-	// By simply replacing net.Listen with reuseport.Listen, the rest stays the same.
+	// Replace net.Listen with reuseport.Listen to use a reuse-port listener.
 	// ln, err := reuseport.Listen("tcp", "localhost:0")
 	ln, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
@@ -38,18 +38,18 @@ func main() {
 
 	log.Println("pushing server listening on", ln.Addr(), ", use telnet to receive push")
 
-	// create a watcher
+	// Create a watcher to manage asynchronous writes.
 	w, err := gaio.NewWatcher()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Channels
+	// Forward accepted connections and completed I/O to the main loop.
 	ticker := time.NewTicker(time.Second)
 	chConn := make(chan net.Conn)
 	chIO := make(chan gaio.OpResult)
 
-	// watcher.WaitIO goroutine
+	// Forward watcher completions to the main loop.
 	go func() {
 		for {
 			results, err := w.WaitIO()
@@ -64,7 +64,7 @@ func main() {
 		}
 	}()
 
-	// Main logic loop, like your program's core loop.
+	// Keep connection management and periodic broadcasts in one loop.
 	go func() {
 		var conns []net.Conn
 		for {
@@ -76,7 +76,7 @@ func main() {
 				conns = append(conns, res.Conn)
 			case t := <-ticker.C: // receive ticker events
 				push := fmt.Appendf(nil, "%s\n", t)
-				// all conns will receive the same 'push' content
+				// Send the same payload to each connection collected this tick.
 				for _, conn := range conns {
 					w.Write(nil, conn, push)
 				}
@@ -87,7 +87,7 @@ func main() {
 		}
 	}()
 
-	// This loop keeps accepting connections and sends them to the main loop.
+	// Accept connections and pass them to the main loop.
 	for {
 		conn, err := ln.Accept()
 		if err != nil {

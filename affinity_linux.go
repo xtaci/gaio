@@ -30,12 +30,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// setAffinity binds the current goroutine and its underlying thread to a specific CPU.
-// This function locks the goroutine to the current thread, then sets the thread's CPU affinity
-// to the specified CPU, which can improve performance by reducing context switching.
+// setAffinity pins the current goroutine to its OS thread and restricts that
+// thread to the specified CPU. The affinity-setting error is intentionally ignored.
 func setAffinity(cpuId int32) {
 	var newMask unix.CPUSet
 	newMask.Set(int(cpuId))
-	runtime.LockOSThread() // Lock the current goroutine to its current thread
+	runtime.LockOSThread()
 	_ = unix.SchedSetaffinity(0, &newMask)
 }

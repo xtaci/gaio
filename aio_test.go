@@ -139,7 +139,7 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 	return echoListener{w, ln}
 }
 
-// simulate a server hangup, no read/write
+// hangupServer accepts connections but leaves them idle.
 func hangupServer(t testing.TB, bufsize int) net.Listener {
 	tcpaddr, _ := net.ResolveTCPAddr("tcp", "localhost:0")
 	ln, err := net.ListenTCP("tcp", tcpaddr)
@@ -155,7 +155,7 @@ func hangupServer(t testing.TB, bufsize int) net.Listener {
 				log.Println(err)
 				return
 			}
-			// hold reference to conn only
+			// Keep the connection open without reading or writing.
 			conns = append(conns, conn)
 		}
 	}()
@@ -229,12 +229,11 @@ func TestUnsupportedConn(t *testing.T) {
 	}
 	defer w.Close()
 
-	// nil conn
+	// A nil connection is unsupported.
 	if w.Read(nil, nil, nil) != ErrUnsupported {
 		t.Fatal("incorrect empty conn handling")
 	}
 
-	//
 	p1, p2 := net.Pipe()
 	w.Write(nil, p1, make([]byte, 1))
 	w.Read(nil, p2, make([]byte, 1))
@@ -1153,15 +1152,7 @@ func TestReadWriteAfterClose(t *testing.T) {
 	}
 	w.Close()
 
-	// Create a dummy connection (doesn't need to be real for this test as we check watcher state first)
-	// However, Read/Write checks for nil conn first, so we need something non-nil.
-	// But wait, Read/Write checks w.die first? Let's check watcher.go
-	// Yes, aioCreate checks w.die first.
-
-	// We need a valid net.Conn interface, but it doesn't need to be connected.
-	// But aioCreate checks for nil conn and pointer type.
-	// So we can use a closed connection.
-
+	// Use a non-nil connection; the closed-watcher check runs before connection validation.
 	ln, _ := net.Listen("tcp", "localhost:0")
 	conn, _ := net.Dial("tcp", ln.Addr().String())
 	conn.Close()
@@ -1294,25 +1285,8 @@ func TestFree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Try to write again, should fail or be ignored (depending on implementation details,
-	// but Free should close the fd).
-	// Actually, Free submits an opDelete.
-
-	// Let's verify that the connection is indeed closed or at least removed from watcher.
-	// Since Free is async, we might need to wait.
-
-	// Wait for potential errors or closure
-	// timeout := time.After(1 * time.Second)
-
-	// We can try to read from the connection on the other side (server side), it should get EOF or error.
-	// But echoServer handles errors by logging.
-
-	// Let's just check if we can still use the watcher with this conn.
-	// Note: Free closes the underlying fd (dupfd), but the net.Conn might still be open?
-	// watcher.go: releaseConn closes the dupfd. The original net.Conn was closed in handlePending when registering.
-	// So the connection should be fully closed.
-
-	// Let's try to read from conn. It should fail.
+	// Registration already closed the original net.Conn, so this checks that
+	// delegated connections cannot be used directly.
 	conn.SetReadDeadline(time.Now().Add(time.Second))
 	buf := make([]byte, 10)
 	_, err = conn.Read(buf)

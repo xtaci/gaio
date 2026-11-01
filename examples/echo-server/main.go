@@ -26,11 +26,10 @@ import (
 	"github.com/xtaci/gaio"
 )
 
-// This goroutine waits for all I/O events and sends back everything it receives
-// asynchronously.
+// echoServer handles completed I/O requests and echoes each read payload.
 func echoServer(w *gaio.Watcher) {
 	for {
-		// Loop waiting for any I/O events.
+		// Wait for one or more I/O completions.
 		results, err := w.WaitIO()
 		if err != nil {
 			log.Println(err)
@@ -41,13 +40,12 @@ func echoServer(w *gaio.Watcher) {
 			switch res.Operation {
 			case gaio.OpRead: // read completion event
 				if res.Error == nil {
-					// Send back everything; we won't start reading again until the write completes.
-					// submit an async write request
+					// Submit the payload for writing before scheduling another read.
 					w.Write(nil, res.Conn, res.Buffer[:res.Size])
 				}
 			case gaio.OpWrite: // write completion event
 				if res.Error == nil {
-					// Since the write has completed, start reading on this conn again.
+					// Reuse the read buffer after the write has completed.
 					w.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
 				}
 			}
@@ -78,7 +76,7 @@ func main() {
 		}
 		log.Println("new client", conn.RemoteAddr())
 
-		// Submit the first async read request.
+		// Start asynchronous reads for the new connection.
 		err = w.Read(nil, conn, make([]byte, 128))
 		if err != nil {
 			log.Println(err)

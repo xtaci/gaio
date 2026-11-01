@@ -37,21 +37,21 @@ const (
 )
 
 var (
-	// ErrUnsupported means the watcher cannot support this type of connection
+	// ErrUnsupported indicates that the connection type is not supported.
 	ErrUnsupported = errors.New("unsupported connection type")
-	// ErrNoRawConn means the connection does not implement SyscallConn
+	// ErrNoRawConn indicates that the connection does not implement SyscallConn.
 	ErrNoRawConn = errors.New("net.Conn does implement net.RawConn")
-	// ErrWatcherClosed means the watcher is closed
+	// ErrWatcherClosed is returned when an operation is submitted to a closed watcher.
 	ErrWatcherClosed = errors.New("watcher closed")
-	// ErrPollerClosed suggests that the poller has closed
+	// ErrPollerClosed is returned when an operation is attempted on a closed poller.
 	ErrPollerClosed = errors.New("poller closed")
-	// ErrConnClosed means the user called Free() on the related connection
+	// ErrConnClosed is returned when SetLoopAffinity is called after shutdown.
 	ErrConnClosed = errors.New("connection closed")
-	// ErrDeadline means the operation exceeded its deadline before completion
+	// ErrDeadline indicates that the operation's deadline expired before completion.
 	ErrDeadline = errors.New("operation exceeded deadline")
-	// ErrEmptyBuffer means the buffer is empty
+	// ErrEmptyBuffer is returned when an operation requires a non-empty buffer.
 	ErrEmptyBuffer = errors.New("empty buffer")
-	// ErrCPUID indicates the given cpuid is invalid
+	// ErrCPUID is returned when the requested CPU ID is outside the available range.
 	ErrCPUID = errors.New("no such core")
 )
 
@@ -63,54 +63,60 @@ var (
 type OpType int
 
 const (
-	// OpRead means the aiocb is a read operation
+	// OpRead identifies a read operation.
 	OpRead OpType = iota
-	// OpWrite means the aiocb is a write operation
+	// OpWrite identifies a write operation.
 	OpWrite
-	// Internal operation to delete a related resource
+	// opDelete is an internal operation that releases a connection.
 	opDelete
 )
 
 const (
-	EV_READ  = 0x1
+	// EV_READ marks a readiness event for reading.
+	EV_READ = 0x1
+	// EV_WRITE marks a readiness event for writing.
 	EV_WRITE = 0x2
 )
 
-// event represents a file descriptor event
+// event represents readiness information for a poller identifier.
 type event struct {
-	ident int  // identifier of this event, usually file descriptor
-	ev    int8 // event mark
+	ident int  // poller identifier, usually a file descriptor or socket handle
+	ev    int8 // combination of EV_READ and EV_WRITE
 }
 
-// Events from epoll_wait are passed to the loop in batches for atomicity.
-// Batch processing amortizes context-switching costs for tiny messages.
+// pollerEvents batches readiness events from the platform poller. The watcher
+// acknowledges each batch before polling resumes, preserving batch-wise
+// processing while amortizing context-switching costs for small messages.
 type pollerEvents []event
 
-// Signal packages events; when processing is done, signal on the done channel.
+// Signal transfers a batch of events to the watcher and receives its completion
+// acknowledgment on done.
 type Signal struct {
 	events pollerEvents
 	done   chan struct{}
 }
 
-// OpResult is the result of an async I/O operation.
+// OpResult describes a completed asynchronous I/O operation.
 type OpResult struct {
-	// Operation Type
+	// Operation is the completed operation's type.
 	Operation OpType
-	// User context associated with this request
+	// Context is the value supplied with the request.
 	Context any
-	// Related net.Conn to this result
+	// Conn is the connection associated with the request.
 	Conn net.Conn
-	// Buffer points to user's supplied buffer or watcher's internal swap buffer
+	// Buffer is the request buffer or, for a nil-buffer read, the watcher's
+	// internal buffer. Internal buffers remain valid until the next WaitIO call.
 	Buffer []byte
-	// IsSwapBuffer marks true if the buffer is an internal swap buffer
+	// IsSwapBuffer reports whether Buffer uses the watcher's internal swap buffer.
 	IsSwapBuffer bool
-	// Number of bytes sent or received, Buffer[:Size] is the content sent or received.
+	// Size is the number of bytes read or written. For reads, the data is in
+	// Buffer[:Size].
 	Size int
-	// I/O error or timeout error
+	// Error is the I/O error, if any, including ErrDeadline.
 	Error error
 }
 
-// aiocb contains all information for a single request
+// aiocb contains the state for a single asynchronous I/O request.
 type aiocb struct {
 	l          *list.List // list where this request belongs to
 	elem       *list.Element
@@ -128,9 +134,10 @@ type aiocb struct {
 	deadline   time.Time
 }
 
-// Watcher monitors events and processes async I/O requests.
+// Watcher monitors readiness events and processes asynchronous I/O requests.
 type Watcher struct {
-	// A wrapper for watcher for GC purposes
+	// The wrapper lets a finalizer close the underlying watcher when it is
+	// no longer reachable.
 	*watcher
 }
 

@@ -34,7 +34,7 @@ import (
 )
 
 var (
-	// Windows socket/kernel functions via LazyDLL
+	// Windows socket and kernel procedures loaded on first use.
 	modws2_32               = syscall.NewLazyDLL("ws2_32.dll")
 	modkernel32             = syscall.NewLazyDLL("kernel32.dll")
 	procWSAPoll             = modws2_32.NewProc("WSAPoll")
@@ -74,7 +74,7 @@ const (
 	INVALID_SOCKET = uintptr(^uint(0))
 )
 
-// WSAPOLLFD structure for WSAPoll (must match Windows layout exactly)
+// wsaPollFd matches the WSAPOLLFD layout required by WSAPoll.
 //
 //	typedef struct pollfd {
 //	  SOCKET  fd;       // 8 bytes on 64-bit, 4 bytes on 32-bit
@@ -89,7 +89,7 @@ type wsaPollFd struct {
 	revents int16
 }
 
-// WSAPROTOCOL_INFOW structure for WSADuplicateSocket
+// wsaProtocolInfo matches WSAPROTOCOL_INFOW for socket duplication.
 type wsaProtocolInfo struct {
 	ServiceFlags1     uint32
 	ServiceFlags2     uint32
@@ -124,8 +124,7 @@ type wsaBuf struct {
 	Buf *byte
 }
 
-// poller is a WSAPoll-based poller for Windows.
-// This is similar to poll() on Unix systems.
+// poller monitors Windows sockets with WSAPoll.
 type poller struct {
 	cpuid int32      // the CPU ID to bind to
 	mu    sync.Mutex // mutex to protect fd operations
@@ -144,7 +143,7 @@ type poller struct {
 	dieOnce sync.Once
 }
 
-// closeSocket closes a socket using closesocket()
+// closeSocket closes a Windows socket with closesocket.
 func closeSocket(fd uintptr) error {
 	ret, _, errno := procClosesocket.Call(fd)
 	if ret != 0 {
@@ -153,8 +152,7 @@ func closeSocket(fd uintptr) error {
 	return nil
 }
 
-// createSocketPair creates a pair of connected sockets for wakeup signaling.
-// On Windows, we use a loopback TCP connection.
+// createSocketPair creates a non-blocking loopback TCP pair for wakeup signals.
 func createSocketPair() (reader, writer uintptr, err error) {
 	// Create a listener on loopback
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -251,7 +249,7 @@ func createSocketPair() (reader, writer uintptr, err error) {
 	return readerFd, writerFd, nil
 }
 
-// duplicateSocket duplicates a socket handle
+// duplicateSocket creates a socket handle from the current process's protocol info.
 func duplicateSocket(fd uintptr) (uintptr, error) {
 	var protocolInfo wsaProtocolInfo
 
@@ -281,7 +279,7 @@ func duplicateSocket(fd uintptr) (uintptr, error) {
 	return r0, nil
 }
 
-// setNonBlocking sets a socket to non-blocking mode
+// setNonBlocking enables non-blocking mode on a socket.
 func setNonBlocking(fd uintptr) error {
 	var mode uint32 = 1
 	ret, _, errno := procIoctlSocket.Call(
@@ -330,7 +328,7 @@ func (p *poller) Close() error {
 	return p.wakeup()
 }
 
-// Watch adds a socket to the poll set for both read and write events.
+// Watch adds a socket to the poll set for read and write readiness.
 func (p *poller) Watch(fd int) error {
 	p.fdMapMutex.Lock()
 	defer p.fdMapMutex.Unlock()
@@ -357,7 +355,7 @@ func (p *poller) Watch(fd int) error {
 	return nil
 }
 
-// unwatch removes a socket from the poll set (internal, called with lock held)
+// unwatch removes a socket from the poll set.
 func (p *poller) unwatch(fd uintptr) {
 	p.fdMapMutex.Lock()
 	defer p.fdMapMutex.Unlock()
@@ -536,7 +534,7 @@ func (p *poller) Wait(chSignal chan Signal) {
 	}
 }
 
-// rawRead performs a synchronous non-blocking read for Windows using WSARecv.
+// rawRead performs a non-blocking socket read with WSARecv.
 func rawRead(fd int, p []byte) (n int, err error) {
 	if len(p) == 0 {
 		return 0, nil
@@ -569,7 +567,7 @@ func rawRead(fd int, p []byte) (n int, err error) {
 	return int(received), nil
 }
 
-// rawWrite performs a synchronous non-blocking write for Windows using WSASend.
+// rawWrite performs a non-blocking socket write with WSASend.
 func rawWrite(fd int, p []byte) (n int, err error) {
 	if len(p) == 0 {
 		return 0, nil
@@ -601,7 +599,7 @@ func rawWrite(fd int, p []byte) (n int, err error) {
 	return int(sent), nil
 }
 
-// dupconn duplicates a socket handle on Windows.
+// dupconn duplicates conn's socket handle and enables non-blocking mode.
 func dupconn(conn net.Conn) (newfd int, err error) {
 	sc, ok := conn.(interface {
 		SyscallConn() (syscall.RawConn, error)
@@ -641,7 +639,7 @@ func dupconn(conn net.Conn) (newfd int, err error) {
 	return int(dupHandle), nil
 }
 
-// closeFd closes a socket handle (Windows)
+// closeFd closes a Windows socket handle.
 func closeFd(fd int) error {
 	return closeSocket(uintptr(fd))
 }

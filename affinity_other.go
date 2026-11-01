@@ -24,6 +24,6 @@
 
 package gaio
 
-// bind the thread and goroutine to a specific CPU
+// setAffinity is a no-op on platforms without CPU-affinity support.
 func setAffinity(cpuId int32) {
 }

@@ -1,6 +1,6 @@
 # gaio
 
-[![GoDoc][1]][2] [![MIT licensed][3]][4] [![Build Status][5]][6] [![Go Report Card][7]][8] [![Coverage Statusd][9]][10]
+[![GoDoc][1]][2] [![MIT licensed][3]][4] [![Build Status][5]][6] [![Coverage Statusd][9]][10]
 
 [1]: https://godoc.org/github.com/xtaci/gaio\?status.svg
 [2]: https://pkg.go.dev/github.com/xtaci/gaio
@@ -8,8 +8,6 @@
 [4]: LICENSE
 [5]: https://img.shields.io/github/created-at/xtaci/gaio
 [6]: https://img.shields.io/github/created-at/xtaci/gaio
-[7]: https://goreportcard.com/badge/github.com/xtaci/gaio
-[8]: https://goreportcard.com/report/github.com/xtaci/gaio
 [9]: https://codecov.io/gh/xtaci/gaio/branch/master/graph/badge.svg
 [10]: https://codecov.io/gh/xtaci/gaio
 
@@ -18,72 +16,30 @@
 ## 简介
 [English](README.md)
 
-多数 Go 网络程序会 `conn := lis.Accept()` 拿到连接，随后 `go func(net.Conn)` 启动 goroutine，在内部分配 `buf := make([]byte, 4096)` 并 `conn.Read(buf)`。模式简单，却在 10,000+ 并发、报文多为 <512 字节时暴露瓶颈：上下文切换的代价（1,000+ CPU 周期，2.1 GHz 核心约 600 ns）远超真正收发数据的成本。
+典型的 Go 网络服务会为每个连接分配一个 goroutine，并通过 `Read`、`Write` 处理数据。这种方式简单有效；但在大量连接大部分时间处于空闲状态时，每连接的 goroutine 和缓冲区也会占用可观资源。
 
-gaio 通过边缘触发（Edge-Triggered）I/O 多路复用与 Proactor 模式，彻底摆脱“每连接一个 goroutine”的开销：
-- 大幅削减因 goroutine 栈分配带来的 2KB(R)+2KB(W) 常量成本；
-- 复用内部交换缓冲区，避免为每次读取都 `make([]byte, 4096)`；
-- 将事件循环与业务 goroutine 解耦，用有限资源支撑更高并发。
-
-这些设计让 gaio 在有限内存预算与极致性能需求之间取得兼顾。
+gaio 提供异步 I/O API：向 `Watcher` 提交读写请求，再通过 `WaitIO` 获取完成结果。应用无需为每个连接单独分配 goroutine，即可管理大量连接。读取时可以传入调用方的缓冲区，也可以传入 `nil` 使用 watcher 的共享内部缓冲区。
 
 ## 工作原理
 
-![alt text](assets/gaio.jpg)
+![gaio I/O 架构图](assets/gaio.jpg)
 
-`dup`/`dup2`/`dup3` 用来复制 `net.Conn` 的底层文件描述符，使 gaio 能独立调度 I/O，同时保持原 `net.Conn` 的生命周期和配置。
-
-```
-NAME
-       dup, dup2, dup3 - duplicate a file descriptor
-
-LIBRARY
-       Standard C library (libc, -lc)
-
-SYNOPSIS
-       #include <unistd.h>
-
-       int dup(int oldfd);
-       int dup2(int oldfd, int newfd);
-
-       #define _GNU_SOURCE             /* See feature_test_macros(7) */
-       #include <fcntl.h>              /* Definition of O_* constants */
-       #include <unistd.h>
-
-       int dup3(int oldfd, int newfd, int flags);
-
-DESCRIPTION
-       The dup() system call allocates a new file descriptor that refers to the same open file description as the de-
-       scriptor oldfd.  (For an explanation of open file descriptions, see open(2).)  The new file descriptor  number
-       is guaranteed to be the lowest-numbered file descriptor that was unused in the calling process.
-
-       After  a  successful return, the old and new file descriptors may be used interchangeably.  Since the two file
-       descriptors refer to the same open file description, they share file offset and file status flags; for exam-
-       ple,  if  the  file  offset  is  modified by using lseek(2) on one of the file descriptors, the offset is also
-       changed for the other file descriptor.
-
-       The two file descriptors do not share file descriptor flags (the close-on-exec flag).  The close-on-exec flag
-       (FD_CLOEXEC; see fcntl(2)) for the duplicate descriptor is off.
-```
+连接需要通过 `SyscallConn` 暴露底层 socket（标准 TCP 连接支持该接口）。在 Unix 上，gaio 使用 `dup` 创建一个指向同一 socket 的新文件描述符；在 Windows 上，则使用 `WSADuplicateSocket`。这样 watcher 可以注册并独立管理自己的句柄，同时保留 socket 状态和选项。副本注册成功后，gaio 会关闭原始 `net.Conn`，因此之后不能再直接使用该连接。平台 poller 检测到就绪事件后，gaio 执行相应 I/O，并由 `WaitIO` 返回完成结果。
 
 ## 特性
 
-- **高性能：** 在高频交易等生产环境验证，单台 HVM 机器可稳定提供 30K–40K RPS。
-- **可扩展：** 针对 C10K+ 并发优化单连接吞吐与整体调度，适应大规模短报文场景。
-- **智能缓冲：** `Read(ctx, conn, nil)` 即可复用内部交换缓冲，避免重复分配。
-- **原生兼容：** 与 `net.Listener`、`net.Conn`（包括 `syscall.RawConn`）无缝集成。
-- **降低切换：** 极大减轻小包场景下的上下文切换损失。
-- **托管自定义：** 可在握手、限流或任意阶段将连接委托给 watcher。
-- **流控传导：** 业务决定读请求提交时机，如果暂时不从socket buffer中读取数据，流控算法就会自动减缓对端的写入速度。
-- **轻量易调：** 核心约 1,000 行代码，调试、审计和维护成本极低。
-- **跨平台：** 同时支持 Linux 与 BSD。
+- **异步 API：** 提交读写请求，并通过 `WaitIO` 批量获取完成结果。
+- **灵活缓冲：** `Read` 的缓冲区参数传入 `nil` 时使用 watcher 的共享内部读缓冲区。`NewWatcher` 默认使用 64 KiB 缓冲区；也可以通过 `NewWatcherSize` 指定大小。
+- **连接托管时机可控：** 可以自行选择何时将连接交给 watcher，例如在协议握手完成后。
+- **背压控制：** 应用可以控制读写请求的提交时机；延迟读取可让 TCP 接收窗口流控降低发送端的发送速率。
+- **平台 poller：** Linux 使用 epoll，macOS 和 BSD 系统使用 kqueue，Windows 使用 WSAPoll。
 
 ## 约定
 
-- **连接托管：** 一旦对某个 `net.Conn` 提交异步读/写请求，该连接即交由 `gaio.Watcher` 管理，后续直接调用 `conn.Read/Write` 会返回错误。但通过 `SetReadBuffer`、`SetWriteBuffer`、`SetLinger`、`SetKeepAlive`、`SetNoDelay` 所做的 TCP 设置会被保留。
-- **资源释放：** 不再需要连接时调用 `Watcher.Free(net.Conn)` 可立即关闭套接字并回收资源；若忘记调用，GC 会在 `net.Conn` 无引用后清理。同样，如果未显式 `Watcher.Close()`，GC 也会在 watcher 无引用后处理善后。
+- **连接所有权：** 首个 I/O 请求会将连接交给 watcher。watcher 会复制 socket 并关闭原始 `net.Conn`；之后不要再调用该 `net.Conn` 的方法。此前设置的 socket 选项会继续生效。
+- **资源释放：** 连接不再需要时调用 `Watcher.Free(conn)`，请求会排队交由 watcher 释放。程序退出或不再使用 watcher 时，应显式调用 `Watcher.Close()`。终结器仅作为兜底，不应替代显式释放。
 - **负载均衡：** 可以创建多个 watcher 并使用任意策略分发连接；在监听层面建议配合 `go-reuseport` 做 acceptor 负载均衡。
-- **读缓冲有效期：** 使用 nil 缓冲提交读请求时，`Watcher.WaitIO()` 返回的 `[]byte` 在下一次 `WaitIO` 调用前始终有效。
+- **结果与缓冲区有效期：** `WaitIO` 返回的结果切片会在下一次调用时复用。读请求使用 `nil` 缓冲区时，返回的缓冲区在下一次调用 `WaitIO` 前有效。
 
 ## 快速开始 (TL;DR)
 
@@ -237,15 +193,15 @@ func main() {
 
 ## 文档
 
-完整 API 说明请查阅 [Godoc](https://godoc.org/github.com/xtaci/gaio)。
+API 参考文档请查阅 [pkg.go.dev](https://pkg.go.dev/github.com/xtaci/gaio)。
 
 ## 基准测试
 
 | 测试用例 | 64KB 缓冲区吞吐量测试 |
 |:-------------:|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | 描述 | 客户端持续向服务器发送 64KB 数据，服务器读取后立即回显，客户端持续接收直到全部字节完成。|
-| 命令 | `go test -v -run=^$ -bench Echo` |
-| Macbook Pro | 1695.27 MB/s 518 B/op 4 allocs/op |
+| 命令 | `go test -run='^$' -bench '^BenchmarkEcho64K$' -benchmem` |
+| MacBook Pro | 1695.27 MB/s 518 B/op 4 allocs/op |
 | Linux AMD64 | 1883.23 MB/s 518 B/op 4 allocs/op |
 | Raspberry Pi4 | 354.59 MB/s 334 B/op 4 allocs/op |
 
@@ -253,9 +209,11 @@ func main() {
 |:-------------:|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | 描述 | 启动 8192 个客户端，每个发送 1KB 数据；服务器回显，直至所有客户端完全收齐。|
 | 命令 | `go test -v -run=8k` |
-| Macbook Pro | 1.09s |
+| MacBook Pro | 1.09s |
 | Linux AMD64 | 0.94s |
 | Raspberry Pi4 | 2.09s |
+
+以上为历史测试结果，原始 Go 版本和测试条件未记录；结果受硬件和运行环境影响，不代表性能保证。
 
 ## 测试指令
 

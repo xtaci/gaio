@@ -101,8 +101,10 @@ type watcher struct {
 	gcClosed uint32        // Number of objects closed successfully
 
 	// Shutdown coordination.
-	die     chan struct{} // Channel for signaling shutdown
-	dieOnce sync.Once     // Ensures that the watcher is only closed once
+	die       chan struct{} // Channel for signaling shutdown
+	dieOnce   sync.Once     // Ensures that the watcher is only closed once
+	loopDone  chan struct{} // Closed after the watcher loop releases its resources
+	pollerErr error         // Terminal poller error, written before loopDone closes
 }
 
 // NewWatcher creates a watcher with the default 64 KiB internal read-buffer size.
@@ -130,6 +132,7 @@ func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w.chPendingNotify = make(chan struct{}, 1)
 	w.chResults = make(chan *aiocb, maxEvents*4)
 	w.die = make(chan struct{})
+	w.loopDone = make(chan struct{})
 
 	// Allocate the shared buffers used by nil-buffer reads.
 	w.swapSize = bufsize
@@ -205,9 +208,19 @@ func (w *watcher) SetLoopAffinity(cpuid int) error {
 }
 
 // Close shuts down the watcher and stops monitoring its connections.
+// Pending operations are canceled; WaitIO returns ErrWatcherClosed rather than
+// a completion result for each canceled operation.
 func (w *watcher) Close() (err error) {
+	err = w.stop()
+	<-w.loopDone
+	return err
+}
+
+func (w *watcher) stop() (err error) {
 	w.dieOnce.Do(func() {
+		w.pendingMutex.Lock()
 		close(w.die)
+		w.pendingMutex.Unlock()
 		err = w.pfd.Close()
 	})
 	return err
@@ -299,6 +312,14 @@ func (w *watcher) WaitIO() (r []OpResult, err error) {
 
 			return w.results, nil
 		case <-w.die:
+			if w.pollerErr != nil {
+				return nil, w.pollerErr
+			}
+			return nil, ErrWatcherClosed
+		case <-w.loopDone:
+			if w.pollerErr != nil {
+				return nil, w.pollerErr
+			}
 			return nil, ErrWatcherClosed
 		}
 	}
@@ -355,29 +376,31 @@ func (w *watcher) Free(conn net.Conn) error {
 // aioCreate creates a request record, appends it to the pending queue, and
 // notifies the watcher loop.
 func (w *watcher) aioCreate(ctx any, op OpType, conn net.Conn, buf []byte, deadline time.Time, readfull bool) error {
+	if conn == nil {
+		return ErrUnsupported
+	}
+	// Use the concrete connection pointer as its identity in the watcher maps.
+	ptr := reflect.ValueOf(conn).Pointer()
+	if ptr == 0 {
+		return ErrUnsupported
+	}
+
+	cb := aiocbPool.Get().(*aiocb)
+	*cb = aiocb{op: op, ptr: ptr, size: 0, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
+
+	w.pendingMutex.Lock()
 	select {
 	case <-w.die:
+		w.pendingMutex.Unlock()
+		aiocbPool.Put(cb)
 		return ErrWatcherClosed
 	default:
-		if conn == nil {
-			return ErrUnsupported
-		}
-		// Use the concrete connection pointer as its identity in the watcher maps.
-		ptr := reflect.ValueOf(conn).Pointer()
-		if ptr == 0 {
-			return ErrUnsupported
-		}
-
-		cb := aiocbPool.Get().(*aiocb)
-		*cb = aiocb{op: op, ptr: ptr, size: 0, ctx: ctx, conn: conn, buffer: buf, deadline: deadline, readFull: readfull, idx: -1}
-
-		w.pendingMutex.Lock()
 		w.pendingCreate = append(w.pendingCreate, cb)
-		w.pendingMutex.Unlock()
-
-		w.notifyPending()
-		return nil
 	}
+	w.pendingMutex.Unlock()
+
+	w.notifyPending()
+	return nil
 }
 
 // tryRead attempts to read data for pcb. It returns true when the request is
@@ -583,6 +606,22 @@ func (w *watcher) loop() {
 		for ident := range w.descs {
 			w.releaseConn(ident)
 		}
+	drainResults:
+		for {
+			select {
+			case pcb := <-w.chResults:
+				*pcb = aiocb{}
+			default:
+				break drainResults
+			}
+		}
+		w.pendingMutex.Lock()
+		clear(w.pendingCreate)
+		w.pendingCreate = w.pendingCreate[:0]
+		clear(w.pendingProcessing)
+		w.pendingProcessing = w.pendingProcessing[:0]
+		w.pendingMutex.Unlock()
+		close(w.loopDone)
 	}()
 
 	for {
@@ -604,6 +643,11 @@ func (w *watcher) loop() {
 			w.pendingProcessing = w.pendingProcessing[:0]
 
 		case sig := <-w.chSignal: // Process a batch of poller events.
+			if sig.err != nil {
+				w.pollerErr = sig.err
+				w.stop()
+				return
+			}
 			w.handleEvents(sig.events)
 			select {
 			case sig.done <- struct{}{}:

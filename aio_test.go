@@ -26,6 +26,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"io"
 	"log"
 	"net"
@@ -34,6 +35,7 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -71,8 +73,6 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 	w.SetPollerAffinity(1)
 
 	// ping-pong scheme echo server
-	wbuf := make([]byte, bufsize)
-	rbuf := make([]byte, bufsize)
 	go func() {
 		for {
 			results, err := w.WaitIO()
@@ -85,7 +85,7 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 				switch res.Operation {
 				case OpRead:
 					if res.Error != nil {
-						if res.Error != io.EOF {
+						if res.Error != io.EOF && !errors.Is(res.Error, syscall.ECONNRESET) {
 							log.Println("echoServer read:", res.Error)
 						}
 						w.Free(res.Conn)
@@ -93,10 +93,8 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 					}
 
 					if res.Size > 0 {
-						copy(wbuf, res.Buffer[:res.Size])
-						// write the data, we won't start to read again until write completes.
-						// so we only need at most 1 shared read/write buffer for a connection to echo
-						w.Write(nil, res.Conn, wbuf[:res.Size])
+						// Keep the read buffer alive and unchanged until the async write completes.
+						w.Write(nil, res.Conn, res.Buffer[:res.Size])
 					}
 				case OpWrite:
 					if res.Error != nil {
@@ -107,7 +105,7 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 
 					if res.Size > 0 {
 						// write complete, start read again
-						w.Read(nil, res.Conn, rbuf)
+						w.Read(nil, res.Conn, res.Buffer[:cap(res.Buffer)])
 					}
 				}
 			}
@@ -169,6 +167,7 @@ func TestEchoTiny(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer conn.Close()
 	tx := []byte("hello world")
 	rx := make([]byte, len(tx))
 
@@ -191,6 +190,7 @@ func TestDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer w.Close()
 	testSingleDeadline(t, w)
 }
 
@@ -235,6 +235,8 @@ func TestUnsupportedConn(t *testing.T) {
 	}
 
 	p1, p2 := net.Pipe()
+	defer p1.Close()
+	defer p2.Close()
 	w.Write(nil, p1, make([]byte, 1))
 	w.Read(nil, p2, make([]byte, 1))
 
@@ -274,6 +276,9 @@ func testSingleDeadline(t *testing.T, w *Watcher) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
+	if err := conn.(*net.TCPConn).SetLinger(0); err != nil {
+		t.Fatal(err)
+	}
 
 	go func() {
 		// read with timeout
@@ -325,14 +330,17 @@ WRITETEST:
 		for _, res := range results {
 			switch res.Operation {
 			case OpWrite:
-				err = w.WriteTimeout(nil, conn, buf, time.Now().Add(time.Second))
-				if err != nil {
-					log.Fatal(err)
-				}
-
 				if res.Error == ErrDeadline {
 					t.Log("write deadline", res.Error)
+					if err := w.Free(res.Conn); err != nil {
+						t.Fatal(err)
+					}
 					break WRITETEST
+				}
+
+				err = w.WriteTimeout(nil, conn, buf, time.Now().Add(time.Second))
+				if err != nil {
+					t.Fatal(err)
 				}
 			}
 		}
@@ -347,6 +355,7 @@ func TestEchoHuge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer conn.Close()
 
 	tx := make([]byte, 100*1024*1024)
 	rx := make([]byte, len(tx))
@@ -424,6 +433,9 @@ func testBidirectionWatcher(t *testing.T, w *Watcher) {
 				}
 			case OpRead:
 				t.Log("read:", res.Error, res.Size)
+				if err := w.Free(res.Conn); err != nil {
+					t.Fatal(err)
+				}
 				return
 			}
 		}
@@ -486,6 +498,9 @@ func TestReadFull(t *testing.T) {
 				}
 				if !bytes.Equal(tx, rx) {
 					t.Fatal("readfull content mismatch")
+				}
+				if err := w.Free(res.Conn); err != nil {
+					t.Fatal(err)
 				}
 				return
 			}
@@ -595,6 +610,9 @@ func Test8k(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("skipping on Windows due to system connection limits")
 	}
+	if testing.Short() {
+		t.Skip("skipping high-concurrency test in short mode")
+	}
 	testParallel(t, 8192, 1024)
 }
 
@@ -602,12 +620,18 @@ func Test10k(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("skipping on Windows due to system connection limits")
 	}
+	if testing.Short() {
+		t.Skip("skipping high-concurrency test in short mode")
+	}
 	testParallel(t, 10240, 1024)
 }
 
 func Test12k(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("skipping on Windows due to system connection limits")
+	}
+	if testing.Short() {
+		t.Skip("skipping high-concurrency test in short mode")
 	}
 	testParallel(t, 12288, 1024)
 }
@@ -640,12 +664,16 @@ func testParallel(t *testing.T, par int, msgsize int) {
 		t.Fatal(err)
 	}
 	defer w.Close()
+	connBytes := make(map[net.Conn]int, par)
 
 	go func() {
 		for i := 0; i < par; i++ {
 			data := make([]byte, msgsize)
 			conn, err := net.Dial("tcp", ln.Addr().String())
 			if err != nil {
+				log.Fatal(err)
+			}
+			if err := conn.(*net.TCPConn).SetLinger(0); err != nil {
 				log.Fatal(err)
 			}
 
@@ -671,7 +699,10 @@ func testParallel(t *testing.T, par int, msgsize int) {
 			case OpWrite:
 				// recv
 				if res.Error != nil {
-					continue
+					if err := w.Free(res.Conn); err != nil {
+						t.Fatal(err)
+					}
+					t.Fatalf("write failed: %v", res.Error)
 				}
 
 				err = w.Read(nil, res.Conn, nil)
@@ -680,13 +711,23 @@ func testParallel(t *testing.T, par int, msgsize int) {
 				}
 			case OpRead:
 				if res.Error != nil {
-					continue
+					if err := w.Free(res.Conn); err != nil {
+						t.Fatal(err)
+					}
+					t.Fatalf("read failed: %v", res.Error)
 				}
 				if res.Size == 0 {
 					continue
 				}
 
+				connBytes[res.Conn] += res.Size
 				nbytes += res.Size
+				if connBytes[res.Conn] >= msgsize {
+					if err := w.Free(res.Conn); err != nil {
+						t.Fatal(err)
+					}
+					delete(connBytes, res.Conn)
+				}
 				if nbytes >= ntotal {
 					t.Log("completed:", nbytes)
 					return
@@ -700,12 +741,18 @@ func Test10kRandomSwapBuffer(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("skipping on Windows due to system connection limits")
 	}
+	if testing.Short() {
+		t.Skip("skipping high-concurrency test in short mode")
+	}
 	testParallelRandomInternal(t, 10240, 1024, false)
 }
 
 func Test10kCompleteSwapBuffer(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("skipping on Windows due to system connection limits")
+	}
+	if testing.Short() {
+		t.Skip("skipping high-concurrency test in short mode")
 	}
 	testParallelRandomInternal(t, 10240, 1024, true)
 }
@@ -720,12 +767,16 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 		t.Fatal(err)
 	}
 	defer w.Close()
+	connBytes := make(map[net.Conn]int, par)
 
 	go func() {
 		for i := 0; i < par; i++ {
 			data := make([]byte, msgsize)
 			conn, err := net.Dial("tcp", ln.Addr().String())
 			if err != nil {
+				log.Fatal(err)
+			}
+			if err := conn.(*net.TCPConn).SetLinger(0); err != nil {
 				log.Fatal(err)
 			}
 
@@ -751,6 +802,9 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 			case OpWrite:
 				// recv
 				if res.Error != nil {
+					if err := w.Free(res.Conn); err != nil {
+						t.Fatal(err)
+					}
 					t.Fatal(res.Error)
 				}
 
@@ -769,9 +823,19 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 				}
 			case OpRead:
 				if res.Error != nil {
-					continue
+					if err := w.Free(res.Conn); err != nil {
+						t.Fatal(err)
+					}
+					t.Fatal(res.Error)
 				}
+				connBytes[res.Conn] += res.Size
 				nbytes += res.Size
+				if connBytes[res.Conn] >= msgsize {
+					if err := w.Free(res.Conn); err != nil {
+						t.Fatal(err)
+					}
+					delete(connBytes, res.Conn)
+				}
 				if nbytes >= ntotal {
 					t.Log("completed:", nbytes)
 					return
@@ -814,7 +878,9 @@ func testDeadline(t *testing.T, par int) {
 			if err != nil {
 				log.Fatal(err)
 			}
-			defer conn.Close()
+			if err := conn.(*net.TCPConn).SetLinger(0); err != nil {
+				log.Fatal(err)
+			}
 
 			// send nothing, but submit a read request with timeout
 			err = w.ReadTimeout(nil, conn, nil, time.Now().Add(time.Second))
@@ -838,6 +904,9 @@ func testDeadline(t *testing.T, par int) {
 			case OpRead:
 				if res.Error == ErrDeadline {
 					nerrs++
+					if err := w.Free(res.Conn); err != nil {
+						t.Fatal(err)
+					}
 					if nerrs == par {
 						t.Log("all deadline reached")
 						close(die)
@@ -1137,11 +1206,68 @@ func TestWaitIOAfterClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.Close()
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	_, err = w.WaitIO()
 	if err != ErrWatcherClosed {
 		t.Fatalf("expected ErrWatcherClosed, got %v", err)
+	}
+}
+
+func TestCloseWithPendingRead(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err == nil {
+			accepted <- conn
+		}
+	}()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	serverConn := <-accepted
+	defer serverConn.Close()
+
+	w, err := NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Read(nil, serverConn, make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.WaitIO(); err != ErrWatcherClosed {
+		t.Fatalf("expected ErrWatcherClosed after canceling pending read, got %v", err)
+	}
+}
+
+func TestWaitIOReportsPollerError(t *testing.T) {
+	w, err := NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pollerErr := errors.New("poller failed")
+	w.chSignal <- Signal{err: pollerErr}
+
+	if _, err := w.WaitIO(); !errors.Is(err, pollerErr) {
+		t.Fatalf("expected poller error %v, got %v", pollerErr, err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1202,6 +1328,9 @@ func TestContextPassing(t *testing.T) {
 			if res.Operation == OpWrite {
 				if res.Context != ctx {
 					t.Fatalf("expected context %v, got %v", ctx, res.Context)
+				}
+				if err := w.Free(res.Conn); err != nil {
+					t.Fatal(err)
 				}
 				return
 			}

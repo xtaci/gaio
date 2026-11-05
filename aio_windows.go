@@ -26,6 +26,7 @@ package gaio
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -38,6 +39,7 @@ var (
 	modws2_32               = syscall.NewLazyDLL("ws2_32.dll")
 	modkernel32             = syscall.NewLazyDLL("kernel32.dll")
 	procWSAPoll             = modws2_32.NewProc("WSAPoll")
+	procWSAGetLastError     = modws2_32.NewProc("WSAGetLastError")
 	procWSARecv             = modws2_32.NewProc("WSARecv")
 	procWSASend             = modws2_32.NewProc("WSASend")
 	procWSADuplicateSocketW = modws2_32.NewProc("WSADuplicateSocketW")
@@ -449,6 +451,18 @@ func (p *poller) Wait(chSignal chan Signal) {
 			)
 
 			// ret is SOCKET_ERROR (-1) on error, 0 on timeout, >0 on events
+			if ret == ^uintptr(0) {
+				code, _, _ := procWSAGetLastError.Call()
+				if code == WSAEINTR {
+					continue
+				}
+				sig.err = fmt.Errorf("WSAPoll failed: %w", syscall.Errno(code))
+				select {
+				case chSignal <- sig:
+				case <-p.die:
+				}
+				return
+			}
 			nEvents := int32(ret)
 			if nEvents <= 0 {
 				continue

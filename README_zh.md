@@ -217,6 +217,8 @@ API 参考文档请查阅 [pkg.go.dev](https://pkg.go.dev/github.com/xtaci/gaio)
 
 ## 测试指令
 
+运行 `go test -short ./...` 可跳过 8k、10k 和 12k 并发连接测试，包括两个 10k 交换缓冲区测试。
+
 在 macOS 上运行基准前，请先提升最大文件描述符限制：
 
 ```bash

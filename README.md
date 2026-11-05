@@ -235,6 +235,8 @@ For the API reference, see [pkg.go.dev](https://pkg.go.dev/github.com/xtaci/gaio
 These are historical, environment-specific results; the original Go versions and test conditions were not recorded. They are not performance guarantees.
 
 ## Testing Directives
+Run `go test -short ./...` to skip the 8k, 10k, and 12k concurrent-connection tests, including both 10k swap-buffer tests.
+
 On macOS, you need to increase the maximum open files limit to run the benchmarks.
 
 ```bash

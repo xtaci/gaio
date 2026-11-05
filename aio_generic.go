@@ -94,6 +94,7 @@ type pollerEvents []event
 type Signal struct {
 	events pollerEvents
 	done   chan struct{}
+	err    error
 }
 
 // OpResult describes a completed asynchronous I/O operation.

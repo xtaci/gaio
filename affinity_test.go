@@ -27,7 +27,7 @@ import (
 	"testing"
 )
 
-func TestSetAffinityInvalidCPU(t *testing.T) {
+func TestAffinitySettersRejectInvalidCPUs(t *testing.T) {
 	w, err := NewWatcher()
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +50,7 @@ func TestSetAffinityInvalidCPU(t *testing.T) {
 	}
 }
 
-func TestSetLoopAffinityAfterClose(t *testing.T) {
+func TestSetLoopAffinityRejectsClosedWatcher(t *testing.T) {
 	w, err := NewWatcher()
 	if err != nil {
 		t.Fatal(err)

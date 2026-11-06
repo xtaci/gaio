@@ -28,7 +28,7 @@ import (
 	"time"
 )
 
-func TestTimedHeapOrderAndIndex(t *testing.T) {
+func TestTimedHeapPopsByDeadlineAndMaintainsIndices(t *testing.T) {
 	var h timedHeap
 	heap.Push(&h, &aiocb{deadline: time.Unix(10, 0)})
 	heap.Push(&h, &aiocb{deadline: time.Unix(5, 0)})
@@ -49,7 +49,7 @@ func TestTimedHeapOrderAndIndex(t *testing.T) {
 	}
 }
 
-func TestTimedHeapSwapUpdatesIndex(t *testing.T) {
+func TestTimedHeapSwapUpdatesIndices(t *testing.T) {
 	a := &aiocb{idx: 0}
 	b := &aiocb{idx: 1}
 	h := timedHeap{a, b}

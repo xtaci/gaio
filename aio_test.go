@@ -160,7 +160,7 @@ func hangupServer(t testing.TB, bufsize int) net.Listener {
 	return ln
 }
 
-func TestEchoTiny(t *testing.T) {
+func TestEchoServerHandlesSmallPayload(t *testing.T) {
 	ln := echoServer(t, 1)
 	defer ln.Close()
 	conn, err := net.Dial("tcp", ln.Addr().String())
@@ -185,7 +185,7 @@ func TestEchoTiny(t *testing.T) {
 	t.Log("rx:", string(tx))
 }
 
-func TestDeadline(t *testing.T) {
+func TestReadAndWriteDeadlinesExpire(t *testing.T) {
 	w, err := NewWatcher()
 	if err != nil {
 		t.Fatal(err)
@@ -194,7 +194,7 @@ func TestDeadline(t *testing.T) {
 	testSingleDeadline(t, w)
 }
 
-func TestEmptyBuffer(t *testing.T) {
+func TestWriteRejectsEmptyBuffer(t *testing.T) {
 	ln := echoServer(t, 1)
 	defer ln.Close()
 
@@ -219,7 +219,7 @@ func TestEmptyBuffer(t *testing.T) {
 	}
 }
 
-func TestUnsupportedConn(t *testing.T) {
+func TestReadWriteRejectUnsupportedConnections(t *testing.T) {
 	ln := echoServer(t, 1)
 	defer ln.Close()
 
@@ -348,7 +348,7 @@ WRITETEST:
 
 }
 
-func TestEchoHuge(t *testing.T) {
+func TestEchoServerHandlesLargePayload(t *testing.T) {
 	ln := echoServer(t, 65536)
 	defer ln.Close()
 	conn, err := net.Dial("tcp", ln.Addr().String())
@@ -380,7 +380,7 @@ func TestEchoHuge(t *testing.T) {
 	t.Log("bytes compare successful")
 }
 
-func TestBidirectionWatcher(t *testing.T) {
+func TestWatcherSupportsBidirectionalIO(t *testing.T) {
 	w, err := NewWatcher()
 	if err != nil {
 		t.Fatal(err)
@@ -442,7 +442,7 @@ func testBidirectionWatcher(t *testing.T, w *Watcher) {
 	}
 }
 
-func TestReadFull(t *testing.T) {
+func TestReadFullReceivesRequestedBytes(t *testing.T) {
 	ln := echoServer(t, 65536)
 	defer ln.Close()
 	conn, err := net.Dial("tcp", ln.Addr().String())
@@ -508,7 +508,7 @@ func TestReadFull(t *testing.T) {
 	}
 }
 
-func TestSocketClose(t *testing.T) {
+func TestFreeClosesConnectionAndSubsequentReadFails(t *testing.T) {
 	ln := echoServer(t, 1024)
 	defer ln.Close()
 	conn, err := net.Dial("tcp", ln.Addr().String())
@@ -551,7 +551,7 @@ func TestSocketClose(t *testing.T) {
 	}
 }
 
-func TestWriteOnClosedConn(t *testing.T) {
+func TestWriteToClosedConnectionReturnsError(t *testing.T) {
 	ln := echoServer(t, 1024)
 	defer ln.Close()
 	conn, err := net.Dial("tcp", ln.Addr().String())
@@ -595,18 +595,18 @@ func TestWriteOnClosedConn(t *testing.T) {
 	}
 }
 
-func Test1k(t *testing.T) {
+func TestConcurrentEchoWith1024Connections(t *testing.T) {
 	testParallel(t, 1024, 1024)
 }
-func Test2k(t *testing.T) {
+func TestConcurrentEchoWith2048Connections(t *testing.T) {
 	testParallel(t, 2048, 1024)
 }
 
-func Test4k(t *testing.T) {
+func TestConcurrentEchoWith4096Connections(t *testing.T) {
 	testParallel(t, 4096, 1024)
 }
 
-func Test8k(t *testing.T) {
+func TestConcurrentEchoWith8192Connections(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("skipping on Windows due to system connection limits")
 	}
@@ -616,7 +616,7 @@ func Test8k(t *testing.T) {
 	testParallel(t, 8192, 1024)
 }
 
-func Test10k(t *testing.T) {
+func TestConcurrentEchoWith10240Connections(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("skipping on Windows due to system connection limits")
 	}
@@ -626,7 +626,7 @@ func Test10k(t *testing.T) {
 	testParallel(t, 10240, 1024)
 }
 
-func Test12k(t *testing.T) {
+func TestConcurrentEchoWith12288Connections(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("skipping on Windows due to system connection limits")
 	}
@@ -636,18 +636,18 @@ func Test12k(t *testing.T) {
 	testParallel(t, 12288, 1024)
 }
 
-func Test1kTiny(t *testing.T) {
+func TestConcurrentEchoWith1024ConnectionsAnd16BytePayload(t *testing.T) {
 	testParallel(t, 1024, 16)
 }
 
-func Test2kTiny(t *testing.T) {
+func TestConcurrentEchoWith2048ConnectionsAnd16BytePayload(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("skipping on Windows due to system connection limits")
 	}
 	testParallel(t, 2048, 16)
 }
 
-func Test4kTiny(t *testing.T) {
+func TestConcurrentEchoWith4096ConnectionsAnd16BytePayload(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("skipping on Windows due to system connection limits")
 	}
@@ -737,7 +737,7 @@ func testParallel(t *testing.T, par int, msgsize int) {
 	}
 }
 
-func Test10kRandomSwapBuffer(t *testing.T) {
+func TestConcurrentEchoWithRandomSwapBufferReads(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("skipping on Windows due to system connection limits")
 	}
@@ -747,7 +747,7 @@ func Test10kRandomSwapBuffer(t *testing.T) {
 	testParallelRandomInternal(t, 10240, 1024, false)
 }
 
-func Test10kCompleteSwapBuffer(t *testing.T) {
+func TestConcurrentEchoWithSwapBufferForEveryRead(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("skipping on Windows due to system connection limits")
 	}
@@ -845,18 +845,18 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 	}
 }
 
-func TestDeadline1k(t *testing.T) {
+func TestReadDeadlineExpiresWith1024Connections(t *testing.T) {
 	testDeadline(t, 1024)
 }
 
-func TestDeadline2k(t *testing.T) {
+func TestReadDeadlineExpiresWith2048Connections(t *testing.T) {
 	testDeadline(t, 2048)
 }
-func TestDeadline4k(t *testing.T) {
+func TestReadDeadlineExpiresWith4096Connections(t *testing.T) {
 	testDeadline(t, 4096)
 }
 
-func TestDeadline8k(t *testing.T) {
+func TestReadDeadlineExpiresWith8192Connections(t *testing.T) {
 	testDeadline(t, 8192)
 }
 
@@ -1132,7 +1132,7 @@ func triggerGCCleanup(w *Watcher) {
 	time.Sleep(200 * time.Millisecond)
 }
 
-func TestGC(t *testing.T) {
+func TestFinalizerClosesUnreachableConnections(t *testing.T) {
 	par := 200 // Need at least 100 successful GC
 	t.Log("testing GC:", par, "connections")
 	ln := echoServer(t, 1024)
@@ -1184,7 +1184,7 @@ func TestGC(t *testing.T) {
 	t.Logf("GC test completed: found=%d closed=%d", found, closed)
 }
 
-func TestDoubleClose(t *testing.T) {
+func TestCloseIsIdempotent(t *testing.T) {
 	w, err := NewWatcher()
 	if err != nil {
 		t.Fatal(err)
@@ -1201,7 +1201,7 @@ func TestDoubleClose(t *testing.T) {
 	}
 }
 
-func TestWaitIOAfterClose(t *testing.T) {
+func TestWaitIOReturnsClosedErrorAfterClose(t *testing.T) {
 	w, err := NewWatcher()
 	if err != nil {
 		t.Fatal(err)
@@ -1216,7 +1216,7 @@ func TestWaitIOAfterClose(t *testing.T) {
 	}
 }
 
-func TestCloseWithPendingRead(t *testing.T) {
+func TestCloseCancelsPendingRead(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -1254,7 +1254,7 @@ func TestCloseWithPendingRead(t *testing.T) {
 	}
 }
 
-func TestWaitIOReportsPollerError(t *testing.T) {
+func TestWaitIOReturnsPollerError(t *testing.T) {
 	w, err := NewWatcher()
 	if err != nil {
 		t.Fatal(err)
@@ -1271,7 +1271,7 @@ func TestWaitIOReportsPollerError(t *testing.T) {
 	}
 }
 
-func TestReadWriteAfterClose(t *testing.T) {
+func TestReadAndWriteReturnClosedErrorAfterClose(t *testing.T) {
 	w, err := NewWatcher()
 	if err != nil {
 		t.Fatal(err)
@@ -1293,7 +1293,7 @@ func TestReadWriteAfterClose(t *testing.T) {
 	}
 }
 
-func TestContextPassing(t *testing.T) {
+func TestWriteResultPreservesContext(t *testing.T) {
 	ln := echoServer(t, 1024)
 	defer ln.Close()
 
@@ -1338,7 +1338,7 @@ func TestContextPassing(t *testing.T) {
 	}
 }
 
-func TestSetPollerAffinityError(t *testing.T) {
+func TestSetPollerAffinityRejectsInvalidCPUIDs(t *testing.T) {
 	w, err := NewWatcher()
 	if err != nil {
 		t.Fatal(err)
@@ -1356,7 +1356,7 @@ func TestSetPollerAffinityError(t *testing.T) {
 	}
 }
 
-func TestSetLoopAffinityError(t *testing.T) {
+func TestSetLoopAffinityRejectsInvalidCPUIDs(t *testing.T) {
 	w, err := NewWatcher()
 	if err != nil {
 		t.Fatal(err)
@@ -1374,7 +1374,7 @@ func TestSetLoopAffinityError(t *testing.T) {
 	}
 }
 
-func TestFree(t *testing.T) {
+func TestFreeClosesDelegatedConnection(t *testing.T) {
 	ln := echoServer(t, 1024)
 	defer ln.Close()
 

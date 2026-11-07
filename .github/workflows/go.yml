@@ -19,8 +19,8 @@ jobs:
           - ubuntu-latest
           - windows-latest
         test:
-          - name: full
-            command: go test -v ./...
+          - name: short
+            command: go test -v -short ./...
           - name: short-race
             command: go test -v -short -race ./...
     steps:
@@ -40,8 +40,8 @@ jobs:
       fail-fast: false
       matrix:
         test:
-          - name: full
-            command: go test -v ./...
+          - name: short
+            command: go test -v -short ./...
           - name: short-race
             command: go test -v -short -race ./...
     steps:

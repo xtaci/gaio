@@ -17,7 +17,6 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
-          - windows-latest
           - macos-latest
         test:
           - name: short

@@ -34,8 +34,6 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"runtime"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -1103,59 +1101,69 @@ func BenchmarkContextSwitch(b *testing.B) {
 
 // createConnectionsAndWait creates connections, sends data, and waits for results.
 // Keeping this in a separate function ensures all local references go out of scope.
-func createConnectionsAndWait(t *testing.T, w *Watcher, ln net.Listener, par int) int {
+func createConnectionsAndWait(t *testing.T, w *Watcher, ln *net.TCPListener, par int) int {
+	t.Helper()
 	msgsize := 1024
-	var successCount int32
-	var wg sync.WaitGroup
-
+	conns := make([]net.Conn, 0, par)
+	peers := make([]net.Conn, 0, par)
+	defer func() {
+		for _, conn := range conns {
+			conn.Close()
+		}
+		for _, peer := range peers {
+			peer.Close()
+		}
+	}()
 	for i := 0; i < par; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			data := make([]byte, msgsize)
-			conn, err := net.DialTimeout("tcp", ln.Addr().String(), 10*time.Second)
-			if err != nil {
-				t.Errorf("dial: %v", err)
-				return
-			}
-			if err := w.Write(nil, conn, data); err != nil {
-				conn.Close()
-				t.Errorf("submit write: %v", err)
-				return
-			}
-			atomic.AddInt32(&successCount, 1)
-		}()
+		conn, err := net.DialTimeout("tcp", ln.Addr().String(), 10*time.Second)
+		if err != nil {
+			t.Fatalf("dial connection %d: %v", i, err)
+		}
+		conns = append(conns, conn)
+		peer, err := ln.AcceptTCP()
+		if err != nil {
+			t.Fatalf("accept connection %d: %v", i, err)
+		}
+		peers = append(peers, peer)
+		if err := w.Write(nil, conn, make([]byte, msgsize)); err != nil {
+			t.Fatalf("submit write %d: %v", i, err)
+		}
 	}
 
-	// Wait for all goroutines to submit their writes
-	wg.Wait()
-
-	expectedWrites := int(atomic.LoadInt32(&successCount))
-	t.Logf("expected writes: %d", expectedWrites)
-
 	count := 0
-	for count < expectedWrites {
+	for count < par {
 		results, err := w.WaitIO()
 		if err != nil {
-			t.Fatalf("waiting for results, got %d/%d: %v", count, expectedWrites, err)
+			t.Fatalf("waiting for results, got %d/%d: %v", count, par, err)
 		}
 		// Explicitly clear Conn references to allow GC
 		for i := range results {
-			if results[i].Operation != OpWrite || results[i].Error != nil {
-				t.Fatalf("unexpected result: operation=%v error=%v", results[i].Operation, results[i].Error)
+			if results[i].Operation != OpWrite || results[i].Conn == nil || results[i].Size != msgsize || results[i].Error != nil {
+				t.Fatalf("unexpected result: operation=%v size=%d error=%v", results[i].Operation, results[i].Size, results[i].Error)
 			}
 			results[i].Conn = nil
 		}
 		count += len(results)
 	}
+	runtime.GC()
+	if found, closed := w.GetGC(); found != 0 || closed != 0 {
+		t.Fatalf("reachable connections finalized: found=%d closed=%d", found, closed)
+	}
+	runtime.KeepAlive(conns)
 	return count
 }
 
 func TestFinalizerClosesUnreachableConnections(t *testing.T) {
 	par := 200 // Need at least 100 successful GC
 	t.Log("testing GC:", par, "connections")
-	ln := echoServer(t, 1024)
+	ln, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer ln.Close()
+	if err := ln.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 
 	w, err := NewWatcher()
 	if err != nil {

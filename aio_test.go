@@ -894,6 +894,9 @@ func TestReadDeadlineExpiresWith4096Connections(t *testing.T) {
 }
 
 func TestReadDeadlineExpiresWith8192Connections(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping high-concurrency test in short mode")
+	}
 	testDeadline(t, 8192)
 }
 

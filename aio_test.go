@@ -27,6 +27,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -42,6 +43,28 @@ import (
 
 func init() {
 	go http.ListenAndServe(":6060", nil)
+}
+
+func limitWatcherWait(t *testing.T, w *Watcher, timeout time.Duration) {
+	t.Helper()
+	timer := time.AfterFunc(timeout, func() { w.Close() })
+	t.Cleanup(func() { timer.Stop() })
+}
+
+func runWatcherProducer(t *testing.T, w *Watcher, produce func() error) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := produce(); err != nil {
+			t.Errorf("submitting operations: %v", err)
+			w.Close()
+		}
+	}()
+	t.Cleanup(func() {
+		w.Close()
+		<-done
+	})
 }
 
 type echoListener struct {
@@ -137,29 +160,6 @@ func echoServer(t testing.TB, bufsize int) net.Listener {
 	return echoListener{w, ln}
 }
 
-// hangupServer accepts connections but leaves them idle.
-func hangupServer(t testing.TB, bufsize int) net.Listener {
-	tcpaddr, _ := net.ResolveTCPAddr("tcp", "localhost:0")
-	ln, err := net.ListenTCP("tcp", tcpaddr)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	go func() {
-		var conns []net.Conn
-		for {
-			conn, err := ln.AcceptTCP()
-			if err != nil {
-				log.Println(err)
-				return
-			}
-			// Keep the connection open without reading or writing.
-			conns = append(conns, conn)
-		}
-	}()
-	return ln
-}
-
 func TestEchoServerHandlesSmallPayload(t *testing.T) {
 	ln := echoServer(t, 1)
 	defer ln.Close()
@@ -168,6 +168,9 @@ func TestEchoServerHandlesSmallPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	tx := []byte("hello world")
 	rx := make([]byte, len(tx))
 
@@ -177,12 +180,15 @@ func TestEchoServerHandlesSmallPayload(t *testing.T) {
 	}
 
 	t.Log("tx:", string(tx))
-	_, err = conn.Read(rx)
+	_, err = io.ReadFull(conn, rx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	t.Log("rx:", string(tx))
+	if !bytes.Equal(tx, rx) {
+		t.Fatalf("unexpected echoed data: %q", rx)
+	}
+	t.Log("rx:", string(rx))
 }
 
 func TestReadAndWriteDeadlinesExpire(t *testing.T) {
@@ -191,6 +197,7 @@ func TestReadAndWriteDeadlinesExpire(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Close()
+	limitWatcherWait(t, w, 30*time.Second)
 	testSingleDeadline(t, w)
 }
 
@@ -220,14 +227,12 @@ func TestWriteRejectsEmptyBuffer(t *testing.T) {
 }
 
 func TestReadWriteRejectUnsupportedConnections(t *testing.T) {
-	ln := echoServer(t, 1)
-	defer ln.Close()
-
 	w, err := NewWatcher()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer w.Close()
+	limitWatcherWait(t, w, 30*time.Second)
 
 	// A nil connection is unsupported.
 	if w.Read(nil, nil, nil) != ErrUnsupported {
@@ -237,115 +242,97 @@ func TestReadWriteRejectUnsupportedConnections(t *testing.T) {
 	p1, p2 := net.Pipe()
 	defer p1.Close()
 	defer p2.Close()
-	w.Write(nil, p1, make([]byte, 1))
-	w.Read(nil, p2, make([]byte, 1))
+	if err := w.Write(nil, p1, make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Read(nil, p2, make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
 
-	for {
+	seen := make(map[OpType]bool)
+	for len(seen) < 2 {
 		results, err := w.WaitIO()
 		if err != nil {
-			t.Log(err)
+			t.Fatal(err)
 		}
-
-		var count int
 		for _, res := range results {
-			switch res.Operation {
-			case OpRead:
-				if res.Error == ErrUnsupported {
-					count++
-					if count == 2 {
-						return
-					}
-				}
-			case OpWrite:
-				if res.Error == ErrUnsupported {
-					count++
-					if count == 2 {
-						return
-					}
-				}
+			if (res.Operation != OpRead && res.Operation != OpWrite) || res.Error != ErrUnsupported || seen[res.Operation] {
+				t.Fatalf("unexpected result: operation=%v error=%v", res.Operation, res.Error)
 			}
+			seen[res.Operation] = true
 		}
 	}
 }
 
 func testSingleDeadline(t *testing.T, w *Watcher) {
-	ln := echoServer(t, 1024)
+	t.Helper()
+
+	ln, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer ln.Close()
-	conn, err := net.Dial("tcp", ln.Addr().String())
+	conn, err := net.DialTCP("tcp", nil, ln.Addr().(*net.TCPAddr))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if err := conn.(*net.TCPConn).SetLinger(0); err != nil {
+	if err := ln.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	peer, err := ln.AcceptTCP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	if err := conn.SetWriteBuffer(4096); err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.SetReadBuffer(4096); err != nil {
 		t.Fatal(err)
 	}
 
-	go func() {
-		// read with timeout
-		err := w.ReadTimeout(nil, conn, nil, time.Now().Add(time.Second))
-		if err != nil {
-			log.Fatal(err)
-		}
-	}()
-
-READTEST:
-	for {
-		results, err := w.WaitIO()
-		if err != nil {
-			t.Log(err)
-			break READTEST
-		}
-
-		for _, res := range results {
-			switch res.Operation {
-			case OpRead:
-				if res.Error == ErrDeadline {
-					t.Log("read deadline", res.Error)
-					break READTEST
-				}
-			}
-		}
+	if err := w.ReadTimeout(nil, conn, nil, time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
 	}
-
-	hangup := hangupServer(t, 1024)
-	defer hangup.Close()
+	results, err := w.WaitIO()
+	if err != nil {
+		t.Fatalf("waiting for read deadline: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected one read result, got %d", len(results))
+	}
+	if res := results[0]; res.Operation != OpRead || res.Conn != conn || res.Error != ErrDeadline {
+		t.Fatalf("expected read deadline, got operation=%v conn=%v size=%d error=%v", res.Operation, res.Conn, res.Size, res.Error)
+	}
 
 	buf := make([]byte, 1024*1024)
-	go func() {
-		// write with timeout
-		err = w.WriteTimeout(nil, conn, buf, time.Now().Add(time.Second))
-		if err != nil {
-			log.Fatal(err)
-		}
-	}()
-
-WRITETEST:
+	// The peer never reads, so repeated writes eventually fill its TCP buffers.
 	for {
+		if err := w.WriteTimeout(nil, conn, buf, time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
 		results, err := w.WaitIO()
 		if err != nil {
-			t.Log(err)
-			break WRITETEST
+			t.Fatalf("waiting for write deadline: %v", err)
 		}
-
-		for _, res := range results {
-			switch res.Operation {
-			case OpWrite:
-				if res.Error == ErrDeadline {
-					t.Log("write deadline", res.Error)
-					if err := w.Free(res.Conn); err != nil {
-						t.Fatal(err)
-					}
-					break WRITETEST
-				}
-
-				err = w.WriteTimeout(nil, conn, buf, time.Now().Add(time.Second))
-				if err != nil {
-					t.Fatal(err)
-				}
+		if len(results) != 1 {
+			t.Fatalf("expected one write result, got %d", len(results))
+		}
+		res := results[0]
+		if res.Operation != OpWrite || res.Conn != conn {
+			t.Fatalf("expected write result, got operation=%v conn=%v", res.Operation, res.Conn)
+		}
+		if res.Error == ErrDeadline {
+			if err := w.Free(res.Conn); err != nil {
+				t.Fatal(err)
 			}
+			return
+		}
+		if res.Error != nil || res.Size != len(buf) {
+			t.Fatalf("unexpected write result: size=%d error=%v", res.Size, res.Error)
 		}
 	}
-
 }
 
 func TestEchoServerHandlesLargePayload(t *testing.T) {
@@ -356,6 +343,9 @@ func TestEchoServerHandlesLargePayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(120 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 
 	tx := make([]byte, 100*1024*1024)
 	rx := make([]byte, len(tx))
@@ -364,13 +354,21 @@ func TestEchoServerHandlesLargePayload(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	writeDone := make(chan error, 1)
 	go func() {
-		conn.Write(tx)
+		n, err := conn.Write(tx)
+		if err == nil && n != len(tx) {
+			err = io.ErrShortWrite
+		}
+		writeDone <- err
 	}()
 
 	n, err := io.ReadFull(conn, rx)
 	if err != nil {
 		t.Fatal(err, n)
+	}
+	if err := <-writeDone; err != nil {
+		t.Fatal(err)
 	}
 	t.Log("pong size:", n)
 
@@ -390,55 +388,57 @@ func TestWatcherSupportsBidirectionalIO(t *testing.T) {
 }
 
 func testBidirectionWatcher(t *testing.T, w *Watcher) {
+	t.Helper()
+	limitWatcherWait(t, w, 30*time.Second)
 	ln := echoServer(t, 65536)
 	defer ln.Close()
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer conn.Close()
 
 	tx := []byte("hello world")
-	go func() {
-		// send
-		err = w.Write(nil, conn, tx)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		// read will use internal buffer
-		err = w.Read(nil, conn, nil)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}()
-
-	for {
+	if err := w.Write(nil, conn, tx); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Read(nil, conn, nil); err != nil {
+		t.Fatal(err)
+	}
+	var rx []byte
+	written := false
+	for !written || len(rx) < len(tx) {
 		results, err := w.WaitIO()
 		if err != nil {
-			t.Log(err)
-			return
+			t.Fatal(err)
 		}
 
 		for _, res := range results {
+			if res.Conn != conn || res.Error != nil {
+				t.Fatalf("unexpected result: operation=%v error=%v", res.Operation, res.Error)
+			}
 			switch res.Operation {
 			case OpWrite:
-				// recv
-				if res.Error != nil {
-					t.Fatal(res.Error)
+				if written || res.Size != len(tx) {
+					t.Fatalf("unexpected write size: %d", res.Size)
 				}
-
-				err := w.Read(nil, conn, tx)
-				if err != nil {
-					t.Fatal(err)
-				}
+				written = true
 			case OpRead:
-				t.Log("read:", res.Error, res.Size)
-				if err := w.Free(res.Conn); err != nil {
-					t.Fatal(err)
+				rx = append(rx, res.Buffer[:res.Size]...)
+				if len(rx) < len(tx) {
+					if err := w.Read(nil, conn, nil); err != nil {
+						t.Fatal(err)
+					}
+				} else if !bytes.Equal(rx, tx) {
+					t.Fatalf("unexpected echoed data: %q", rx)
 				}
-				return
+			default:
+				t.Fatalf("unexpected operation: %v", res.Operation)
 			}
 		}
+	}
+	if err := w.Free(conn); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -449,12 +449,14 @@ func TestReadFullReceivesRequestedBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer conn.Close()
 
 	w, err := NewWatcher()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer w.Close()
+	limitWatcherWait(t, w, 120*time.Second)
 
 	// 100 MB random
 	tx := make([]byte, 100*1024*1024)
@@ -464,47 +466,44 @@ func TestReadFullReceivesRequestedBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	go func() {
-		// send
-		if err := w.Write(nil, conn, tx); err != nil {
-			log.Fatal(err)
-		}
-	}()
-
-	// submit read full
-	err = w.ReadFull(nil, conn, rx, time.Time{})
-	if err != nil {
-		log.Fatal(err)
+	if err := w.Write(nil, conn, tx); err != nil {
+		t.Fatal(err)
 	}
-	for {
+	if err := w.ReadFull(nil, conn, rx, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	written, read := false, false
+	for !written || !read {
 		results, err := w.WaitIO()
 		if err != nil {
-			t.Log(err)
-			return
+			t.Fatal(err)
 		}
 
 		for _, res := range results {
+			if res.Conn != conn || res.Error != nil {
+				t.Fatalf("unexpected result: operation=%v error=%v", res.Operation, res.Error)
+			}
 			switch res.Operation {
 			case OpWrite:
-				// recv
-				if res.Error != nil {
-					t.Fatal(res.Error)
+				if written || res.Size != len(tx) {
+					t.Fatalf("unexpected write size: %d", res.Size)
 				}
-				t.Log("written:", res.Error, res.Size)
+				written = true
 			case OpRead:
-				t.Log("read:", res.Error, res.Size)
-				if res.Size != len(rx) {
-					t.Fatal("readfull mismatch", res.Size, len(rx))
+				if read || res.Size != len(rx) {
+					t.Fatalf("readfull mismatch: %d, want %d", res.Size, len(rx))
 				}
 				if !bytes.Equal(tx, rx) {
 					t.Fatal("readfull content mismatch")
 				}
-				if err := w.Free(res.Conn); err != nil {
-					t.Fatal(err)
-				}
-				return
+				read = true
+			default:
+				t.Fatalf("unexpected operation: %v", res.Operation)
 			}
 		}
+	}
+	if err := w.Free(conn); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -521,31 +520,39 @@ func TestFreeClosesConnectionAndSubsequentReadFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Close()
-	defer time.Sleep(1 * time.Second)
+	limitWatcherWait(t, w, 30*time.Second)
 
 	tx := []byte("hello world")
 	// send
 	err = w.Write(nil, conn, tx)
 	if err != nil {
-		log.Fatal(err)
+		t.Fatal(err)
 	}
 	for {
 		results, err := w.WaitIO()
 		if err != nil {
-			t.Log(err)
-			return
+			t.Fatal(err)
 		}
 
 		for _, res := range results {
 			switch res.Operation {
 			case OpWrite:
-				w.Free(conn)
-				w.Read(nil, conn, tx)
-			case OpRead:
 				if res.Error != nil {
-					t.Log(res.Error)
-					return
+					t.Fatal(res.Error)
 				}
+				if err := w.Free(conn); err != nil {
+					t.Fatal(err)
+				}
+				if err := w.Read(nil, conn, tx); err != nil {
+					t.Fatal(err)
+				}
+			case OpRead:
+				if res.Error == nil {
+					t.Fatal("expected read on freed connection to fail")
+				}
+				return
+			default:
+				t.Fatalf("unexpected operation: %v", res.Operation)
 			}
 		}
 	}
@@ -565,32 +572,24 @@ func TestWriteToClosedConnectionReturnsError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Close()
+	limitWatcherWait(t, w, 30*time.Second)
 
 	tx := []byte("hello world")
-	go func() {
-		// send
-		err = w.Write(nil, conn, tx)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}()
+	if err := w.Write(nil, conn, tx); err != nil {
+		t.Fatal(err)
+	}
 
 	for {
 		results, err := w.WaitIO()
 		if err != nil {
-			t.Log(err)
-			return
+			t.Fatal(err)
 		}
 
 		for _, res := range results {
-			switch res.Operation {
-			case OpWrite:
-				// recv
-				if res.Error != nil {
-					conn.Close()
-					return
-				}
+			if res.Operation != OpWrite || res.Conn != conn || res.Error == nil {
+				t.Fatalf("expected failed write, got operation=%v error=%v", res.Operation, res.Error)
 			}
+			return
 		}
 	}
 }
@@ -640,6 +639,14 @@ func TestConcurrentEchoWith1024ConnectionsAnd16BytePayload(t *testing.T) {
 	testParallel(t, 1024, 16)
 }
 
+func TestConcurrentEchoHandlesPartialReads(t *testing.T) {
+	testParallel(t, 8, 128*1024)
+}
+
+func TestConcurrentEchoHandlesPartialReadsWithMixedBuffers(t *testing.T) {
+	testParallelRandomInternal(t, 8, 128*1024, false)
+}
+
 func TestConcurrentEchoWith2048ConnectionsAnd16BytePayload(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("skipping on Windows due to system connection limits")
@@ -654,7 +661,29 @@ func TestConcurrentEchoWith4096ConnectionsAnd16BytePayload(t *testing.T) {
 	testParallel(t, 4096, 16)
 }
 
+func submitEchoWrites(t *testing.T, w *Watcher, addr string, par, msgsize int) {
+	t.Helper()
+	runWatcherProducer(t, w, func() error {
+		for i := 0; i < par; i++ {
+			conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+			if err != nil {
+				return fmt.Errorf("dial connection %d: %w", i, err)
+			}
+			if err := conn.(*net.TCPConn).SetLinger(0); err != nil {
+				conn.Close()
+				return err
+			}
+			if err := w.Write(nil, conn, make([]byte, msgsize)); err != nil {
+				conn.Close()
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func testParallel(t *testing.T, par int, msgsize int) {
+	t.Helper()
 	t.Log("testing concurrent:", par, "connections")
 	ln := echoServer(t, msgsize)
 	defer ln.Close()
@@ -664,34 +693,18 @@ func testParallel(t *testing.T, par int, msgsize int) {
 		t.Fatal(err)
 	}
 	defer w.Close()
+	limitWatcherWait(t, w, 180*time.Second)
 	connBytes := make(map[net.Conn]int, par)
 
-	go func() {
-		for i := 0; i < par; i++ {
-			data := make([]byte, msgsize)
-			conn, err := net.Dial("tcp", ln.Addr().String())
-			if err != nil {
-				log.Fatal(err)
-			}
-			if err := conn.(*net.TCPConn).SetLinger(0); err != nil {
-				log.Fatal(err)
-			}
-
-			// send
-			err = w.Write(nil, conn, data)
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
-	}()
+	submitEchoWrites(t, w, ln.Addr().String(), par, msgsize)
 
 	nbytes := 0
+	writes, completed := 0, 0
 	ntotal := msgsize * par
 	for {
 		results, err := w.WaitIO()
 		if err != nil {
-			t.Log(err)
-			return
+			t.Fatalf("waiting for echo: %d/%d writes, %d/%d connections, %d/%d bytes: %v", writes, par, completed, par, nbytes, ntotal, err)
 		}
 
 		for _, res := range results {
@@ -704,6 +717,7 @@ func testParallel(t *testing.T, par int, msgsize int) {
 					}
 					t.Fatalf("write failed: %v", res.Error)
 				}
+				writes++
 
 				err = w.Read(nil, res.Conn, nil)
 				if err != nil {
@@ -716,22 +730,30 @@ func testParallel(t *testing.T, par int, msgsize int) {
 					}
 					t.Fatalf("read failed: %v", res.Error)
 				}
-				if res.Size == 0 {
-					continue
+				if res.Size <= 0 {
+					t.Fatal("empty read result")
 				}
 
 				connBytes[res.Conn] += res.Size
 				nbytes += res.Size
-				if connBytes[res.Conn] >= msgsize {
+				if connBytes[res.Conn] > msgsize {
+					t.Fatalf("received too many bytes for connection: %d", connBytes[res.Conn])
+				}
+				if connBytes[res.Conn] == msgsize {
 					if err := w.Free(res.Conn); err != nil {
 						t.Fatal(err)
 					}
 					delete(connBytes, res.Conn)
+					completed++
+				} else if err := w.Read(nil, res.Conn, nil); err != nil {
+					t.Fatal(err)
 				}
 				if nbytes >= ntotal {
 					t.Log("completed:", nbytes)
 					return
 				}
+			default:
+				t.Fatalf("unexpected operation: %v", res.Operation)
 			}
 		}
 	}
@@ -758,6 +780,7 @@ func TestConcurrentEchoWithSwapBufferForEveryRead(t *testing.T) {
 }
 
 func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool) {
+	t.Helper()
 	t.Log("testing concurrent:", par, "connections")
 	ln := echoServer(t, msgsize)
 	defer ln.Close()
@@ -767,34 +790,29 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 		t.Fatal(err)
 	}
 	defer w.Close()
+	limitWatcherWait(t, w, 180*time.Second)
 	connBytes := make(map[net.Conn]int, par)
 
-	go func() {
-		for i := 0; i < par; i++ {
-			data := make([]byte, msgsize)
-			conn, err := net.Dial("tcp", ln.Addr().String())
-			if err != nil {
-				log.Fatal(err)
-			}
-			if err := conn.(*net.TCPConn).SetLinger(0); err != nil {
-				log.Fatal(err)
-			}
+	submitEchoWrites(t, w, ln.Addr().String(), par, msgsize)
 
-			// send
-			err = w.Write(nil, conn, data)
-			if err != nil {
-				log.Fatal(err)
-			}
+	submitRead := func(conn net.Conn) error {
+		var rnd int32
+		if err := binary.Read(rand.Reader, binary.LittleEndian, &rnd); err != nil {
+			return err
 		}
-	}()
+		if allswap || rnd%13 == 0 {
+			return w.Read(nil, conn, nil)
+		}
+		return w.Read(nil, conn, make([]byte, 1024))
+	}
 
 	nbytes := 0
+	writes, completed := 0, 0
 	ntotal := msgsize * par
 	for {
 		results, err := w.WaitIO()
 		if err != nil {
-			t.Log(err)
-			return
+			t.Fatalf("waiting for echo: %d/%d writes, %d/%d connections, %d/%d bytes: %v", writes, par, completed, par, nbytes, ntotal, err)
 		}
 
 		for _, res := range results {
@@ -807,18 +825,9 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 					}
 					t.Fatal(res.Error)
 				}
+				writes++
 
-				// inject random nil buffer to test internal buffer
-				var err error
-				var rnd int32
-				binary.Read(rand.Reader, binary.LittleEndian, &rnd)
-				if allswap || rnd%13 == 0 {
-					err = w.Read(nil, res.Conn, nil)
-				} else {
-					err = w.Read(nil, res.Conn, make([]byte, 1024))
-				}
-
-				if err != nil {
+				if err := submitRead(res.Conn); err != nil {
 					t.Fatal(err)
 				}
 			case OpRead:
@@ -828,18 +837,29 @@ func testParallelRandomInternal(t *testing.T, par int, msgsize int, allswap bool
 					}
 					t.Fatal(res.Error)
 				}
+				if res.Size <= 0 {
+					t.Fatal("empty read result")
+				}
 				connBytes[res.Conn] += res.Size
 				nbytes += res.Size
-				if connBytes[res.Conn] >= msgsize {
+				if connBytes[res.Conn] > msgsize {
+					t.Fatalf("received too many bytes for connection: %d", connBytes[res.Conn])
+				}
+				if connBytes[res.Conn] == msgsize {
 					if err := w.Free(res.Conn); err != nil {
 						t.Fatal(err)
 					}
 					delete(connBytes, res.Conn)
+					completed++
+				} else if err := submitRead(res.Conn); err != nil {
+					t.Fatal(err)
 				}
 				if nbytes >= ntotal {
 					t.Log("completed:", nbytes)
 					return
 				}
+			default:
+				t.Fatalf("unexpected operation: %v", res.Operation)
 			}
 		}
 	}
@@ -861,6 +881,7 @@ func TestReadDeadlineExpiresWith8192Connections(t *testing.T) {
 }
 
 func testDeadline(t *testing.T, par int) {
+	t.Helper()
 	t.Log("testing concurrent:", par, "unresponsive connections")
 	ln := echoServer(t, 128)
 	defer ln.Close()
@@ -870,49 +891,46 @@ func testDeadline(t *testing.T, par int) {
 		t.Fatal(err)
 	}
 	defer w.Close()
+	limitWatcherWait(t, w, 180*time.Second)
 
-	die := make(chan struct{})
-	go func() {
+	runWatcherProducer(t, w, func() error {
 		for i := 0; i < par; i++ {
-			conn, err := net.Dial("tcp", ln.Addr().String())
+			conn, err := net.DialTimeout("tcp", ln.Addr().String(), 10*time.Second)
 			if err != nil {
-				log.Fatal(err)
+				return fmt.Errorf("dial connection %d: %w", i, err)
 			}
 			if err := conn.(*net.TCPConn).SetLinger(0); err != nil {
-				log.Fatal(err)
+				conn.Close()
+				return err
 			}
-
 			// send nothing, but submit a read request with timeout
 			err = w.ReadTimeout(nil, conn, nil, time.Now().Add(time.Second))
 			if err != nil {
-				log.Fatal(err)
+				conn.Close()
+				return err
 			}
 		}
-		<-die
-	}()
+		return nil
+	})
 
 	nerrs := 0
 	for {
 		results, err := w.WaitIO()
 		if err != nil {
-			t.Log(err)
-			return
+			t.Fatal(err)
 		}
 
 		for _, res := range results {
-			switch res.Operation {
-			case OpRead:
-				if res.Error == ErrDeadline {
-					nerrs++
-					if err := w.Free(res.Conn); err != nil {
-						t.Fatal(err)
-					}
-					if nerrs == par {
-						t.Log("all deadline reached")
-						close(die)
-						return
-					}
-				}
+			if res.Operation != OpRead || res.Error != ErrDeadline {
+				t.Fatalf("expected read deadline, got operation=%v error=%v", res.Operation, res.Error)
+			}
+			nerrs++
+			if err := w.Free(res.Conn); err != nil {
+				t.Fatal(err)
+			}
+			if nerrs == par {
+				t.Log("all deadlines reached")
+				return
 			}
 		}
 	}
@@ -1075,11 +1093,14 @@ func createConnectionsAndWait(t *testing.T, w *Watcher, ln net.Listener, par int
 		go func() {
 			defer wg.Done()
 			data := make([]byte, msgsize)
-			conn, err := net.Dial("tcp", ln.Addr().String())
+			conn, err := net.DialTimeout("tcp", ln.Addr().String(), 10*time.Second)
 			if err != nil {
+				t.Errorf("dial: %v", err)
 				return
 			}
 			if err := w.Write(nil, conn, data); err != nil {
+				conn.Close()
+				t.Errorf("submit write: %v", err)
 				return
 			}
 			atomic.AddInt32(&successCount, 1)
@@ -1093,43 +1114,21 @@ func createConnectionsAndWait(t *testing.T, w *Watcher, ln net.Listener, par int
 	t.Logf("expected writes: %d", expectedWrites)
 
 	count := 0
-	timeout := time.After(10 * time.Second)
 	for count < expectedWrites {
-		select {
-		case <-timeout:
-			t.Logf("timeout waiting for results, got %d/%d", count, expectedWrites)
-			return count
-		default:
-		}
-
 		results, err := w.WaitIO()
 		if err != nil {
-			t.Logf("waitio error: %v", err)
-			return count
+			t.Fatalf("waiting for results, got %d/%d: %v", count, expectedWrites, err)
 		}
 		// Explicitly clear Conn references to allow GC
 		for i := range results {
+			if results[i].Operation != OpWrite || results[i].Error != nil {
+				t.Fatalf("unexpected result: operation=%v error=%v", results[i].Operation, results[i].Error)
+			}
 			results[i].Conn = nil
 		}
 		count += len(results)
 	}
 	return count
-}
-
-// triggerGCCleanup triggers the GC cleanup by calling WaitIO once more
-// to clear the internal results slice, then forces GC.
-func triggerGCCleanup(w *Watcher) {
-	// Start a goroutine that will block in WaitIO
-	// This causes the previous results to be cleared
-	started := make(chan struct{})
-	go func() {
-		close(started)
-		_, _ = w.WaitIO()
-	}()
-	// Wait for the goroutine to start
-	<-started
-	// Give extra time to ensure WaitIO has cleared w.results
-	time.Sleep(200 * time.Millisecond)
 }
 
 func TestFinalizerClosesUnreachableConnections(t *testing.T) {
@@ -1143,14 +1142,12 @@ func TestFinalizerClosesUnreachableConnections(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Close()
+	limitWatcherWait(t, w, 30*time.Second)
 
 	// Create connections and wait for results in a separate function
 	// This ensures all local references (results, conn) go out of scope
 	count := createConnectionsAndWait(t, w, ln, par)
 	t.Logf("received %d results", count)
-
-	// Trigger WaitIO to clear internal results, then force GC
-	triggerGCCleanup(w)
 
 	// Force more aggressive GC by allocating and discarding memory
 	// This helps ensure finalizers are processed
@@ -1217,26 +1214,24 @@ func TestWaitIOReturnsClosedErrorAfterClose(t *testing.T) {
 }
 
 func TestCloseCancelsPendingRead(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-
-	accepted := make(chan net.Conn, 1)
-	go func() {
-		conn, err := ln.Accept()
-		if err == nil {
-			accepted <- conn
-		}
-	}()
 
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	serverConn := <-accepted
+	if err := ln.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	serverConn, err := ln.AcceptTCP()
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer serverConn.Close()
 
 	w, err := NewWatcher()
@@ -1259,6 +1254,8 @@ func TestWaitIOReturnsPollerError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer w.Close()
+	limitWatcherWait(t, w, 30*time.Second)
 
 	pollerErr := errors.New("poller failed")
 	w.chSignal <- Signal{err: pollerErr}
@@ -1276,13 +1273,14 @@ func TestReadAndWriteReturnClosedErrorAfterClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.Close()
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	// Use a non-nil connection; the closed-watcher check runs before connection validation.
-	ln, _ := net.Listen("tcp", "localhost:0")
-	conn, _ := net.Dial("tcp", ln.Addr().String())
-	conn.Close()
-	ln.Close()
+	conn, peer := net.Pipe()
+	defer conn.Close()
+	defer peer.Close()
 
 	if err := w.Read(nil, conn, make([]byte, 1)); err != ErrWatcherClosed {
 		t.Fatalf("Read: expected ErrWatcherClosed, got %v", err)
@@ -1302,6 +1300,7 @@ func TestWriteResultPreservesContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Close()
+	limitWatcherWait(t, w, 30*time.Second)
 
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -1326,6 +1325,9 @@ func TestWriteResultPreservesContext(t *testing.T) {
 
 		for _, res := range results {
 			if res.Operation == OpWrite {
+				if res.Error != nil {
+					t.Fatal(res.Error)
+				}
 				if res.Context != ctx {
 					t.Fatalf("expected context %v, got %v", ctx, res.Context)
 				}
@@ -1334,6 +1336,7 @@ func TestWriteResultPreservesContext(t *testing.T) {
 				}
 				return
 			}
+			t.Fatalf("unexpected operation: %v", res.Operation)
 		}
 	}
 }
@@ -1383,6 +1386,7 @@ func TestFreeClosesDelegatedConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Close()
+	limitWatcherWait(t, w, 30*time.Second)
 
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -1403,9 +1407,13 @@ func TestFreeClosesDelegatedConnection(t *testing.T) {
 		}
 		for _, res := range results {
 			if res.Operation == OpWrite {
+				if res.Error != nil {
+					t.Fatal(res.Error)
+				}
 				done = true
 				break
 			}
+			t.Fatalf("unexpected operation: %v", res.Operation)
 		}
 	}
 

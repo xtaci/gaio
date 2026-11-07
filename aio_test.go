@@ -647,6 +647,10 @@ func TestConcurrentEchoHandlesPartialReadsWithMixedBuffers(t *testing.T) {
 	testParallelRandomInternal(t, 8, 128*1024, false)
 }
 
+func TestEchoWithTestConnectionSettings(t *testing.T) {
+	testParallel(t, 1, 1024)
+}
+
 func TestConcurrentEchoWith2048ConnectionsAnd16BytePayload(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("skipping on Windows due to system connection limits")
@@ -661,6 +665,15 @@ func TestConcurrentEchoWith4096ConnectionsAnd16BytePayload(t *testing.T) {
 	testParallel(t, 4096, 16)
 }
 
+func configureTestConnection(conn *net.TCPConn) error {
+	// On Windows, abortive close can reset the socket when the watcher closes
+	// the original handle during delegation.
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	return conn.SetLinger(0)
+}
+
 func submitEchoWrites(t *testing.T, w *Watcher, addr string, par, msgsize int) {
 	t.Helper()
 	runWatcherProducer(t, w, func() error {
@@ -669,7 +682,7 @@ func submitEchoWrites(t *testing.T, w *Watcher, addr string, par, msgsize int) {
 			if err != nil {
 				return fmt.Errorf("dial connection %d: %w", i, err)
 			}
-			if err := conn.(*net.TCPConn).SetLinger(0); err != nil {
+			if err := configureTestConnection(conn.(*net.TCPConn)); err != nil {
 				conn.Close()
 				return err
 			}
@@ -869,6 +882,10 @@ func TestReadDeadlineExpiresWith1024Connections(t *testing.T) {
 	testDeadline(t, 1024)
 }
 
+func TestReadDeadlineWithTestConnectionSettings(t *testing.T) {
+	testDeadline(t, 1)
+}
+
 func TestReadDeadlineExpiresWith2048Connections(t *testing.T) {
 	testDeadline(t, 2048)
 }
@@ -899,7 +916,7 @@ func testDeadline(t *testing.T, par int) {
 			if err != nil {
 				return fmt.Errorf("dial connection %d: %w", i, err)
 			}
-			if err := conn.(*net.TCPConn).SetLinger(0); err != nil {
+			if err := configureTestConnection(conn.(*net.TCPConn)); err != nil {
 				conn.Close()
 				return err
 			}

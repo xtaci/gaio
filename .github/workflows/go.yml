@@ -12,6 +12,7 @@ jobs:
   test:
     name: ${{ matrix.os }} / ${{ matrix.test.name }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -36,6 +37,7 @@ jobs:
   freebsd:
     name: FreeBSD / ${{ matrix.test.name }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:

@@ -569,8 +569,15 @@ func (w *watcher) tryWrite(fd int, pcb *aiocb) bool {
 
 // releaseConn removes the connection identified by ident, fails its queued
 // requests, and closes its duplicated file descriptor.
+//
+// The socket is removed from the poller before it is closed. Relying on the
+// poller to notice the closed socket is not safe on Windows: the handle number
+// can be reused by a new connection before the poller observes POLLNVAL for the
+// old one, and the delayed removal would then drop the new connection from the
+// poll set. Unwatch errors are ignored because the socket is closed regardless.
 func (w *watcher) releaseConn(ident int) {
 	if w.unregisterConn(ident) {
+		w.pfd.Unwatch(ident)
 		closeFd(ident)
 	}
 }
@@ -879,9 +886,9 @@ PENDING:
 // The watcher polls a duplicated descriptor rather than the descriptor owned
 // by net.Conn. This keeps events associated with the watched socket even if
 // the original descriptor is closed and its number is reused by another
-// connection. When the watched duplicate is closed, the platform poller
-// removes it; this handler also ignores events for descriptors no longer in
-// the registration map.
+// connection. The watched duplicate is removed from the poller before it is
+// closed; this handler also ignores events for descriptors no longer in the
+// registration map.
 func (w *watcher) handleEvents(events pollerEvents) {
 	for i := range events {
 		e := &events[i]

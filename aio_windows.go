@@ -357,10 +357,16 @@ func (p *poller) Watch(fd int) error {
 	return nil
 }
 
-// Unwatch backs Detach, which is not supported on Windows. It is unrelated to
-// unwatch, which drops a socket from the poll set when it is closed.
+// Unwatch removes a socket from the poll set.
+//
+// The watcher calls it before closing or detaching a socket. Removal must not
+// wait for WSAPoll to report POLLNVAL: Windows reuses socket handle numbers
+// aggressively, so a new connection can obtain the same number while a stale
+// POLLNVAL for the old one is still in flight, and removing the entry at that
+// point would drop the new connection from the poll set.
 func (p *poller) Unwatch(fd int) error {
-	return ErrUnsupported
+	p.unwatch(uintptr(fd))
+	return nil
 }
 
 // unwatch removes a socket from the poll set.
@@ -510,9 +516,11 @@ func (p *poller) Wait(chSignal chan Signal) {
 					continue
 				}
 
-				// Remove invalid sockets from poll set
+				// POLLNVAL means the socket was closed after the snapshot was
+				// taken. The watcher already removed it with Unwatch, and the
+				// handle number may belong to a new connection by now, so the
+				// stale report is ignored rather than acted on.
 				if pfd.revents&_POLLNVAL != 0 {
-					p.unwatch(pfd.fd)
 					continue
 				}
 

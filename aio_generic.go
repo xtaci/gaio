@@ -53,6 +53,9 @@ var (
 	ErrEmptyBuffer = errors.New("empty buffer")
 	// ErrCPUID is returned when the requested CPU ID is outside the available range.
 	ErrCPUID = errors.New("no such core")
+	// ErrNotWatched is returned when Detach is called for a connection that is
+	// not registered with the watcher.
+	ErrNotWatched = errors.New("connection is not watched")
 )
 
 var (
@@ -67,6 +70,9 @@ const (
 	OpRead OpType = iota
 	// OpWrite identifies a write operation.
 	OpWrite
+	// OpDetach identifies the result of Detach. On success OpResult.Conn
+	// holds a new net.Conn for the same socket; see Watcher.Detach.
+	OpDetach
 	// opDelete is an internal operation that releases a connection.
 	opDelete
 )

@@ -72,7 +72,15 @@ func (p *poller) Close() error {
 	p.dieOnce.Do(func() {
 		close(p.die)
 	})
-	return p.wakeup()
+
+	// Wait may observe die and exit before the wakeup is sent, releasing the
+	// wakeup descriptor on its way out. A wakeup that finds the poller already
+	// closed is then the requested outcome, not a failure.
+	err := p.wakeup()
+	if err == ErrPollerClosed {
+		return nil
+	}
+	return err
 }
 
 // Watch registers a socket's read and write filters with the kqueue.

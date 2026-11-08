@@ -383,8 +383,7 @@ func (w *watcher) Free(conn net.Conn) error {
 // afterwards; the watcher's duplicate becomes the new connection.
 //
 // If conn is not registered with the watcher, the result reports ErrNotWatched
-// and conn is left untouched. On Windows the result reports ErrUnsupported and
-// the connection stays registered.
+// and conn is left untouched.
 func (w *watcher) Detach(ctx any, conn net.Conn) error {
 	return w.aioCreate(ctx, OpDetach, conn, nil, zeroTime, false)
 }
@@ -633,10 +632,17 @@ func (w *watcher) detachConn(ident int, pcb *aiocb) {
 	w.unregisterConn(ident)
 
 	// net.FileConn duplicates the descriptor, so closing f closes ident while
-	// the new connection keeps its own copy.
-	f := os.NewFile(uintptr(ident), "")
-	conn, err := net.FileConn(f)
-	f.Close()
+	// the new connection keeps its own copy. The descriptor is closed on the
+	// error path too because the connection is no longer registered.
+	var conn net.Conn
+	err := prepareDetach(ident)
+	if err == nil {
+		f := os.NewFile(uintptr(ident), "")
+		conn, err = net.FileConn(f)
+		f.Close()
+	} else {
+		closeFd(ident)
+	}
 
 	pcb.conn = conn
 	pcb.err = err

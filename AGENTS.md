@@ -62,7 +62,7 @@ When generating code or analyzing issues:
     - **Read**: Can use a nil buffer to let `gaio` use its internal swap buffer.
     - **Write**: Must provide a pre-filled buffer.
 4.  **Error Handling**: Check `OpResult.Error`. `ErrDeadline` indicates a timeout.
-5.  **Release**: `watcher.Free` closes the socket. `watcher.Detach` keeps it open and returns a new `net.Conn` in an `OpDetach` result (`ErrNotWatched` if the conn was never registered; `ErrUnsupported` on Windows). Internally, `releaseConn` = `unregisterConn` + `closeFd`; `detachConn` uses `unregisterConn` only and lets `net.FileConn` take over the duplicated descriptor.
+5.  **Release**: `watcher.Free` closes the socket. `watcher.Detach` keeps it open and returns a new `net.Conn` in an `OpDetach` result (`ErrNotWatched` if the conn was never registered). Internally, `releaseConn` = `pfd.Unwatch` + `unregisterConn` + `closeFd`; `detachConn` uses `pfd.Unwatch` + `unregisterConn` and lets `net.FileConn` take over the duplicated descriptor. Windows Detach needs Go 1.25, the first release where `net.FileConn` accepts a socket handle.
 
 ## Common Tasks
 

@@ -40,7 +40,7 @@ The connection must expose its socket through `SyscallConn` (as standard TCP con
   
 - **Resource management:** Call `Watcher.Free(conn)` when a connection is no longer needed; this queues it for release by the watcher. Explicitly call `Watcher.Close()` when shutting down. Finalizers provide fallback cleanup, but should not replace explicit resource management.
 
-- **Taking a connection back:** Call `Watcher.Detach(ctx, conn)` to release a connection without closing its socket. Pending requests fail with `io.ErrClosedPipe`, then an `OpDetach` result arrives whose `Conn` is a new `net.Conn` for the same socket, usable directly or with another watcher. Detach is not supported on Windows.
+- **Taking a connection back:** Call `Watcher.Detach(ctx, conn)` to release a connection without closing its socket. Pending requests fail with `io.ErrClosedPipe`, then an `OpDetach` result arrives whose `Conn` is a new `net.Conn` for the same socket, usable directly or with another watcher.
 
 - **Load Balancing:** For connection load balancing, create multiple `gaio.Watcher` instances and distribute `net.Conn` using your preferred strategy. For acceptor load balancing, use `go-reuseport` as the listener.
 

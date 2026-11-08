@@ -55,6 +55,12 @@ func dupconn(conn net.Conn) (newfd int, err error) {
 }
 
 // closeFd closes a Unix file descriptor.
+// prepareDetach has nothing to do on Unix: the descriptor carries no poller
+// state that would prevent net.FileConn from adopting it.
+func prepareDetach(fd int) error {
+	return nil
+}
+
 func closeFd(fd int) error {
 	return syscall.Close(fd)
 }

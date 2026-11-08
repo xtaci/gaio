@@ -1,5 +1,3 @@
-//go:build !windows
-
 package gaio_test
 
 import (
@@ -170,6 +168,7 @@ func testDetachParallel(t *testing.T, par int, times int) {
 			case gaio.OpRead:
 				if res.Error != nil {
 					t.Error(res.Error)
+					return
 				}
 				ctx := res.Context.(*detachCtx)
 				if ctx.cmd[1] != res.Buffer[0] {

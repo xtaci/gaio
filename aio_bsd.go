@@ -99,6 +99,35 @@ func (p *poller) Watch(fd int) error {
 	return err
 }
 
+// Unwatch removes a socket's read and write filters from the kqueue.
+//
+// Like Watch, the change is applied immediately: the caller releases the
+// socket right after Unwatch returns, and a deferred EV_DELETE could hit an
+// unrelated socket that reused the descriptor number. kevent is safe to call
+// concurrently with a blocked kevent on the same kqueue. ENOENT means the
+// filter is already gone and is ignored.
+func (p *poller) Unwatch(fd int) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.fd == -1 {
+		return ErrPollerClosed
+	}
+
+	// Delete each filter in its own call so that ENOENT for one filter does
+	// not prevent the other from being removed.
+	changes := []syscall.Kevent_t{
+		{Ident: uint64(fd), Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_READ},
+		{Ident: uint64(fd), Flags: syscall.EV_DELETE, Filter: syscall.EVFILT_WRITE},
+	}
+	for i := range changes {
+		_, err := syscall.Kevent(p.fd, changes[i:i+1], nil, nil)
+		if err != nil && err != syscall.ENOENT {
+			return err
+		}
+	}
+	return nil
+}
+
 // wakeup interrupts kevent.
 func (p *poller) wakeup() error {
 	p.mu.Lock()

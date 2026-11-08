@@ -27,6 +27,7 @@ import (
 	"container/list"
 	"io"
 	"net"
+	"os"
 	"reflect"
 	"runtime"
 	"sync"
@@ -373,6 +374,21 @@ func (w *watcher) Free(conn net.Conn) error {
 	return w.aioCreate(nil, opDelete, conn, nil, zeroTime, false)
 }
 
+// Detach queues conn for release by the watcher and hands the underlying
+// socket back to the caller as a new net.Conn. Pending operations are
+// completed with io.ErrClosedPipe, as with Free, and then an OpDetach result
+// carrying ctx is delivered. On success, OpResult.Conn holds the new
+// connection, which is no longer watched and may be used directly or
+// submitted to a watcher again. The conn passed to Detach must not be used
+// afterwards; the watcher's duplicate becomes the new connection.
+//
+// If conn is not registered with the watcher, the result reports ErrNotWatched
+// and conn is left untouched. On Windows the result reports ErrUnsupported and
+// the connection stays registered.
+func (w *watcher) Detach(ctx any, conn net.Conn) error {
+	return w.aioCreate(ctx, OpDetach, conn, nil, zeroTime, false)
+}
+
 // aioCreate creates a request record, appends it to the pending queue, and
 // notifies the watcher loop.
 func (w *watcher) aioCreate(ctx any, op OpType, conn net.Conn, buf []byte, deadline time.Time, readfull bool) error {
@@ -554,36 +570,70 @@ func (w *watcher) tryWrite(fd int, pcb *aiocb) bool {
 // releaseConn removes the connection identified by ident, fails its queued
 // requests, and closes its duplicated file descriptor.
 func (w *watcher) releaseConn(ident int) {
-	if desc, ok := w.descs[ident]; ok {
-		// Fail pending reads and remove their deadlines from the timeout heap.
-		for e := desc.readers.Front(); e != nil; e = e.Next() {
-			tcb := e.Value.(*aiocb)
-			// Report that the connection has been released.
-			tcb.err = io.ErrClosedPipe
-			w.deliver(tcb)
-		}
-
-		// Fail pending writes and remove their deadlines from the timeout heap.
-		for e := desc.writers.Front(); e != nil; e = e.Next() {
-			tcb := e.Value.(*aiocb)
-			// Report that the connection has been released.
-			tcb.err = io.ErrClosedPipe
-			w.deliver(tcb)
-		}
-
-		// Remove the connection from the registration maps.
-		delete(w.descs, ident)
-		delete(w.connIdents, desc.ptr)
-
-		// Reset and return the descriptor record to its pool.
-		desc.ptr = 0
-		desc.readers.Init()
-		desc.writers.Init()
-		fdDescPool.Put(desc)
-
-		// Close the duplicate owned by the watcher.
+	if w.unregisterConn(ident) {
 		closeFd(ident)
 	}
+}
+
+// unregisterConn removes the connection identified by ident from the
+// registration maps and fails its queued requests. The duplicated file
+// descriptor stays open; the caller owns it. It reports whether ident was
+// registered.
+func (w *watcher) unregisterConn(ident int) bool {
+	desc, ok := w.descs[ident]
+	if !ok {
+		return false
+	}
+
+	// Fail pending reads and remove their deadlines from the timeout heap.
+	for e := desc.readers.Front(); e != nil; e = e.Next() {
+		tcb := e.Value.(*aiocb)
+		// Report that the connection has been released.
+		tcb.err = io.ErrClosedPipe
+		w.deliver(tcb)
+	}
+
+	// Fail pending writes and remove their deadlines from the timeout heap.
+	for e := desc.writers.Front(); e != nil; e = e.Next() {
+		tcb := e.Value.(*aiocb)
+		// Report that the connection has been released.
+		tcb.err = io.ErrClosedPipe
+		w.deliver(tcb)
+	}
+
+	// Remove the connection from the registration maps.
+	delete(w.descs, ident)
+	delete(w.connIdents, desc.ptr)
+
+	// Reset and return the descriptor record to its pool.
+	desc.ptr = 0
+	desc.readers.Init()
+	desc.writers.Init()
+	fdDescPool.Put(desc)
+	return true
+}
+
+// detachConn unregisters ident from the poller, releases the connection, and
+// delivers pcb with a new net.Conn built from the watcher's duplicate.
+func (w *watcher) detachConn(ident int, pcb *aiocb) {
+	// On failure the connection stays registered and usable through the watcher.
+	if err := w.pfd.Unwatch(ident); err != nil {
+		pcb.err = err
+		w.deliver(pcb)
+		return
+	}
+
+	w.unregisterConn(ident)
+
+	// net.FileConn duplicates the descriptor, so closing f closes ident while
+	// the new connection keeps its own copy.
+	f := os.NewFile(uintptr(ident), "")
+	conn, err := net.FileConn(f)
+	f.Close()
+
+	pcb.conn = conn
+	pcb.err = err
+	w.deliver(pcb)
 }
 
 // deliver queues pcb for WaitIO and removes it from the timeout heap, if present.
@@ -719,6 +769,17 @@ PENDING:
 		// Release an already registered connection.
 		if pcb.op == opDelete && ok {
 			w.releaseConn(ident)
+			continue
+		}
+
+		// Hand a registered connection's socket back; Detach never registers one.
+		if pcb.op == OpDetach && ok {
+			w.detachConn(ident, pcb)
+			continue
+		}
+		if pcb.op == OpDetach {
+			pcb.err = ErrNotWatched
+			w.deliver(pcb)
 			continue
 		}
 

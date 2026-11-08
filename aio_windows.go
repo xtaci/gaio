@@ -357,6 +357,12 @@ func (p *poller) Watch(fd int) error {
 	return nil
 }
 
+// Unwatch backs Detach, which is not supported on Windows. It is unrelated to
+// unwatch, which drops a socket from the poll set when it is closed.
+func (p *poller) Unwatch(fd int) error {
+	return ErrUnsupported
+}
+
 // unwatch removes a socket from the poll set.
 func (p *poller) unwatch(fd uintptr) {
 	p.fdMapMutex.Lock()

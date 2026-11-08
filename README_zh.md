@@ -38,6 +38,7 @@ gaio 提供异步 I/O API：向 `Watcher` 提交读写请求，再通过 `WaitIO
 
 - **连接所有权：** 首个 I/O 请求会将连接交给 watcher。watcher 会复制 socket 并关闭原始 `net.Conn`；之后不要再调用该 `net.Conn` 的方法。此前设置的 socket 选项会继续生效。
 - **资源释放：** 连接不再需要时调用 `Watcher.Free(conn)`，请求会排队交由 watcher 释放。程序退出或不再使用 watcher 时，应显式调用 `Watcher.Close()`。终结器仅作为兜底，不应替代显式释放。
+- **取回连接：** 调用 `Watcher.Detach(ctx, conn)` 可在不关闭 socket 的情况下释放连接。挂起的请求会以 `io.ErrClosedPipe` 失败，随后收到 `OpDetach` 结果，其 `Conn` 是同一 socket 的新 `net.Conn`，可直接使用或交给另一个 watcher。Windows 不支持 Detach。
 - **负载均衡：** 可以创建多个 watcher 并使用任意策略分发连接；在监听层面建议配合 `go-reuseport` 做 acceptor 负载均衡。
 - **结果与缓冲区有效期：** `WaitIO` 返回的结果切片会在下一次调用时复用。读请求使用 `nil` 缓冲区时，返回的缓冲区在下一次调用 `WaitIO` 前有效。
 

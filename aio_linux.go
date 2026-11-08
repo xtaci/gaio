@@ -95,6 +95,16 @@ func (p *poller) Watch(fd int) error {
 	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_ADD, fd, &syscall.EpollEvent{Fd: int32(fd), Events: syscall.EPOLLRDHUP | syscall.EPOLLIN | syscall.EPOLLOUT | _EPOLLET})
 }
 
+// Unwatch removes a socket from the epoll set. epoll registrations belong to
+// the open file description, so they must be removed explicitly before the
+// socket is handed to another owner; closing one descriptor is not enough
+// while other descriptors still refer to the same socket.
+func (p *poller) Unwatch(fd int) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return syscall.EpollCtl(p.pfd, syscall.EPOLL_CTL_DEL, fd, nil)
+}
+
 // wakeup interrupts epoll_wait.
 func (p *poller) wakeup() error {
 	p.mu.Lock()

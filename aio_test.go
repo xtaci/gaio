@@ -675,7 +675,7 @@ func configureTestConnection(conn *net.TCPConn) error {
 func submitEchoWrites(t *testing.T, w *Watcher, addr string, par, msgsize int) {
 	t.Helper()
 	runWatcherProducer(t, w, func() error {
-		for i := 0; i < par; i++ {
+		for i := range par {
 			conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 			if err != nil {
 				return fmt.Errorf("dial connection %d: %w", i, err)
@@ -912,7 +912,7 @@ func testDeadline(t *testing.T, par int) {
 	limitWatcherWait(t, w, 180*time.Second)
 
 	runWatcherProducer(t, w, func() error {
-		for i := 0; i < par; i++ {
+		for i := range par {
 			conn, err := net.DialTimeout("tcp", ln.Addr().String(), 10*time.Second)
 			if err != nil {
 				return fmt.Errorf("dial connection %d: %w", i, err)
@@ -1016,7 +1016,7 @@ func benchmarkEcho(b *testing.B, bufsize int, numconn int) {
 
 	addr, _ := net.ResolveTCPAddr("tcp", ln.Addr().String())
 	tx := make([]byte, bufsize)
-	for i := 0; i < numconn; i++ {
+	for range numconn {
 		rx := make([]byte, bufsize)
 		conn, err := net.DialTCP("tcp", nil, addr)
 		if err != nil {
@@ -1114,7 +1114,7 @@ func createConnectionsAndWait(t *testing.T, w *Watcher, ln *net.TCPListener, par
 			peer.Close()
 		}
 	}()
-	for i := 0; i < par; i++ {
+	for i := range par {
 		conn, err := net.DialTimeout("tcp", ln.Addr().String(), 10*time.Second)
 		if err != nil {
 			t.Fatalf("dial connection %d: %v", i, err)
@@ -1180,9 +1180,9 @@ func TestFinalizerClosesUnreachableConnections(t *testing.T) {
 	// Force more aggressive GC by allocating and discarding memory
 	// This helps ensure finalizers are processed
 	var found, closed uint32
-	for attempt := 0; attempt < 20; attempt++ {
+	for attempt := range 20 {
 		// Allocate memory to trigger GC pressure
-		for i := 0; i < 1000; i++ {
+		for range 1000 {
 			_ = make([]byte, 10000)
 		}
 		runtime.GC()

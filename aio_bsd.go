@@ -190,7 +190,7 @@ func (p *poller) Wait(chSignal chan Signal) {
 			}
 
 			// Translate kqueue events into platform-independent readiness flags.
-			for i := 0; i < n; i++ {
+			for i := range n {
 				ev := &events[i]
 				if ev.Ident != 0 {
 					e := event{ident: int(ev.Ident)}

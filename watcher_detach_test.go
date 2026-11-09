@@ -123,7 +123,7 @@ func testDetachParallel(t *testing.T, par int, times int) {
 	defer func() { _ = w.Close() }()
 
 	go func() {
-		for i := 0; i < par; i++ {
+		for i := range par {
 			conn, err := net.Dial("tcp", ln.Addr().String())
 			if err != nil {
 				t.Error(err)

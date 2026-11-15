@@ -88,3 +88,32 @@ func TestTimedHeapRemoveMaintainsOrderAndIndices(t *testing.T) {
 		t.Fatalf("earliest request after Remove: want %p got %p", requests[1], got)
 	}
 }
+
+func TestTimedHeapRemoveSiftsUpAndMaintainsIndices(t *testing.T) {
+	h := newTimedHeap()
+	requests := []*aiocb{
+		{deadline: time.Unix(1, 0)},
+		{deadline: time.Unix(10, 0)},
+		{deadline: time.Unix(2, 0)},
+		{deadline: time.Unix(11, 0)},
+		{deadline: time.Unix(12, 0)},
+		{deadline: time.Unix(3, 0)},
+		{deadline: time.Unix(5, 0)},
+	}
+	for _, cb := range requests {
+		h.Push(cb)
+	}
+
+	removed := h.Remove(requests[3].idx)
+	if removed != requests[3] || removed.idx != -1 {
+		t.Fatal("Remove did not return and invalidate the requested entry")
+	}
+	for i, cb := range h.items {
+		if cb.idx != i {
+			t.Fatalf("idx not updated after sift-up: want %d got %d", i, cb.idx)
+		}
+		if i > 0 && h.items[(i-1)/2].deadline.After(cb.deadline) {
+			t.Fatalf("heap order broken after sift-up at index %d", i)
+		}
+	}
+}

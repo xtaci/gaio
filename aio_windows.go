@@ -133,8 +133,8 @@ type wsaBuf struct {
 
 // poller monitors Windows sockets with WSAPoll.
 type poller struct {
-	cpuid int32      // the CPU ID to bind to
-	mu    sync.Mutex // mutex to protect fd operations
+	cpuid atomic.Int32 // the CPU ID to bind to
+	mu    sync.Mutex   // mutex to protect fd operations
 
 	// Watched file descriptors
 	pollFds    []wsaPollFd     // array for WSAPoll
@@ -308,13 +308,13 @@ func openPoll() (*poller, error) {
 	}
 
 	p := &poller{
-		cpuid:        -1,
 		die:          make(chan struct{}),
 		fdMap:        make(map[uintptr]int),
 		pollFds:      make([]wsaPollFd, 1, 1024), // Start with wakeup socket
 		wakeupReader: reader,
 		wakeupWriter: writer,
 	}
+	p.cpuid.Store(-1)
 
 	// Add wakeup reader to poll set at index 0
 	// Use POLLRDNORM for read events on Windows
@@ -535,9 +535,9 @@ func (p *poller) Wait(chSignal chan Signal) {
 			}
 
 			// Set affinity if cpuid is set
-			if cpuid := atomic.LoadInt32(&p.cpuid); cpuid != -1 {
+			if cpuid := p.cpuid.Load(); cpuid != -1 {
 				setAffinity(cpuid)
-				atomic.StoreInt32(&p.cpuid, -1)
+				p.cpuid.Store(-1)
 			}
 
 			// Process events

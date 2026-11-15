@@ -22,40 +22,125 @@
 
 package gaio
 
+// minHeap is a typed min-heap. less defines priority, while setIndex keeps each
+// item aware of its current position so it can be removed in O(log n).
+type minHeap[T any] struct {
+	items    []T
+	less     func(T, T) bool
+	setIndex func(T, int)
+}
+
+// newMinHeap creates an empty heap with the given ordering and index callbacks.
+func newMinHeap[T any](less func(T, T) bool, setIndex func(T, int)) minHeap[T] {
+	return minHeap[T]{less: less, setIndex: setIndex}
+}
+
+// Len returns the number of items in h.
+func (h *minHeap[T]) Len() int {
+	return len(h.items)
+}
+
+// Peek returns the minimum item, or the zero value and false when h is empty.
+func (h *minHeap[T]) Peek() (T, bool) {
+	if len(h.items) == 0 {
+		var zero T
+		return zero, false
+	}
+	return h.items[0], true
+}
+
+// Push adds item and restores the heap ordering.
+func (h *minHeap[T]) Push(item T) {
+	h.items = append(h.items, item)
+	h.setIndex(item, len(h.items)-1)
+	h.siftUp(len(h.items) - 1)
+}
+
+// Pop removes and returns the minimum item. It panics when h is empty.
+func (h *minHeap[T]) Pop() T {
+	return h.Remove(0)
+}
+
+// Remove removes and returns the item at index, restoring heap order and
+// setting the removed item's index to -1. It panics for an invalid index.
+func (h *minHeap[T]) Remove(index int) T {
+	if index < 0 || index >= len(h.items) {
+		panic("heap index out of range")
+	}
+
+	last := len(h.items) - 1
+	removed := h.items[index]
+	if index == last {
+		var zero T
+		h.items[last] = zero
+		h.items = h.items[:last]
+		h.setIndex(removed, -1)
+		return removed
+	}
+
+	replacement := h.items[last]
+	var zero T
+	h.items[last] = zero
+	h.items = h.items[:last]
+	h.items[index] = replacement
+	h.setIndex(replacement, index)
+	if index > 0 && h.less(replacement, h.items[(index-1)/2]) {
+		h.siftUp(index)
+	} else {
+		h.siftDown(index)
+	}
+	h.setIndex(removed, -1)
+	return removed
+}
+
+// Swap exchanges two items and updates both recorded indices.
+func (h *minHeap[T]) Swap(i, j int) {
+	h.items[i], h.items[j] = h.items[j], h.items[i]
+	h.setIndex(h.items[i], i)
+	h.setIndex(h.items[j], j)
+}
+
+// siftUp moves an item toward the root while it has higher priority.
+func (h *minHeap[T]) siftUp(index int) {
+	for index > 0 {
+		parent := (index - 1) / 2
+		if !h.less(h.items[index], h.items[parent]) {
+			return
+		}
+		h.Swap(index, parent)
+		index = parent
+	}
+}
+
+// siftDown moves an item toward a leaf until both children have lower priority.
+func (h *minHeap[T]) siftDown(index int) {
+	for {
+		left := 2*index + 1
+		if left >= len(h.items) {
+			return
+		}
+		smallest := left
+		right := left + 1
+		if right < len(h.items) && h.less(h.items[right], h.items[left]) {
+			smallest = right
+		}
+		if !h.less(h.items[smallest], h.items[index]) {
+			return
+		}
+		h.Swap(index, smallest)
+		index = smallest
+	}
+}
+
 // timedHeap orders requests by deadline, with the earliest deadline at the root.
-type timedHeap []*aiocb
-
-// Len returns the number of elements in the heap.
-func (h timedHeap) Len() int {
-	return len(h)
+type timedHeap struct {
+	minHeap[*aiocb]
 }
 
-// Less reports whether the request at i has an earlier deadline than the one at j.
-func (h timedHeap) Less(i, j int) bool {
-	return h[i].deadline.Before(h[j].deadline)
-}
-
-// Swap swaps the elements with indexes i and j.
-func (h timedHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
-	h[i].idx = i
-	h[j].idx = j
-}
-
-// Push adds a request and records its heap index.
-func (h *timedHeap) Push(x any) {
-	cb := x.(*aiocb)
-	cb.idx = len(*h)
-	*h = append(*h, cb)
-}
-
-// Pop removes and returns the last element in the backing slice. container/heap
-// moves the earliest-deadline element there before calling this method.
-func (h *timedHeap) Pop() any {
-	old := *h
-	n := len(old)
-	x := old[n-1]
-	old[n-1] = nil // Avoid memory leak
-	*h = old[:n-1]
-	return x
+// newTimedHeap orders I/O requests by their deadlines.
+func newTimedHeap() timedHeap {
+	return timedHeap{minHeap: newMinHeap(
+		func(a, b *aiocb) bool { return a.deadline.Before(b.deadline) },
+		func(cb *aiocb, index int) { cb.idx = index },
+	)}
 }

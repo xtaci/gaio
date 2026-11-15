@@ -23,15 +23,12 @@
 package gaio
 
 import (
-	"container/heap"
-	"container/list"
 	"io"
 	"net"
 	"os"
 	"reflect"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -48,9 +45,9 @@ var (
 // fdDesc stores the pending read and write requests for a registered file
 // descriptor, along with the identity of its associated net.Conn.
 type fdDesc struct {
-	readers list.List // pending read requests
-	writers list.List // pending write requests
-	ptr     uintptr   // identity of the associated net.Conn, stored without keeping it alive
+	readers requestQueue[*aiocb] // pending read requests
+	writers requestQueue[*aiocb] // pending write requests
+	ptr     uintptr              // identity of the associated net.Conn, stored without keeping it alive
 }
 
 // watcher owns the poller and coordinates asynchronous requests, completions,
@@ -119,6 +116,7 @@ func NewWatcher() (*Watcher, error) {
 // with a nil buffer.
 func NewWatcherSize(bufsize int) (*Watcher, error) {
 	w := new(watcher)
+	w.timeouts = newTimedHeap()
 
 	// Create the platform-specific poller.
 	pfd, err := openPoll()
@@ -184,10 +182,10 @@ func (w *watcher) SetPollerAffinity(cpuid int) error {
 	}
 
 	// Store the request and wake the poller so it can apply the new affinity.
-	atomic.StoreInt32(&w.pfd.cpuid, int32(cpuid))
+	w.pfd.cpuid.Store(int32(cpuid))
 	if err := w.pfd.wakeup(); err != nil {
 		// Clear the request if the poller could not be woken.
-		atomic.StoreInt32(&w.pfd.cpuid, -1)
+		w.pfd.cpuid.Store(-1)
 		return err
 	}
 	return nil
@@ -593,7 +591,7 @@ func (w *watcher) unregisterConn(ident int) bool {
 
 	// Fail pending reads and remove their deadlines from the timeout heap.
 	for e := desc.readers.Front(); e != nil; e = e.Next() {
-		tcb := e.Value.(*aiocb)
+		tcb := e.Value()
 		// Report that the connection has been released.
 		tcb.err = io.ErrClosedPipe
 		w.deliver(tcb)
@@ -601,7 +599,7 @@ func (w *watcher) unregisterConn(ident int) bool {
 
 	// Fail pending writes and remove their deadlines from the timeout heap.
 	for e := desc.writers.Front(); e != nil; e = e.Next() {
-		tcb := e.Value.(*aiocb)
+		tcb := e.Value()
 		// Report that the connection has been released.
 		tcb.err = io.ErrClosedPipe
 		w.deliver(tcb)
@@ -652,7 +650,7 @@ func (w *watcher) detachConn(ident int, pcb *aiocb) {
 // deliver queues pcb for WaitIO and removes it from the timeout heap, if present.
 func (w *watcher) deliver(pcb *aiocb) {
 	if pcb.idx != -1 {
-		heap.Remove(&w.timeouts, pcb.idx)
+		w.timeouts.Remove(pcb.idx)
 		pcb.idx = -1 // mark as removed
 	}
 
@@ -721,10 +719,13 @@ func (w *watcher) loop() {
 		case <-w.timer.C: // Expire requests whose deadlines have passed.
 			now := time.Now()
 			for w.timeouts.Len() > 0 {
-				pcb := w.timeouts[0]
+				pcb, ok := w.timeouts.Peek()
+				if !ok {
+					break
+				}
 				// A delivered request should already have been removed from the heap.
 				if pcb.idx == -1 {
-					heap.Pop(&w.timeouts)
+					w.timeouts.Pop()
 					continue
 				}
 				if now.After(pcb.deadline) {
@@ -735,7 +736,7 @@ func (w *watcher) loop() {
 						pcb.l.Remove(pcb.elem)
 					}
 					// Remove it from the heap before delivering the timeout.
-					heap.Pop(&w.timeouts)
+					w.timeouts.Pop()
 					pcb.idx = -1 // mark as removed before deliver to avoid double removal
 					w.deliver(pcb)
 				} else {
@@ -878,8 +879,8 @@ PENDING:
 
 		// Track queued requests with deadlines in the timeout heap.
 		if !pcb.deadline.IsZero() {
-			heap.Push(&w.timeouts, pcb)
-			if w.timeouts.Len() > 0 && w.timeouts[0] == pcb {
+			w.timeouts.Push(pcb)
+			if first, ok := w.timeouts.Peek(); ok && first == pcb {
 				w.timer.Reset(time.Until(pcb.deadline))
 			}
 		}
@@ -905,11 +906,11 @@ func (w *watcher) handleEvents(events pollerEvents) {
 
 		// Retry queued reads when the descriptor is readable.
 		if e.ev&EV_READ != 0 && desc.readers.Len() > 0 {
-			var next *list.Element
+			var next *requestNode[*aiocb]
 			// Process reads in order until one would block.
 			for elem := desc.readers.Front(); elem != nil; elem = next {
 				next = elem.Next()
-				pcb := elem.Value.(*aiocb)
+				pcb := elem.Value()
 				if w.tryRead(e.ident, pcb) {
 					desc.readers.Remove(elem)
 					w.deliver(pcb)
@@ -922,10 +923,10 @@ func (w *watcher) handleEvents(events pollerEvents) {
 
 		// Retry queued writes when the descriptor is writable.
 		if e.ev&EV_WRITE != 0 && desc.writers.Len() > 0 {
-			var next *list.Element
+			var next *requestNode[*aiocb]
 			for elem := desc.writers.Front(); elem != nil; elem = next {
 				next = elem.Next()
-				pcb := elem.Value.(*aiocb)
+				pcb := elem.Value()
 				if w.tryWrite(e.ident, pcb) {
 					desc.writers.Remove(elem)
 					w.deliver(pcb)

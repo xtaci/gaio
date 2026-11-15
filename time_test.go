@@ -23,39 +23,68 @@
 package gaio
 
 import (
-	"container/heap"
 	"testing"
 	"time"
 )
 
 func TestTimedHeapPopsByDeadlineAndMaintainsIndices(t *testing.T) {
-	var h timedHeap
-	heap.Push(&h, &aiocb{deadline: time.Unix(10, 0)})
-	heap.Push(&h, &aiocb{deadline: time.Unix(5, 0)})
-	heap.Push(&h, &aiocb{deadline: time.Unix(7, 0)})
+	h := newTimedHeap()
+	h.Push(&aiocb{deadline: time.Unix(10, 0)})
+	h.Push(&aiocb{deadline: time.Unix(5, 0)})
+	h.Push(&aiocb{deadline: time.Unix(7, 0)})
 
-	for i, cb := range h {
+	for i, cb := range h.items {
 		if cb.idx != i {
 			t.Fatalf("idx not updated: want %d got %d", i, cb.idx)
 		}
 	}
 
-	pop1 := heap.Pop(&h).(*aiocb)
-	pop2 := heap.Pop(&h).(*aiocb)
-	pop3 := heap.Pop(&h).(*aiocb)
+	pop1 := h.Pop()
+	pop2 := h.Pop()
+	pop3 := h.Pop()
 
 	if !pop1.deadline.Before(pop2.deadline) || !pop2.deadline.Before(pop3.deadline) {
 		t.Fatal("timedHeap did not pop in ascending deadline order")
+	}
+	if pop1.idx != -1 || pop2.idx != -1 || pop3.idx != -1 {
+		t.Fatal("popped requests should not have a heap index")
 	}
 }
 
 func TestTimedHeapSwapUpdatesIndices(t *testing.T) {
 	a := &aiocb{idx: 0}
 	b := &aiocb{idx: 1}
-	h := timedHeap{a, b}
+	h := newTimedHeap()
+	h.items = []*aiocb{a, b}
 
 	h.Swap(0, 1)
 	if a.idx != 1 || b.idx != 0 {
 		t.Fatalf("Swap did not update idx: a=%d b=%d", a.idx, b.idx)
+	}
+}
+
+func TestTimedHeapRemoveMaintainsOrderAndIndices(t *testing.T) {
+	h := newTimedHeap()
+	requests := []*aiocb{
+		{deadline: time.Unix(10, 0)},
+		{deadline: time.Unix(5, 0)},
+		{deadline: time.Unix(7, 0)},
+		{deadline: time.Unix(3, 0)},
+	}
+	for _, cb := range requests {
+		h.Push(cb)
+	}
+
+	removed := h.Remove(requests[3].idx)
+	if removed != requests[3] || removed.idx != -1 {
+		t.Fatal("Remove did not return and invalidate the requested entry")
+	}
+	for i, cb := range h.items {
+		if cb.idx != i {
+			t.Fatalf("idx not updated after Remove: want %d got %d", i, cb.idx)
+		}
+	}
+	if got := h.Pop(); got != requests[1] {
+		t.Fatalf("earliest request after Remove: want %p got %p", requests[1], got)
 	}
 }

@@ -39,10 +39,10 @@ const (
 
 // poller is an epoll-based poller.
 type poller struct {
-	cpuid  int32      // the CPU ID to bind to
-	mu     sync.Mutex // mutex to protect fd closure
-	pfd    int        // epoll fd
-	efd    int        // eventfd
+	cpuid  atomic.Int32 // the CPU ID to bind to
+	mu     sync.Mutex   // mutex to protect fd closure
+	pfd    int          // epoll fd
+	efd    int          // eventfd
 	efdbuf []byte
 
 	// shutdown signal
@@ -76,7 +76,7 @@ func openPoll() (*poller, error) {
 	p.efd = int(r0)
 	p.efdbuf = make([]byte, 8)
 	p.die = make(chan struct{})
-	p.cpuid = -1
+	p.cpuid.Store(-1)
 
 	return p, err
 }
@@ -169,9 +169,9 @@ func (p *poller) Wait(chSignal chan Signal) {
 				ev := &events[i]
 				if int(ev.Fd) == p.efd {
 					syscall.Read(p.efd, p.efdbuf) // Drain the eventfd counter.
-					if cpuid := atomic.LoadInt32(&p.cpuid); cpuid != -1 {
+					if cpuid := p.cpuid.Load(); cpuid != -1 {
 						setAffinity(cpuid)
-						atomic.StoreInt32(&p.cpuid, -1)
+						p.cpuid.Store(-1)
 					}
 				} else {
 					e := event{ident: int(ev.Fd)}

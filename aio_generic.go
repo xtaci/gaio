@@ -23,7 +23,6 @@
 package gaio
 
 import (
-	"container/list"
 	"errors"
 	"net"
 	"time"
@@ -125,8 +124,8 @@ type OpResult struct {
 
 // aiocb contains the state for a single asynchronous I/O request.
 type aiocb struct {
-	l          *list.List // list where this request belongs to
-	elem       *list.Element
+	l          *requestQueue[*aiocb] // queue where this request belongs to
+	elem       *requestNode[*aiocb]
 	ctx        any      // user context associated with this request
 	ptr        uintptr  // pointer to conn
 	op         OpType   // read or write
@@ -139,6 +138,98 @@ type aiocb struct {
 	useSwap    bool     // marks whether the buffer is an internal swap buffer
 	idx        int      // index for heap ops
 	deadline   time.Time
+}
+
+// requestQueue is a FIFO queue of linked nodes. The front and back are nil
+// together when empty, and len tracks the number of attached nodes.
+type requestQueue[T any] struct {
+	front *requestNode[T]
+	back  *requestNode[T]
+	len   int
+}
+
+// requestNode holds one queue value. queue is nil after the node is detached.
+type requestNode[T any] struct {
+	value T
+	prev  *requestNode[T]
+	next  *requestNode[T]
+	queue *requestQueue[T]
+}
+
+// Len returns the number of nodes currently attached to q.
+func (q *requestQueue[T]) Len() int {
+	return q.len
+}
+
+// Front returns the first node, or nil when q is empty.
+func (q *requestQueue[T]) Front() *requestNode[T] {
+	return q.front
+}
+
+// Next returns the following node; it is safe to call on a nil receiver.
+func (n *requestNode[T]) Next() *requestNode[T] {
+	if n == nil {
+		return nil
+	}
+	return n.next
+}
+
+// Value returns the value stored in n.
+func (n *requestNode[T]) Value() T {
+	return n.value
+}
+
+// PushBack appends value and returns its newly attached node.
+func (q *requestQueue[T]) PushBack(value T) *requestNode[T] {
+	node := &requestNode[T]{value: value, prev: q.back, queue: q}
+	if q.back == nil {
+		q.front = node
+	} else {
+		q.back.next = node
+	}
+	q.back = node
+	q.len++
+	return node
+}
+
+// Remove detaches node from q. Nodes that do not belong to q are ignored.
+// Detached nodes have their links and value cleared to release references.
+func (q *requestQueue[T]) Remove(node *requestNode[T]) {
+	if node == nil || node.queue != q {
+		return
+	}
+	if node.prev == nil {
+		q.front = node.next
+	} else {
+		node.prev.next = node.next
+	}
+	if node.next == nil {
+		q.back = node.prev
+	} else {
+		node.next.prev = node.prev
+	}
+	node.queue = nil
+	node.prev = nil
+	node.next = nil
+	var zero T
+	node.value = zero
+	q.len--
+}
+
+// Init detaches every node and resets q to its empty state.
+func (q *requestQueue[T]) Init() {
+	for node := q.front; node != nil; {
+		next := node.next
+		node.queue = nil
+		node.prev = nil
+		node.next = nil
+		var zero T
+		node.value = zero
+		node = next
+	}
+	q.front = nil
+	q.back = nil
+	q.len = 0
 }
 
 // Watcher monitors readiness events and processes asynchronous I/O requests.

@@ -33,7 +33,7 @@ import (
 
 // poller monitors registered sockets with kqueue.
 type poller struct {
-	cpuid int32
+	cpuid atomic.Int32
 	mu    sync.Mutex // mutex to protect fd closure
 	fd    int        // kqueue fd
 
@@ -62,7 +62,7 @@ func openPoll() (*poller, error) {
 	p := new(poller)
 	p.fd = fd
 	p.die = make(chan struct{})
-	p.cpuid = -1
+	p.cpuid.Store(-1)
 
 	return p, nil
 }
@@ -175,9 +175,9 @@ func (p *poller) Wait(chSignal chan Signal) {
 			return
 		default:
 			// Apply any pending CPU-affinity request before polling.
-			if cpuid := atomic.LoadInt32(&p.cpuid); cpuid != -1 {
+			if cpuid := p.cpuid.Load(); cpuid != -1 {
 				setAffinity(cpuid)
-				atomic.StoreInt32(&p.cpuid, -1)
+				p.cpuid.Store(-1)
 			}
 
 			// Wait for readiness events.
